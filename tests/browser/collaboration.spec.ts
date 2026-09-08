@@ -49,8 +49,11 @@ test('two coworkers join by invitation, exchange chat, review work and connect a
     const token=await a.getByLabel('Connection token',{exact:true}).inputValue();
     const agentWork=await owner.request.get(origin+'/api/agent/work',{headers:{Authorization:`Bearer ${token}`}});
     expect(agentWork.ok()).toBeTruthy();const work=await agentWork.json();expect(work.agent.name).toBe('Atlas QA');expect(work).not.toHaveProperty('skills');
+    await a.getByRole('checkbox',{name:'I saved this token in a private location.',exact:true}).check();
+    await a.getByRole('button',{name:'Check connection',exact:true}).click();
+    await expect(a.getByRole('dialog').getByText('First contact received',{exact:true})).toBeVisible();
     await a.getByRole('button',{name:'Close dialog',exact:true}).click();
-    await expect(a.getByText('Connected',{exact:true})).toBeVisible();
+    await expect(a.getByRole('button').filter({has:a.getByRole('heading',{name:'Atlas QA',exact:true})})).toContainText('Recent API activity');
     await a.getByRole('button',{name:'The office',exact:true}).click();
     await b.getByRole('button',{name:'Close dialog',exact:true}).click();
     await b.getByRole('button',{name:'The office',exact:true}).click();

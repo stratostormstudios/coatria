@@ -7,7 +7,7 @@ test('a person creates a real workplace, saves work and keeps a private skill',a
   await page.goto('/');
   await page.getByLabel('Full name',{exact:true}).fill(name);
   await page.getByLabel('Email address',{exact:true}).fill(email);
-  await page.getByLabel('Password',{exact:false}).fill(`Coatria QA passphrase ${suffix}`);
+  await page.getByLabel('Password',{exact:true}).fill(`Coatria QA passphrase ${suffix}`);
   await page.getByRole('button',{name:'Create your account',exact:true}).click();
   await page.getByLabel('Company name',{exact:true}).fill('Coatria QA Studio');
   await page.getByLabel('Workspace address',{exact:false}).fill(`qa-${suffix}`);

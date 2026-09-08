@@ -19,10 +19,12 @@ test('untouched and previously saved avatar fields follow another tab without ov
   const otherTab = await context.newPage();
   const openProfile = async (tab: Page) => {
     await tab.goto('/#profile');
-    await expect(tab.getByRole('radio', { name: 'Automatic character', exact: true })).toBeVisible();
+    await expect(tab.getByRole('button', { name: 'Change character', exact: true })).toBeVisible();
   };
   const select = async (tab: Page, name: string) => {
+    await tab.getByRole('button', { name: 'Change character', exact: true }).click();
     await tab.locator('label.avatar-choice').filter({ has: tab.getByRole('radio', { name, exact: true }) }).click();
+    await tab.getByRole('button', { name: 'Use this character', exact: true }).click();
   };
   const save = async (tab: Page) => {
     const response = tab.waitForResponse(response => response.url().endsWith('/api/profile') && response.request().method() === 'PATCH');
@@ -36,7 +38,10 @@ test('untouched and previously saved avatar fields follow another tab without ov
     const response = tab.waitForResponse(response => response.url().endsWith('/api/session'));
     await tab.evaluate(() => window.dispatchEvent(new Event('focus')));
     expect((await response).status()).toBe(200);
+    await expect(tab.getByRole('region', { name: 'Your office character' })).toContainText(expectedName);
+    await tab.getByRole('button', { name: 'Change character', exact: true }).click();
     await expect(tab.getByRole('radio', { name: expectedName, exact: true })).toBeChecked();
+    await tab.getByRole('button', { name: 'Cancel', exact: true }).click();
   };
   try {
     await openProfile(page); await openProfile(otherTab);

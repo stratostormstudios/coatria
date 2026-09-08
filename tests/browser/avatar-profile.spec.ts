@@ -16,19 +16,24 @@ test('a visual character choice saves, survives reload, and loads in the office'
   const chosen = avatars[0];
   await page.goto('/#profile');
   await expect(page.getByRole('heading', { name: 'Show up as yourself.', exact: true })).toBeVisible();
-  await expect(page.locator('.avatar-choice-preview img')).toHaveCount(avatars.length + 1);
+  await page.getByRole('button', { name: 'Change character', exact: true }).click();
+  await expect(page.locator('dialog .avatar-choice-preview img')).toHaveCount(avatars.length + 1);
   await expect.poll(() => page.locator('.avatar-choice-preview img').evaluateAll(images => images.every(image => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0))).toBe(true);
   // Radios are visually clipped; the visible labelled tile is the click target.
   await page.locator('label.avatar-choice').filter({ has: page.getByRole('radio', { name: chosen.name, exact: true }) }).click();
+  await page.getByRole('button', { name: 'Use this character', exact: true }).click();
   const saved = page.waitForResponse(response => response.url().endsWith('/api/profile') && response.request().method() === 'PATCH');
   await page.getByRole('button', { name: 'Save personal profile', exact: true }).click();
   expect((await saved).status()).toBe(200);
   await page.reload();
-  await expect(page.getByRole('radio', { name: chosen.name, exact: true })).toBeChecked();
+  await expect(page.getByRole('region', { name: 'Your office character' })).toContainText(chosen.name);
   expect((await (await context.request.get('/api/session')).json()).user.avatarId).toBe(chosen.id);
-  await expect(page.locator('.avatar-choice-preview img')).toHaveCount(avatars.length + 1);
+  await page.getByRole('button', { name: 'Change character', exact: true }).click();
+  await expect(page.locator('dialog .avatar-choice-preview img')).toHaveCount(avatars.length + 1);
   await expect.poll(() => page.locator('.avatar-choice-preview img').evaluateAll(images => images.every(image => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0))).toBe(true);
+  await expect(page.getByRole('radio', { name: chosen.name, exact: true })).toBeChecked();
   await page.screenshot({ path: 'test-results/coatria-character-picker.png', fullPage: true });
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   const model = page.waitForResponse(response => response.url().endsWith(`/api/avatars/${chosen.id}/model`));
   await page.getByRole('button', { name: 'The office', exact: true }).click();
   await expect(page.locator('canvas')).toBeVisible();
@@ -40,6 +45,7 @@ test('a visual character choice saves, survives reload, and loads in the office'
   await page.screenshot({ path: 'test-results/coatria-city-character-office.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/#profile');
+  await page.getByRole('button', { name: 'Change character', exact: true }).click();
   await expect(page.getByRole('radio', { name: chosen.name, exact: true })).toBeChecked();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await page.screenshot({ path: 'test-results/coatria-character-picker-mobile.png', fullPage: true });
