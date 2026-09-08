@@ -1,9 +1,16 @@
-import { createHash, randomBytes, scrypt as rawScrypt, timingSafeEqual } from 'node:crypto';
-import { promisify } from 'node:util';
+import { createHash, randomBytes, scrypt as rawScrypt, timingSafeEqual, type ScryptOptions } from 'node:crypto';
 import { z } from 'zod';
 import { query } from './db';
 
-const scrypt = promisify(rawScrypt);
+function derivePassword(password:string,salt:string,options:ScryptOptions):Promise<Buffer> {
+  return new Promise((resolve,reject)=>rawScrypt(password,salt,64,options,(error,key)=>error?reject(error):resolve(key)));
+}
+// OWASP's 32 MiB profile balances per-login memory and CPU on serverless workers.
+const passwordCost = {N:32768,r:8,p:3,maxmem:64*1024*1024};
+const currentPasswordPattern=/^scrypt\$v2\$32768\$8\$3\$([a-f0-9]{32})\$([a-f0-9]{128})$/;
+const legacyPasswordPattern=/^scrypt\$([a-f0-9]{32})\$([a-f0-9]{128})$/;
+export const dummyPasswordHash='scrypt$v2$32768$8$3$'+'0'.repeat(32)+'$'+'0'.repeat(128);
+export function passwordNeedsUpgrade(stored:string) {return legacyPasswordPattern.test(stored);}
 export class ApiError extends Error { constructor(public status: number, message: string, public code?: string) { super(message); } }
 export function fail(status: number, message: string, code?: string): never { throw new ApiError(status, message, code); }
 export const uuid = z.string().uuid();
@@ -12,13 +19,14 @@ export function secret(prefix = '') { return prefix + randomBytes(32).toString('
 export function hashToken(value: string) { return createHash('sha256').update(value).digest('hex'); }
 export async function passwordHash(password: string) {
   const salt = randomBytes(16).toString('hex');
-  const derived = await scrypt(password, salt, 64) as Buffer;
-  return `scrypt$${salt}$${derived.toString('hex')}`;
+  const derived = await derivePassword(password, salt, passwordCost);
+  return `scrypt$v2$32768$8$3$${salt}$${derived.toString('hex')}`;
 }
 export async function passwordMatches(password: string, stored: string) {
-  const [algorithm, salt, value] = stored.split('$');
-  if (algorithm !== 'scrypt' || !/^[a-f0-9]{32}$/.test(salt ?? '') || !/^[a-f0-9]{128}$/.test(value ?? '')) return false;
-  const candidate = await scrypt(password, salt, 64) as Buffer;
+  const current=currentPasswordPattern.exec(stored),legacy=legacyPasswordPattern.exec(stored);
+  const match=current||legacy;if(!match)return false;
+  const [,salt,value]=match;
+  const candidate = await derivePassword(password, salt, current?passwordCost:{N:16384,r:8,p:1,maxmem:32*1024*1024});
   return timingSafeEqual(candidate, Buffer.from(value, 'hex'));
 }
 export function assertOrigin(request: Request) {

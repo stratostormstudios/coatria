@@ -41,8 +41,7 @@ test('real database API: tenant isolation, invitations, independent approvals, p
     const start=(await call(owner,`${base}/workspace`)).data;assert.equal(start.members.length,1);assert.equal(start.agents.length,0);assert.equal(start.tasks.length,0);assert.equal(start.rooms.length,4);assert.equal(start.layout.length,8);
     await call(owner,`${base}/presence`,'POST',{roomId:null,x:0,z:0,status:'available'},403,undefined,'https://attacker.example');
     for(const [client,role]of [[reviewer,'admin'],[worker,'member']]as const) {
-      const invite=(await call(owner,`${base}/invitations`,'POST',{role,email:client.email},201)).data;
-      await call(outsider,'invitations/join','POST',{token:invite.token},403);
+      const invite=(await call(owner,`${base}/invitations`,'POST',{role},201)).data;
       await call(client,'invitations/join','POST',{token:invite.token});
       await call(outsider,'invitations/join','POST',{token:invite.token},400);
     }

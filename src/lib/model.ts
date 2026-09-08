@@ -23,7 +23,7 @@ export const STUDIO_LAYOUT = [
   {id:'studio-lounge',type:'lounge',x:14,y:74,w:37,h:18,label:'Lounge'},
   {id:'studio-plant',type:'plant',x:57,y:77,w:7,h:9,label:'Green corner'}
 ];
-export const taskColumns = `id,title,description,status,assignee_id AS "assigneeId",created_by AS "createdBy",submission_url AS "submissionUrl",submission_summary AS "submissionSummary",review_note AS "reviewNote",submitted_by AS "submittedBy",submitted_agent_id AS "submittedAgentId",approved_by AS "approvedBy",created_at AS "createdAt",updated_at AS "updatedAt"`;
+export const taskColumns = `id,title,description,status,assignee_id AS "assigneeId",created_by AS "createdBy",submission_url AS "submissionUrl",submission_summary AS "submissionSummary",review_note AS "reviewNote",submitted_by AS "submittedBy",submitted_agent_id AS "submittedAgentId",approved_by AS "approvedBy",created_at AS "createdAt",updated_at AS "updatedAt",(SELECT COALESCE(array_agg(DISTINCT author.user_id),'{}'::uuid[]) FROM (SELECT user_id FROM task_authors WHERE task_id=tasks.id UNION SELECT a.created_by AS user_id FROM contributions c JOIN agents a ON a.id=c.agent_id WHERE c.task_id=tasks.id) author) AS "authorIds"`;
 export const agentColumns = `id,name,harness,description,status,created_by AS "createdBy",last_seen_at AS "lastSeenAt"`;
 export const driveColumns = `id,name,kind,description,CASE WHEN status='online' AND last_seen_at<now()-interval '90 seconds' THEN 'offline' ELSE status END AS status,last_seen_at AS "lastSeenAt",file_count AS "fileCount"`;
 export const openingColumns = `id,company_id AS "companyId",title,description,type,compensation,budget,status,created_at AS "createdAt"`;

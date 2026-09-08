@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { query, transaction } from './db';
 import { createSession, currentUser, logout, requireUser, sessionCookie, sessionData, userColumns } from './auth';
-import { body, clientKey, fail, hashToken, json, passwordHash, passwordMatches, rateLimit } from './security';
+import { body, clientKey, dummyPasswordHash, fail, json, passwordHash, passwordMatches, passwordNeedsUpgrade, rateLimit } from './security';
 import { loginInput, signupInput, skillColumns, skillInput, text } from './model';
 
 export async function identityRoute(request: Request, parts: string[], method: string): Promise<Response | null> {
@@ -23,17 +23,20 @@ export async function identityRoute(request: Request, parts: string[], method: s
     await rateLimit(`login-email:${data.email}`, 10, 900);
     const record = (await query(`SELECT ${userColumns},password_hash FROM users WHERE email=$1`, [data.email])).rows[0];
     // Equal scrypt work for unknown accounts limits timing-based account discovery.
-    const dummy = 'scrypt$00000000000000000000000000000000$' + '0'.repeat(128);
-    if (!await passwordMatches(data.password, record?.password_hash || dummy) || !record) fail(401, 'Email or password is incorrect.');
+    if (!await passwordMatches(data.password, record?.password_hash || dummyPasswordHash) || !record) fail(401, 'Email or password is incorrect.');
+    const upgradedHash = passwordNeedsUpgrade(record.password_hash) ? await passwordHash(data.password) : null;
     const { password_hash: _secret, ...user } = record;
     const token = await transaction(async client => {
       const current = (await client.query('SELECT password_hash FROM users WHERE id=$1 FOR UPDATE', [user.id])).rows[0];
-      if (!current || current.password_hash !== record.password_hash) fail(401, 'Your password changed. Sign in with your current password.');
+      if (!current || (current.password_hash !== record.password_hash && !await passwordMatches(data.password,current.password_hash))) fail(401, 'Your password changed. Sign in with your current password.');
+      // Another valid login may have upgraded the same legacy hash while this
+      // password check was running. Verify that current hash, then keep it.
+      if (upgradedHash && current.password_hash === record.password_hash) await client.query('UPDATE users SET password_hash=$2 WHERE id=$1 AND password_hash=$3',[user.id,upgradedHash,record.password_hash]);
       return createSession(client, user.id);
     });
     return json(await sessionData(user as Awaited<ReturnType<typeof requireUser>>), 200, { 'Set-Cookie': sessionCookie(request, token) });
   }
-  if (path === 'auth/logout' && method === 'POST') { await logout(request); return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(request, '', true) }); }
+  if (path === 'auth/logout' && method === 'POST') { if(request.headers.has('x-coatria-user'))await requireUser(request);await logout(request); return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(request, '', true) }); }
   if (path === 'auth/password' && method === 'PATCH') {
     const user=await requireUser(request);await rateLimit(`password-change:${user.id}`,5,900);
     const data=await body(request,z.object({currentPassword:z.string().min(1).max(256),newPassword:z.string().min(12).max(256)}).strict());

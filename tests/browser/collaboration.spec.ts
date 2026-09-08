@@ -15,7 +15,6 @@ test('two coworkers join by invitation, exchange chat, review work and connect a
     const a=await owner.newPage(),b=await worker.newPage();for(const p of[a,b])p.on('pageerror',e=>errors.push(e.message));
     await a.goto(origin+'/#people');
     await a.getByRole('button',{name:'Invite a teammate',exact:true}).click();
-    await a.getByLabel('Email address (optional)',{exact:false}).fill(workerSession.user.email);
     await a.getByRole('button',{name:'Create invitation',exact:true}).click();
     const link=await a.getByRole('textbox',{name:'Invitation link',exact:true}).inputValue();
     await a.getByRole('button',{name:'Close dialog',exact:true}).click();

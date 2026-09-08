@@ -7,12 +7,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: coatria-checks-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   application:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
         env:
           POSTGRES_USER: coatria_test
           POSTGRES_PASSWORD: local_ci_test_only
@@ -30,13 +35,18 @@ jobs:
       APP_URL: http://localhost:4180
       NEXT_TELEMETRY_DISABLED: 1
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # Official stable refs and Node 24 action runtimes verified on 2026-09-08.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
+      - run: node scripts/check-secrets.mjs --history
       - run: npm ci
-      - run: node scripts/check-secrets.mjs
+      - run: npm audit --audit-level=high
       - run: npm run db:migrate
       - run: npm test
       - run: npm run typecheck

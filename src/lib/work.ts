@@ -5,8 +5,8 @@ import { body, fail, id, json, rateLimit, uuid } from './security';
 import { existingAssignee, existingRoom, memberMutation, recordActivity } from './company';
 import { taskColumns, taskInput, taskPatch, text } from './model';
 
-export function canApproveTask(task: {status:string;created_by:string;assignee_id?:string|null;submitted_by?:string|null;agent_sponsor?:string|null}, userId: string, role: string) {
-  return ['owner','admin'].includes(role) && task.status === 'review' && ![task.assignee_id,task.submitted_by,task.agent_sponsor].includes(userId);
+export function canApproveTask(task: {status:string;created_by:string;assignee_id?:string|null;submitted_by?:string|null;agent_sponsor?:string|null;author_ids?:string[]}, userId: string, role: string) {
+  return ['owner','admin'].includes(role) && task.status === 'review' && ![task.assignee_id,task.submitted_by,task.agent_sponsor,...(task.author_ids||[])].includes(userId);
 }
 export async function workRoute(request: Request, parts: string[], method: string): Promise<Response | null> {
   if(parts[0]!=='companies'||parts.length<3)return null;
@@ -48,6 +48,7 @@ export async function workRoute(request: Request, parts: string[], method: strin
       const task=await memberMutation(member,false,async client=>{
         const current=(await client.query('SELECT t.*,a.created_by AS agent_sponsor FROM tasks t LEFT JOIN agents a ON a.id=t.submitted_agent_id WHERE t.id=$1 AND t.company_id=$2 FOR UPDATE OF t',[taskId,companyId])).rows[0];
         if(!current)fail(404,'Task not found.');
+        current.author_ids=(await client.query('SELECT user_id FROM task_authors WHERE task_id=$1 UNION SELECT a.created_by AS user_id FROM contributions c JOIN agents a ON a.id=c.agent_id WHERE c.task_id=$1',[taskId])).rows.map(row=>row.user_id);
         const admin=['owner','admin'].includes(member.role);const worker=current.assignee_id===member.userId||current.created_by===member.userId;
         if(!admin&&!worker)fail(403,'Only the task creator, assignee, or an administrator can change this task.');
         if(current.status==='done')fail(409,'Accepted contributions are immutable. Create a follow-up task for further work.');
@@ -61,9 +62,10 @@ export async function workRoute(request: Request, parts: string[], method: strin
           if(Object.keys(data).some(key=>!['status','reviewNote'].includes(key)))fail(400,'Review acceptance cannot change the submitted work.');
         }
         if(data.reviewNote!==undefined&&data.reviewNote!==current.review_note&&!admin)fail(403,'Only an administrator can leave the review decision.');
-        const isSubmission=next==='review'&&data.status==='review';
+        const isSubmission=next==='review'&&current.status!=='review';
         if(isSubmission&&!worker&&!admin)fail(403,'Only the task worker can submit a contribution.');
-        if(current.status==='review'&&next==='review'&&!isSubmission&&(data.title!==undefined||data.description!==undefined||data.submissionUrl!==undefined||data.assigneeId!==undefined))fail(409,'Move the task back to doing before changing a submitted contribution.');
+        if(current.status==='review'&&next==='review'&&((data.title!==undefined&&data.title!==current.title)||(data.description!==undefined&&data.description!==current.description)||(data.submissionUrl!==undefined&&data.submissionUrl!==current.submission_url)||(data.assigneeId!==undefined&&data.assigneeId!==current.assignee_id)))fail(409,'Move the task back to doing before changing a submitted contribution.');
+        if(isSubmission||(data.submissionUrl!==undefined&&data.submissionUrl!==current.submission_url))await client.query('INSERT INTO task_authors(task_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[taskId,member.userId]);
         const row=(await client.query(`UPDATE tasks SET title=$3,description=$4,status=$5,assignee_id=$6,submission_url=$7,review_note=$8,
           submitted_by=$9,submitted_agent_id=$10,approved_by=$11,submission_summary=$12,updated_at=now() WHERE id=$1 AND company_id=$2 RETURNING ${taskColumns}`,
           [taskId,companyId,data.title??current.title,data.description??current.description,next,data.assigneeId===undefined?current.assignee_id:data.assigneeId,data.submissionUrl===undefined?current.submission_url:data.submissionUrl,data.reviewNote??current.review_note,

@@ -26,9 +26,13 @@ export async function readPresence(companyId: string) {
     FROM presence p JOIN users u ON u.id=p.user_id JOIN memberships m ON m.user_id=p.user_id AND m.company_id=p.company_id
     WHERE p.company_id=$1 AND p.updated_at>now()-interval '45 seconds' AND m.role<>'removed' ORDER BY u.name`, [companyId])).rows;
 }
-export async function createInvitation(client: PoolClient, member: Membership, role: 'admin' | 'member', emailAddress: string | null, request: Request) {
+export async function createInvitation(client: PoolClient, member: Membership, role: 'admin' | 'member', emailAddress: string | null, request: Request, recipientUserId: string | null = null) {
+  if (emailAddress) {
+    const verified=(await client.query('SELECT id FROM users WHERE email=$1 AND email_verified_at IS NOT NULL FOR SHARE',[emailAddress])).rows[0];
+    if(!verified)fail(409,'Email-restricted invitations require verified email. Verification delivery is not enabled yet. Create a single-use invitation link and share it directly with the intended person.','EMAIL_VERIFICATION_REQUIRED');
+  }
   const token = secret('ci_'); const expiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
-  const invitation = (await client.query('INSERT INTO invitations(company_id,token_hash,email,role,created_by,expires_at) VALUES($1,$2,$3,$4,$5,$6) RETURNING id', [member.companyId, hashToken(token), emailAddress, role, member.userId, expiresAt])).rows[0];
+  const invitation = (await client.query('INSERT INTO invitations(company_id,token_hash,email,role,created_by,expires_at,recipient_user_id) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id', [member.companyId, hashToken(token), emailAddress, role, member.userId, expiresAt,recipientUserId])).rows[0];
   return { id: invitation.id, token, url: `${publicUrl(request)}/?invite=${encodeURIComponent(token)}`, expiresAt };
 }
 export async function companyRoute(request: Request, parts: string[], method: string): Promise<Response | null> {
@@ -53,15 +57,27 @@ export async function companyRoute(request: Request, parts: string[], method: st
     const user = await requireUser(request); await rateLimit(`invite-join:${user.id}`, 15, 900);
     const data = await body(request,z.object({token:z.string().min(20).max(150)}).strict());
     const company = await transaction(async client => {
+      const located=(await client.query('SELECT company_id FROM invitations WHERE token_hash=$1',[hashToken(data.token)])).rows[0];
+      if(!located)fail(400,'This invitation is invalid, expired, or already used.');
+      // Same company-first order as offboarding. Serialize simultaneous invites
+      // for one account so a second redemption cannot overwrite the first role.
+      await client.query('SELECT id FROM companies WHERE id=$1 FOR KEY SHARE',[located.company_id]);
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`invite:${located.company_id}:${user.id}`]);
       const invite = (await client.query('SELECT * FROM invitations WHERE token_hash=$1 FOR UPDATE', [hashToken(data.token)])).rows[0];
       if (!invite || invite.used_at || new Date(invite.expires_at).getTime() <= Date.now()) fail(400,'This invitation is invalid, expired, or already used.');
       if (invite.email && invite.email !== user.email) fail(403,'This invitation belongs to a different email address.');
+      if (invite.email) {
+        const verified=(await client.query('SELECT id FROM users WHERE id=$1 AND email=$2 AND email_verified_at IS NOT NULL FOR SHARE',[user.id,invite.email])).rows[0];
+        if(!verified)fail(403,'This invitation requires verified ownership of its email address. Request a new invitation directly from the company administrator.','EMAIL_VERIFICATION_REQUIRED');
+      }
+      if(invite.recipient_user_id&&invite.recipient_user_id!==user.id)fail(403,'This invitation belongs to a different Coatria account.');
       // Invitations stop granting access when the issuer loses administrator access.
       const issuer = (await client.query("SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2 AND role IN ('owner','admin') FOR SHARE", [invite.company_id,invite.created_by])).rows[0];
       if (!issuer) fail(403,'The invitation issuer no longer has permission. Request a new invitation.');
-      const current = (await client.query('SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2', [invite.company_id,user.id])).rows[0];
+      const current = (await client.query('SELECT m.role,m.access_revoked_at,(i.created_at>m.access_revoked_at) AS invitation_is_new FROM memberships m JOIN invitations i ON i.id=$3 WHERE m.company_id=$1 AND m.user_id=$2 FOR UPDATE OF m', [invite.company_id,user.id,invite.id])).rows[0];
       if (current && current.role !== 'removed') fail(409,'You already belong to this company.');
-      await client.query('INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,$3) ON CONFLICT(company_id,user_id) DO UPDATE SET role=EXCLUDED.role,joined_at=now()',[invite.company_id,user.id,invite.role]);
+      if(current?.access_revoked_at&&!current.invitation_is_new)fail(403,'This invitation predates the end of your company access. Ask an administrator for a new invitation.','INVITATION_REVOKED');
+      await client.query('INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,$3) ON CONFLICT(company_id,user_id) DO UPDATE SET role=EXCLUDED.role,joined_at=now(),access_revoked_at=NULL',[invite.company_id,user.id,invite.role]);
       await client.query('UPDATE invitations SET used_by=$2,used_at=now() WHERE id=$1',[invite.id,user.id]);
       await recordActivity(client,{companyId:invite.company_id,userId:user.id,role:invite.role,user},'member.joined',`${user.name} joined the company.`);
       return {...(await client.query('SELECT id,name,slug,template FROM companies WHERE id=$1',[invite.company_id])).rows[0],role:invite.role};
@@ -150,7 +166,7 @@ export async function companyRoute(request: Request, parts: string[], method: st
         if(owners<=1)fail(409,'Transfer ownership to another active member before leaving or changing your role.');
       }
       if(!leaving&&target.role==='admin'&&actorRole!=='owner'&&targetId!==member.userId)fail(403,'Only the owner can change another administrator.');
-      await client.query('UPDATE memberships SET role=$3 WHERE company_id=$1 AND user_id=$2',[companyId,targetId,data.role]);
+      await client.query("UPDATE memberships SET role=$3,access_revoked_at=CASE WHEN $3='removed' THEN clock_timestamp() ELSE access_revoked_at END WHERE company_id=$1 AND user_id=$2",[companyId,targetId,data.role]);
       if(data.role==='removed') {
         await client.query('DELETE FROM presence WHERE company_id=$1 AND user_id=$2',[companyId,targetId]);
         await client.query("UPDATE agents SET status='revoked' WHERE company_id=$1 AND created_by=$2",[companyId,targetId]);

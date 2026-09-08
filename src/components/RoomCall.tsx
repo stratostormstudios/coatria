@@ -6,11 +6,13 @@ type PeerInfo={id:string;userId:string;name:string};
 type Signal={id:string;senderId:string;payload:{type:'description';description:RTCSessionDescriptionInit}|{type:'candidate';candidate:RTCIceCandidateInit}};
 type Connection={pc:RTCPeerConnection;info:PeerInfo;makingOffer:boolean;ignoreOffer:boolean;settingAnswer:boolean;candidates:RTCIceCandidateInit[];stream:MediaStream};
 type Remote={id:string;name:string;stream:MediaStream};
-type CallSession={active:boolean;closed:boolean;registered:boolean;peerId:string;roomId:string;endpoint:string;stream:MediaStream|null;screen:MediaStream|null;peers:Map<string,Connection>;iceServers:RTCIceServer[];cursor:string;timer:ReturnType<typeof setTimeout>|null;watchdog:ReturnType<typeof setInterval>|null;heartbeat:number;authorizedAt:number;screenSenders:Map<string,RTCRtpSender>;sharePending:boolean};
+type CallSession={active:boolean;closed:boolean;registered:boolean;userId:string;peerId:string;roomId:string;endpoint:string;stream:MediaStream|null;screen:MediaStream|null;peers:Map<string,Connection>;iceServers:RTCIceServer[];cursor:string;timer:ReturnType<typeof setTimeout>|null;watchdog:ReturnType<typeof setInterval>|null;heartbeat:number;authorizedAt:number;screenSenders:Map<string,RTCRtpSender>;sharePending:boolean};
 class CallError extends Error { constructor(public status:number,message:string){super(message);} }
-async function callRequest<T>(url:string,body?:Record<string,unknown>):Promise<T>{
-  const response=await fetch(url,{method:body?'POST':'GET',credentials:'same-origin',cache:'no-store',headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(10000)});
+async function callRequest<T>(url:string,body?:Record<string,unknown>,userId?:string):Promise<T>{
+  const headers:Record<string,string>={};if(body)headers['Content-Type']='application/json';if(userId)headers['X-Coatria-User']=userId;
+  const response=await fetch(url,{method:body?'POST':'GET',credentials:'same-origin',cache:'no-store',headers,body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(10000)});
   const data=await response.json().catch(()=>({error:'The call service returned an unreadable response.'}));
+  if(data.code==='SESSION_CHANGED')window.dispatchEvent(new Event('coatria:session-changed'));
   if(!response.ok)throw new CallError(response.status,data.error||'The call service could not complete this request.');
   return data as T;
 }
@@ -26,7 +28,7 @@ export default function RoomCall({companyId,roomId,user}:{companyId:string;roomI
   const state=useRef<CallSession|null>(null),mounted=useRef(true);
   const endpoint=`/api/companies/${companyId}/signals`;
   const current=(s:CallSession)=>state.current===s&&!s.closed;
-  const post=(s:CallSession,action:string,extra:Record<string,unknown>={})=>callRequest<{ok:boolean;iceServers?:RTCIceServer[];turnConfigured?:boolean}>(s.endpoint,{action,roomId:s.roomId,peerId:s.peerId,...extra});
+  const post=(s:CallSession,action:string,extra:Record<string,unknown>={})=>callRequest<{ok:boolean;iceServers?:RTCIceServer[];turnConfigured?:boolean}>(s.endpoint,{action,roomId:s.roomId,peerId:s.peerId,...extra},s.userId);
 
   function stopScreen(s:CallSession) {
     s.screen?.getTracks().forEach(t=>{t.onended=null;t.stop();});s.screen=null;
@@ -120,7 +122,7 @@ export default function RoomCall({companyId,roomId,user}:{companyId:string;roomI
     try{
       if(Date.now()-s.heartbeat>12000){await post(s,'heartbeat');s.heartbeat=Date.now();s.authorizedAt=Date.now();}
       if(!current(s))return;
-      const data=await callRequest<{peers:PeerInfo[];signals:Signal[]}>(`${s.endpoint}?roomId=${s.roomId}&peerId=${s.peerId}&after=${s.cursor}`);
+      const data=await callRequest<{peers:PeerInfo[];signals:Signal[]}>(`${s.endpoint}?roomId=${s.roomId}&peerId=${s.peerId}&after=${s.cursor}`,undefined,s.userId);
       if(!current(s)||!s.active)return;s.authorizedAt=Date.now();
       setPeerCount(data.peers.length);
       const peerIds=new Set(data.peers.map(p=>p.id));
@@ -139,7 +141,7 @@ export default function RoomCall({companyId,roomId,user}:{companyId:string;roomI
   async function join() {
     if(state.current)return;
     setBusy(true);setError('');
-    const s:CallSession={active:false,closed:false,registered:false,peerId:crypto.randomUUID(),roomId,endpoint,stream:null,screen:null,peers:new Map(),iceServers:[],cursor:'0',timer:null,watchdog:null,heartbeat:0,authorizedAt:Date.now(),screenSenders:new Map(),sharePending:false};state.current=s;
+    const s:CallSession={active:false,closed:false,registered:false,userId:user.id,peerId:crypto.randomUUID(),roomId,endpoint,stream:null,screen:null,peers:new Map(),iceServers:[],cursor:'0',timer:null,watchdog:null,heartbeat:0,authorizedAt:Date.now(),screenSenders:new Map(),sharePending:false};state.current=s;
     try{
       if(!navigator.mediaDevices?.getUserMedia)throw new Error('Room audio requires HTTPS and a browser with microphone support.');
       const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true},video:false});

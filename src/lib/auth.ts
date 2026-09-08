@@ -2,16 +2,21 @@ import type { PoolClient } from 'pg';
 import { query } from './db';
 import { fail, hashToken, id, secret } from './security';
 
-export type User = { id: string; name: string; email: string; roleTitle: string; avatarColor: string };
+export type User = { id: string; name: string; email: string; roleTitle: string; avatarColor: string; emailVerified: boolean };
 export type Membership = { companyId: string; userId: string; role: 'owner' | 'admin' | 'member'; user: User };
-export const userColumns = `id,name,email,role_title AS "roleTitle",avatar_color AS "avatarColor"`;
+export const userColumns = `id,name,email,role_title AS "roleTitle",avatar_color AS "avatarColor",(email_verified_at IS NOT NULL) AS "emailVerified"`;
 export async function currentUser(request: Request): Promise<User | null> {
   const cookie = request.headers.get('cookie')?.split(';').map(x => x.trim()).find(x => x.startsWith('coatria_session='))?.slice(16);
   if (!cookie || cookie.length > 200) return null;
-  const result = await query<User>(`SELECT u.id,u.name,u.email,u.role_title AS "roleTitle",u.avatar_color AS "avatarColor" FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()`, [hashToken(cookie)]);
+  const result = await query<User>(`SELECT u.id,u.name,u.email,u.role_title AS "roleTitle",u.avatar_color AS "avatarColor",(u.email_verified_at IS NOT NULL) AS "emailVerified" FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()`, [hashToken(cookie)]);
   return result.rows[0] || null;
 }
-export async function requireUser(request: Request): Promise<User> { return await currentUser(request) || fail(401, 'Sign in to continue.', 'UNAUTHENTICATED'); }
+export async function requireUser(request: Request): Promise<User> {
+  const user=await currentUser(request)||fail(401,'Sign in to continue.','UNAUTHENTICATED');
+  const expected=request.headers.get('x-coatria-user');
+  if(expected&&expected!==user.id)fail(409,'Your signed-in account changed. Refresh before continuing.','SESSION_CHANGED');
+  return user;
+}
 export async function requireMembership(request: Request, companyId: string, admin = false): Promise<Membership> {
   id(companyId); const user = await requireUser(request);
   const row = (await query<{ role: Membership['role'] }>('SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2 AND role<>\'removed\'', [companyId, user.id])).rows[0];
