@@ -3,11 +3,14 @@
 All API JSON response data is camelCase. Errors: `{error: string, code?: string}` with appropriate status. Auth uses secure HttpOnly same-site cookies, passwords are server hashed with scrypt. Mutations validate Origin and use parameterized SQL. Every company resource checks current active membership server-side. Never use demo data in production.
 
 ## Identity
-- GET /api/session -> `{user: User|null, companies: Company[]}`. User `{id,name,email,roleTitle,avatarColor}`; Company `{id,name,slug,template,role}`.
+- GET /api/session -> `{user: User|null, companies: Company[], configured:boolean}`. User `{id,name,email,roleTitle,avatarColor,avatarId:string|null,emailVerified:boolean}`; Company `{id,name,slug,template,role}`.
 - POST /api/auth/signup `{name,email,password}` -> session shape, cookie.
 - POST /api/auth/login `{email,password}` -> session shape, cookie.
 - POST /api/auth/logout -> `{ok:true}`.
-- PATCH /api/profile `{name,roleTitle,avatarColor}` -> `{user}`.
+- PATCH /api/profile `{name,roleTitle,avatarColor,avatarId?:string|null}` -> `{user}`. Avatar IDs must match the audited collection. Omission preserves the saved choice; null returns to an automatically assigned character. Profile changes apply only to the authenticated identity.
+- GET /api/avatars -> `{avatars:[{id,name,idleClip,walkClip,walkSpeed,forwardRotation?}]}` authenticated only. `walkSpeed` is the authored gait speed in exported model units per second; rendering scales it with character height. Clients share `selectAvatarForUser` for a deterministic automatic choice.
+- GET /api/avatars/:avatarId/model -> authenticated GLB response, `Cache-Control: private, no-store`; unknown IDs return 404 and missing/unavailable licensed files return 503. Model files are deployment assets outside public files and source control. Cross-site requests and mismatched `X-Coatria-User` identities are rejected.
+- GET /api/avatars/:avatarId/preview -> authenticated PNG portrait with the same access boundary. Profile tiles fetch with a pinned identity and abortable request, use an object URL, and revoke it on unmount/account change. Missing previews retain a labelled fallback.
 - POST /api/companies `{name,slug,template:'studio'|'blank'}` -> `{company}`. Creates owner membership, rooms and office default layout atomically. No sample coworkers.
 - POST /api/invitations/join `{token}` -> `{company}`. Single-use expiring invite.
 - POST /api/companies/:id/invitations `{role:'member'|'admin',email?:string}` -> `{token,url,expiresAt}`. Owner/admin only, default member, protect owner escalation. Link copied by user; never imply email was sent.
@@ -15,8 +18,8 @@ All API JSON response data is camelCase. Errors: `{error: string, code?: string}
 ## Workspace
 - GET /api/companies/:id/workspace -> `{company,rooms,members,agents,tasks,messages,presence,activity,drives,openings,applications,layout}`. Arrays empty when no entries. Messages latest 100, activity latest 50. User vault fetched separately.
 - Room `{id,name,kind:'meeting'|'focus'|'lounge'|'auditorium',capacity}`.
-- Member `{id,userId,name,email,role,roleTitle,avatarColor}`.
-- Presence `{userId,name,avatarColor,roomId,x,z,status,updatedAt}` expires after 45 seconds.
+- Member `{id,userId,name,email,role,roleTitle,avatarColor,avatarId:string|null}`.
+- Presence `{userId,name,avatarColor,avatarId:string|null,roomId,x,z,status,updatedAt}` expires after 45 seconds.
 - POST /api/companies/:id/presence `{roomId:string|null,x:number,z:number,status:'available'|'focus'|'away'}` -> `{presence}` including current users; heartbeat ~15s, client refresh ~5s visible only. Bounds -20..20.
 - GET /api/companies/:id/presence -> `{presence}`.
 - POST /api/companies/:id/rooms `{name,kind,capacity}` -> `{room}` admin only.

@@ -1,0 +1,47 @@
+import { test, expect } from '@playwright/test';
+
+test('a visual character choice saves, survives reload, and loads in the office', async ({ page, context, baseURL }) => {
+  test.skip(!baseURL || !['localhost', '127.0.0.1'].includes(new URL(baseURL).hostname), 'Local fixtures only.');
+  test.skip(process.env.COATRIA_REQUIRE_AVATAR_ASSETS !== '1', 'Requires the privately supplied licensed character bundle.');
+  const suffix = `${Date.now().toString(36)}-avatar`, origin = baseURL!;
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  const signup = await context.request.post('/api/auth/signup', { headers: { Origin: origin }, data: { name: 'Character QA', email: `${suffix}@example.invalid`, password: `Character test passphrase ${suffix}` } });
+  expect(signup.status()).toBe(201);
+  const session = await signup.json();
+  const company = await context.request.post('/api/companies', { headers: { Origin: origin }, data: { name: 'Character QA Studio', slug: suffix, template: 'studio' } });
+  expect(company.status()).toBe(201);
+  const catalogResponse = await context.request.get('/api/avatars');
+  expect(catalogResponse.status()).toBe(200);
+  const { avatars } = await catalogResponse.json(); expect(avatars.length).toBeGreaterThanOrEqual(7);
+  const chosen = avatars[0];
+  await page.goto('/#profile');
+  await expect(page.getByRole('heading', { name: 'Show up as yourself.', exact: true })).toBeVisible();
+  await expect(page.locator('.avatar-choice-preview img')).toHaveCount(avatars.length + 1);
+  await expect.poll(() => page.locator('.avatar-choice-preview img').evaluateAll(images => images.every(image => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0))).toBe(true);
+  // Radios are visually clipped; the visible labelled tile is the click target.
+  await page.locator('label.avatar-choice').filter({ has: page.getByRole('radio', { name: chosen.name, exact: true }) }).click();
+  const saved = page.waitForResponse(response => response.url().endsWith('/api/profile') && response.request().method() === 'PATCH');
+  await page.getByRole('button', { name: 'Save personal profile', exact: true }).click();
+  expect((await saved).status()).toBe(200);
+  await page.reload();
+  await expect(page.getByRole('radio', { name: chosen.name, exact: true })).toBeChecked();
+  expect((await (await context.request.get('/api/session')).json()).user.avatarId).toBe(chosen.id);
+  await expect(page.locator('.avatar-choice-preview img')).toHaveCount(avatars.length + 1);
+  await expect.poll(() => page.locator('.avatar-choice-preview img').evaluateAll(images => images.every(image => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0))).toBe(true);
+  await page.screenshot({ path: 'test-results/coatria-character-picker.png', fullPage: true });
+  const model = page.waitForResponse(response => response.url().endsWith(`/api/avatars/${chosen.id}/model`));
+  await page.getByRole('button', { name: 'The office', exact: true }).click();
+  await expect(page.locator('canvas')).toBeVisible();
+  const response = await model;
+  expect(response.status()).toBe(200);
+  expect(response.headers()['content-type']).toBe('model/gltf-binary');
+  expect(response.request().headers()['x-coatria-user']).toBe(session.user.id);
+  await expect.poll(() => page.evaluate(() => (window as any).CoatriaScene?.instance?.diagnostics.loadedCharacterModels)).toBe(1);
+  await page.screenshot({ path: 'test-results/coatria-city-character-office.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/#profile');
+  await expect(page.getByRole('radio', { name: chosen.name, exact: true })).toBeChecked();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  await page.screenshot({ path: 'test-results/coatria-character-picker-mobile.png', fullPage: true });
+  expect(errors).toEqual([]);
+});

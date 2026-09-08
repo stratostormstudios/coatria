@@ -3,11 +3,11 @@
 -- provisioned by ordinary application schema migrations.
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM coatria_runtime_v1;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM coatria_runtime_v1;
-REVOKE ALL(id,name,email,password_hash,role_title,avatar_color,created_at,email_verified_at) ON users FROM coatria_runtime_v1;
+REVOKE ALL(id,name,email,password_hash,role_title,avatar_color,avatar_id,created_at,email_verified_at) ON users FROM coatria_runtime_v1;
 GRANT USAGE ON SCHEMA public TO coatria_runtime_v1;
 GRANT SELECT ON users, schema_migrations TO coatria_runtime_v1;
-GRANT INSERT(name,email,password_hash,role_title,avatar_color) ON users TO coatria_runtime_v1;
-GRANT UPDATE(name,password_hash,role_title,avatar_color) ON users TO coatria_runtime_v1;
+GRANT INSERT(name,email,password_hash,role_title,avatar_color,avatar_id) ON users TO coatria_runtime_v1;
+GRANT UPDATE(name,password_hash,role_title,avatar_color,avatar_id) ON users TO coatria_runtime_v1;
 GRANT SELECT,INSERT,UPDATE,DELETE ON
  sessions,companies,memberships,invitations,rooms,presence,messages,agents,tasks,
  contributions,activity,skills,skill_versions,drives,drive_files,openings,

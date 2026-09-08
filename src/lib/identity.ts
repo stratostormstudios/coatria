@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { query, transaction } from './db';
 import { createSession, currentUser, logout, requireUser, sessionCookie, sessionData, userColumns } from './auth';
 import { body, clientKey, dummyPasswordHash, fail, json, passwordHash, passwordMatches, passwordNeedsUpgrade, rateLimit } from './security';
-import { loginInput, signupInput, skillColumns, skillInput, text } from './model';
+import { loginInput, profileInput, signupInput, skillColumns, skillInput } from './model';
 
 export async function identityRoute(request: Request, parts: string[], method: string): Promise<Response | null> {
   const path = parts.join('/');
@@ -52,8 +52,8 @@ export async function identityRoute(request: Request, parts: string[], method: s
   }
   if (path === 'profile' && method === 'PATCH') {
     const user = await requireUser(request);
-    const data = await body(request, z.object({ name: text(80), roleTitle: z.string().trim().max(100), avatarColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/) }).strict());
-    return json({ user: (await query(`UPDATE users SET name=$2,role_title=$3,avatar_color=$4 WHERE id=$1 RETURNING ${userColumns}`, [user.id, data.name, data.roleTitle, data.avatarColor])).rows[0] });
+    const data = await body(request, profileInput);
+    return json({ user: (await query(`UPDATE users SET name=$2,role_title=$3,avatar_color=$4,avatar_id=CASE WHEN $5::boolean THEN $6::text ELSE avatar_id END WHERE id=$1 RETURNING ${userColumns}`, [user.id, data.name, data.roleTitle, data.avatarColor, data.avatarId !== undefined, data.avatarId ?? null])).rows[0] });
   }
   if (parts[0] === 'vault') {
     const user = await requireUser(request);

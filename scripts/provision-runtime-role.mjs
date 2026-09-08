@@ -123,8 +123,8 @@ async function verifyRuntimePrivileges(client){
     refuse('FORBIDDEN_RUNTIME_PRIVILEGES','The new role has forbidden effective privileges. Review PUBLIC and column grants before retrying.');
   }
   const allowedColumns=(await client.query(`SELECT bool_and(pg_catalog.has_column_privilege($1,'public.users',name,privilege)) AS allowed
-    FROM (VALUES ('name','INSERT'),('email','INSERT'),('password_hash','INSERT'),('role_title','INSERT'),('avatar_color','INSERT'),
-      ('name','UPDATE'),('password_hash','UPDATE'),('role_title','UPDATE'),('avatar_color','UPDATE')) AS required(name,privilege)`,[ROLE])).rows[0].allowed;
+    FROM (VALUES ('name','INSERT'),('email','INSERT'),('password_hash','INSERT'),('role_title','INSERT'),('avatar_color','INSERT'),('avatar_id','INSERT'),
+      ('name','UPDATE'),('password_hash','UPDATE'),('role_title','UPDATE'),('avatar_color','UPDATE'),('avatar_id','UPDATE')) AS required(name,privilege)`,[ROLE])).rows[0].allowed;
   const allowedTables=(await client.query(`SELECT bool_and(pg_catalog.has_table_privilege($1,'public.'||name,privilege)) AS allowed,
     bool_or(pg_catalog.has_table_privilege($1,'public.'||name,'TRUNCATE,TRIGGER,REFERENCES')) AS excessive
     FROM unnest($2::text[]) AS tables(name) CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE']) AS privileges(privilege)`,[ROLE,writableTables])).rows[0];

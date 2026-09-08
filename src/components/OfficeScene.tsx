@@ -1,20 +1,23 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { selectAvatarForUser, type AvatarDefinition } from "@/lib/avatar-catalog";
 
 type Entity = Record<string, any>;
 type Position = { x: number; z: number };
 type SceneInstance = {
   dispose: () => void;
   updateSnapshot: (snapshot: Entity) => void;
-  setCharacterModel: (id: string, model: unknown, animations: unknown[]) => boolean;
   diagnostics: { position: Position };
   error?: string;
 };
 type SceneRuntime = {
   mount: (host: HTMLElement, options: Entity) => SceneInstance;
-  loadCharacter: () => Promise<{ scene: unknown; animations: unknown[] }>;
-  disposeCharacter: (model: unknown) => void;
+  createCharacterLibrary: (options: { userId: string; selectAvatar: typeof selectAvatarForUser }) => CharacterLibrary;
+};
+type CharacterLibrary = {
+  loadCharacter: (person: { id: string; avatarId?: string | null }) => Promise<{ scene: unknown; animations: unknown[]; metadata: AvatarDefinition; release: () => void }>;
+  dispose: () => void;
 };
 
 declare global {
@@ -22,7 +25,7 @@ declare global {
 }
 
 export type OfficeSceneProps = {
-  user: { id: string; name: string; avatarColor?: string };
+  user: { id: string; name: string; avatarColor?: string; avatarId?: string | null };
   company: { id: string; name: string; template: string };
   members: Entity[];
   agents: Entity[];
@@ -67,12 +70,14 @@ export default function OfficeScene(props: OfficeSceneProps) {
   useEffect(() => {
     let cancelled = false;
     let mounted: SceneInstance | null = null;
+    let library: CharacterLibrary | null = null;
     setState("loading");
     const savedQuality = (() => { try { return localStorage.getItem("coatria-graphics"); } catch { return null; } })();
     loadRuntime().then(runtime => {
       if (cancelled || !host.current) return;
       const latest = current.current;
       const ownPresence = latest.presence.find(person => person.userId === latest.user.id);
+      library = runtime.createCharacterLibrary?.({ userId: latest.user.id, selectAvatar: selectAvatarForUser }) || null;
       mounted = runtime.mount(host.current, {
         state: { user: latest.user, spatialPosition: ownPresence ? { x: ownPresence.x, z: ownPresence.z } : undefined },
         companyName: latest.company.name,
@@ -83,6 +88,7 @@ export default function OfficeScene(props: OfficeSceneProps) {
         members: latest.members,
         agents: latest.agents,
         presence: latest.presence,
+        loadCharacter: library?.loadCharacter,
         quality: savedQuality === "low" ? "low" : "balanced",
         onMove: (position: Position) => current.current.onMove(position),
         onOpenRoom: (id: string) => current.current.onOpenRoom(id),
@@ -90,17 +96,12 @@ export default function OfficeScene(props: OfficeSceneProps) {
         onOpenPerson: (id: string) => current.current.onOpenPerson(id),
         onQualityChange: (quality: string) => { try { localStorage.setItem("coatria-graphics", quality); } catch { /* A browser preference is optional. */ } }
       });
-      if (!mounted || mounted.error) { mounted?.dispose(); mounted = null; setState("unavailable"); return; }
+      if (!mounted || mounted.error) { mounted?.dispose(); mounted = null; library?.dispose(); library = null; setState("unavailable"); return; }
       instance.current = mounted;
       setState("ready");
       current.current.onMove(mounted.diagnostics.position);
-      const target = mounted;
-      runtime.loadCharacter().then(asset => {
-        if (cancelled || instance.current !== target) { runtime.disposeCharacter(asset.scene); return; }
-        if (!target.setCharacterModel(latest.user.id, asset.scene, asset.animations)) runtime.disposeCharacter(asset.scene);
-      }).catch(() => { /* The procedural local avatar remains fully functional. */ });
-    }).catch(() => { if (!cancelled) setState("unavailable"); });
-    return () => { cancelled = true; mounted?.dispose(); if (instance.current === mounted) instance.current = null; };
+    }).catch(() => { mounted?.dispose(); library?.dispose(); if (!cancelled) setState("unavailable"); });
+    return () => { cancelled = true; mounted?.dispose(); library?.dispose(); if (instance.current === mounted) instance.current = null; };
   }, [geometryKey, retry]);
 
   useEffect(() => {

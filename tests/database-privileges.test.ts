@@ -14,10 +14,12 @@ test('runtime role supports accounts but cannot change verification, schema, rol
     await client.query(`CREATE ROLE ${role} NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`);
     await client.query((await readFile('database/runtime-permissions.sql','utf8')).replaceAll('coatria_runtime_v1',role));
     await client.query(`SET LOCAL ROLE ${role}`);
-    const user=(await client.query("INSERT INTO users(name,email,password_hash) VALUES('Privilege test',$1,'test only') RETURNING id",[role+'@example.invalid'])).rows[0];
+    const user=(await client.query("INSERT INTO users(name,email,password_hash,avatar_id) VALUES('Privilege test',$1,'test only','city-023') RETURNING id,avatar_id",[role+'@example.invalid'])).rows[0];
+    assert.equal(user.avatar_id,'city-023');
     await client.query('SELECT id FROM users WHERE id=$1 FOR UPDATE',[user.id]);
     await client.query('SELECT id FROM users WHERE id=$1 FOR SHARE',[user.id]);
-    await client.query("UPDATE users SET name='Updated test',password_hash='replacement test only' WHERE id=$1",[user.id]);
+    await client.query("UPDATE users SET name='Updated test',password_hash='replacement test only',avatar_id='city-024' WHERE id=$1",[user.id]);
+    assert.equal((await client.query('SELECT avatar_id FROM users WHERE id=$1',[user.id])).rows[0].avatar_id,'city-024');
     await client.query('SELECT name FROM schema_migrations');
     const options=(await client.query('SELECT rolcreaterole,rolcreatedb,rolbypassrls FROM pg_roles WHERE rolname=current_user')).rows[0];
     assert.deepEqual(options,{rolcreaterole:false,rolcreatedb:false,rolbypassrls:false});

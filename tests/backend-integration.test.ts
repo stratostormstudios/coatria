@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { readdir,readFile } from 'node:fs/promises';
+import { readdir,readFile,stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { handleApi } from '../src/lib/api';
 import { database, query } from '../src/lib/db';
+import { AVATAR_CATALOG } from '../src/lib/avatar-catalog';
+import { avatarAssetPath, handleAvatarRequest } from '../src/lib/avatar-assets';
 
 const testDatabase=process.env.COATRIA_INTEGRATION_DATABASE_URL;
 const useEmulator=process.env.COATRIA_TEST_EMULATOR==='1';
@@ -34,11 +36,55 @@ test('real database API: tenant isolation, invitations, independent approvals, p
   }
   try {
     const owner=await signup('Owner'),reviewer=await signup('Reviewer'),worker=await signup('Worker'),outsider=await signup('Outsider');
+    const avatarRequest=(cookie?:string,headers:Record<string,string>={})=>new Request(`${origin}/api/avatars`,{headers:{Origin:origin,...(cookie?{Cookie:cookie}:{}),...headers}});
+    const anonymousCatalog=await handleAvatarRequest(avatarRequest());assert.equal(anonymousCatalog.status,401);
+    const anonymousModel=await handleAvatarRequest(avatarRequest(),AVATAR_CATALOG[0].id);assert.equal(anonymousModel.status,401);
+    const anonymousPreview=await handleAvatarRequest(avatarRequest(),AVATAR_CATALOG[0].id,'preview');assert.equal(anonymousPreview.status,401);
+    const catalog=await handleAvatarRequest(avatarRequest(owner.cookie));assert.equal(catalog.status,200);assert.deepEqual((await catalog.json()).avatars,AVATAR_CATALOG);
+    const changedIdentity=await handleAvatarRequest(avatarRequest(owner.cookie,{'X-Coatria-User':outsider.userId}));assert.equal(changedIdentity.status,409);assert.equal((await changedIdentity.json()).code,'SESSION_CHANGED');
+    for(const headers of [{'Sec-Fetch-Site':'cross-site'},{Origin:'https://outside.example'}] as Record<string,string>[])assert.equal((await handleAvatarRequest(avatarRequest(owner.cookie,headers))).status,403);
+    for(const id of ['city-unlisted','../city-023','city-023/../../private','%2e%2e%2fprivate'])assert.equal((await handleAvatarRequest(avatarRequest(owner.cookie),id)).status,404);
+    assert.equal((await handleAvatarRequest(avatarRequest(owner.cookie,{'X-Coatria-User':outsider.userId}),AVATAR_CATALOG[0].id,'preview')).status,409);
+    assert.equal((await handleAvatarRequest(avatarRequest(owner.cookie,{'Sec-Fetch-Site':'cross-site'}),AVATAR_CATALOG[0].id,'preview')).status,403);
+    assert.equal((await handleAvatarRequest(avatarRequest(owner.cookie),'../city-023','preview')).status,404);
+    // CI has no licensed pack. Local imports must retain the same authenticated,
+    // non-cacheable delivery contract without copying or replacing those files.
+    const modelId=AVATAR_CATALOG[0].id;
+    for(const kind of ['model','preview'] as const){
+      let exists=false;try{exists=(await stat(avatarAssetPath(modelId,kind))).isFile();}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+      const asset=await handleAvatarRequest(avatarRequest(owner.cookie),modelId,kind);
+      if(exists){assert.equal(asset.status,200);assert.equal(asset.headers.get('content-type'),kind==='preview'?'image/png':'model/gltf-binary');assert.equal(asset.headers.get('cache-control'),'private, no-store');assert.equal(asset.headers.get('cross-origin-resource-policy'),'same-origin');const bytes=Buffer.from(await asset.arrayBuffer());assert.equal(Number(asset.headers.get('content-length')),bytes.byteLength);if(kind==='model')assert.equal(bytes.readUInt32LE(0),0x46546c67);else assert.deepEqual(bytes.subarray(0,8),Buffer.from([137,80,78,71,13,10,26,10]));}
+      else{assert.equal(asset.status,503);assert.equal((await asset.json()).code,'AVATAR_UNAVAILABLE');}
+    }
     const companyA=(await call(owner,'companies','POST',{name:`Test ${run}`,slug:`test-${run}`,template:'studio'},201)).data.company;companies.push(companyA.id);
     const companyB=(await call(outsider,'companies','POST',{name:`Other ${run}`,slug:`other-${run}`,template:'blank'},201)).data.company;companies.push(companyB.id);
     const base=`companies/${companyA.id}`;
+    // Saved identity belongs to the authenticated person and appears in every
+    // membership/presence snapshot without modifying other people's profiles.
+    const chosenAvatar=AVATAR_CATALOG[0].id;
+    const ownerProfile={name:'Owner',roleTitle:'Director',avatarColor:'#abcdef'};
+    assert.equal((await call(owner,'session')).data.user.avatarId,null);
+    await call(null,'profile','PATCH',{...ownerProfile,avatarId:chosenAvatar},401);
+    for(const avatarId of ['city-unlisted','../private/model','https://example.test/model.glb'])await call(owner,'profile','PATCH',{...ownerProfile,avatarId},400);
+    await call(owner,'profile','PATCH',{...ownerProfile,avatarId:chosenAvatar,userId:outsider.userId},400);
+    assert.equal((await call(owner,'profile','PATCH',{...ownerProfile,avatarId:chosenAvatar})).data.user.avatarId,chosenAvatar);
+    assert.equal((await call(owner,'session')).data.user.avatarId,chosenAvatar);
+    assert.equal((await call(null,'auth/login','POST',{email:owner.email,password:'Integration password 123!'})).data.user.avatarId,chosenAvatar);
+    assert.equal((await query('SELECT avatar_id FROM users WHERE id=$1',[owner.userId])).rows[0].avatar_id,chosenAvatar);
+    assert.equal((await call(outsider,'session')).data.user.avatarId,null);
+    // A client that has not yet added avatar controls preserves the saved choice.
+    assert.equal((await call(owner,'profile','PATCH',ownerProfile)).data.user.avatarId,chosenAvatar);
     await call(null,`${base}/workspace`,'GET',undefined,401);await call(outsider,`${base}/workspace`,'GET',undefined,404);
     const start=(await call(owner,`${base}/workspace`)).data;assert.equal(start.members.length,1);assert.equal(start.agents.length,0);assert.equal(start.tasks.length,0);assert.equal(start.rooms.length,4);assert.equal(start.layout.length,8);
+    assert.equal(start.members[0].avatarId,chosenAvatar);
+    const secondCompanyInvite=(await call(outsider,`companies/${companyB.id}/invitations`,'POST',{role:'member'},201)).data;
+    await call(owner,'invitations/join','POST',{token:secondCompanyInvite.token});
+    assert.equal((await call(outsider,`companies/${companyB.id}/workspace`)).data.members.find((m:{userId:string})=>m.userId===owner.userId).avatarId,chosenAvatar);
+    const ownerPresence=(await call(owner,`${base}/presence`,'POST',{roomId:null,x:0,z:0,status:'available'})).data.presence;
+    assert.equal(ownerPresence.find((p:{userId:string})=>p.userId===owner.userId).avatarId,chosenAvatar);
+    await query('DELETE FROM presence WHERE company_id=$1 AND user_id=$2',[companyA.id,owner.userId]);
+    assert.equal((await call(owner,'profile','PATCH',{...ownerProfile,avatarId:null})).data.user.avatarId,null);
+    assert.equal((await call(owner,'session')).data.user.avatarId,null);
     await call(owner,`${base}/presence`,'POST',{roomId:null,x:0,z:0,status:'available'},403,undefined,'https://attacker.example');
     for(const [client,role]of [[reviewer,'admin'],[worker,'member']]as const) {
       const invite=(await call(owner,`${base}/invitations`,'POST',{role},201)).data;

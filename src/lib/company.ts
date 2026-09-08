@@ -22,7 +22,7 @@ export async function existingAssignee(client: PoolClient, companyId: string, us
   if (userId && !(await client.query("SELECT user_id FROM memberships WHERE user_id=$1 AND company_id=$2 AND role<>'removed' FOR SHARE", [userId, companyId])).rowCount) fail(400, 'Assignee is not an active member of this company.');
 }
 export async function readPresence(companyId: string) {
-  return (await query(`SELECT p.user_id AS "userId",u.name,u.avatar_color AS "avatarColor",p.room_id AS "roomId",p.x,p.z,p.status,p.updated_at AS "updatedAt"
+  return (await query(`SELECT p.user_id AS "userId",u.name,u.avatar_color AS "avatarColor",u.avatar_id AS "avatarId",p.room_id AS "roomId",p.x,p.z,p.status,p.updated_at AS "updatedAt"
     FROM presence p JOIN users u ON u.id=p.user_id JOIN memberships m ON m.user_id=p.user_id AND m.company_id=p.company_id
     WHERE p.company_id=$1 AND p.updated_at>now()-interval '45 seconds' AND m.role<>'removed' ORDER BY u.name`, [companyId])).rows;
 }
@@ -91,7 +91,7 @@ export async function companyRoute(request: Request, parts: string[], method: st
     const [company,rooms,members,agents,tasks,messages,presence,activity,drives,openings,applications] = await Promise.all([
       query('SELECT id,name,slug,template,layout FROM companies WHERE id=$1',[companyId]),
       query('SELECT id,name,kind,capacity FROM rooms WHERE company_id=$1 ORDER BY created_at',[companyId]),
-      query(`SELECT u.id,u.id AS "userId",u.name,u.email,m.role,u.role_title AS "roleTitle",u.avatar_color AS "avatarColor" FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.company_id=$1 AND m.role<>'removed' ORDER BY m.joined_at`,[companyId]),
+      query(`SELECT u.id,u.id AS "userId",u.name,u.email,m.role,u.role_title AS "roleTitle",u.avatar_color AS "avatarColor",u.avatar_id AS "avatarId" FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.company_id=$1 AND m.role<>'removed' ORDER BY m.joined_at`,[companyId]),
       query(`SELECT ${agentColumns} FROM agents WHERE company_id=$1 ORDER BY created_at`,[companyId]),
       query(`SELECT ${taskColumns} FROM tasks WHERE company_id=$1 ORDER BY updated_at DESC LIMIT 500`,[companyId]),
       query(`SELECT m.id,m.room_id AS "roomId",m.body,m.created_at AS "createdAt",m.user_id AS "userId",u.name AS "authorName" FROM messages m JOIN users u ON u.id=m.user_id WHERE m.company_id=$1 ORDER BY m.created_at DESC LIMIT 100`,[companyId]),

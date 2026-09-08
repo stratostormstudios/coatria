@@ -11,3 +11,6 @@ playwright-report/
 *.tsbuildinfo
 *.secret
 .devdata/
+.runtime-assets/
+__pycache__/
+*.pyc

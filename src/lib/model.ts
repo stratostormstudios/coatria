@@ -1,10 +1,13 @@
 import { z } from 'zod';
 import { uuid } from './security';
+import { getAvatarDefinition } from './avatar-catalog';
 
 export const text = (max: number) => z.string().trim().min(1).max(max);
 export const email = z.string().trim().toLowerCase().email().max(254);
 export const signupInput = z.object({ name: text(80), email, password: z.string().min(12).max(256) }).strict();
 export const loginInput = z.object({ email, password: z.string().min(1).max(256) }).strict();
+export const avatarIdInput = z.string().max(64).refine(value => Boolean(getAvatarDefinition(value)), 'Choose an avatar from the available collection.');
+export const profileInput = z.object({ name: text(80), roleTitle: z.string().trim().max(100), avatarColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/), avatarId: avatarIdInput.nullable().optional() }).strict();
 export const roomInput = z.object({ name: text(80), kind: z.enum(['meeting','focus','lounge','auditorium']), capacity: z.number().int().min(1).max(500) }).strict();
 export const layoutItem = z.object({ id: text(80), type: z.enum(['desk','meeting','focus','lounge','plant']), x: z.number().min(0).max(100), y: z.number().min(0).max(100), w: z.number().min(0.1).max(100), h: z.number().min(0.1).max(100), label: text(80) }).strict().refine(v => v.x + v.w <= 100 && v.y + v.h <= 100, 'Furniture must fit inside the floor.');
 export const layoutInput = z.object({ layout: z.array(layoutItem).max(100).refine(items => new Set(items.map(x => x.id)).size === items.length, 'Furniture IDs must be unique.') }).strict();

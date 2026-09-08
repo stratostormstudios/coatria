@@ -2,13 +2,13 @@ import type { PoolClient } from 'pg';
 import { query } from './db';
 import { fail, hashToken, id, secret } from './security';
 
-export type User = { id: string; name: string; email: string; roleTitle: string; avatarColor: string; emailVerified: boolean };
+export type User = { id: string; name: string; email: string; roleTitle: string; avatarColor: string; avatarId: string | null; emailVerified: boolean };
 export type Membership = { companyId: string; userId: string; role: 'owner' | 'admin' | 'member'; user: User };
-export const userColumns = `id,name,email,role_title AS "roleTitle",avatar_color AS "avatarColor",(email_verified_at IS NOT NULL) AS "emailVerified"`;
+export const userColumns = `id,name,email,role_title AS "roleTitle",avatar_color AS "avatarColor",avatar_id AS "avatarId",(email_verified_at IS NOT NULL) AS "emailVerified"`;
 export async function currentUser(request: Request): Promise<User | null> {
   const cookie = request.headers.get('cookie')?.split(';').map(x => x.trim()).find(x => x.startsWith('coatria_session='))?.slice(16);
   if (!cookie || cookie.length > 200) return null;
-  const result = await query<User>(`SELECT u.id,u.name,u.email,u.role_title AS "roleTitle",u.avatar_color AS "avatarColor",(u.email_verified_at IS NOT NULL) AS "emailVerified" FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()`, [hashToken(cookie)]);
+  const result = await query<User>(`SELECT u.id,u.name,u.email,u.role_title AS "roleTitle",u.avatar_color AS "avatarColor",u.avatar_id AS "avatarId",(u.email_verified_at IS NOT NULL) AS "emailVerified" FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()`, [hashToken(cookie)]);
   return result.rows[0] || null;
 }
 export async function requireUser(request: Request): Promise<User> {
