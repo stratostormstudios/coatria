@@ -1,12 +1,12 @@
-# Coatria 0.1 — character-update release status
+# Coatria 0.1 — UX-update release status
 
-Status recorded **2026-09-08**. The character update is deployed at [coatria.com](https://coatria.com): 12 purchased characters, a saved visual profile picker, authored idle/walk blending and smooth human movement. PostgreSQL CI passed all 40 tests; migration 005 and its limited runtime grants are applied. All 40 live character checks passed, including matching every deployed GLB to its audited SHA-256. The temporary live account and company were removed and zero remaining rows verified. The [character pipeline](CHARACTERS.md) documents private asset packaging and measured budgets. The earlier [security review](SECURITY_REVIEW.md) remains applicable.
+Status recorded **2026-09-08**. The page-by-page UX update is deployed at [coatria.com](https://coatria.com). All 15 authenticated destinations and account entry were reviewed, with clearer navigation, readable controls, mobile work/chat flows, recoverable search and draft states, guided connection setup, and a compact character picker. The [UX review](UX_REVIEW.md) records the findings, primary product/design references, acceptance checks and remaining product work. This release changes no database schema or API contracts. The [character pipeline](CHARACTERS.md) and [security review](SECURITY_REVIEW.md) remain applicable.
 
 | Item | Current state |
 | --- | --- |
 | Repository | [stratostormstudios/coatria](https://github.com/stratostormstudios/coatria) contains the application, migrations, tests and implementation plan |
-| Reviewed source | `8054156419b5adbb2cdd1bb4872f38f17ede2a09` |
-| Vercel | Character-update deployment `dpl_2cWJPenrZBDmNNAy2hdfoHagmV4T` is READY and promoted for source `8054156419b5adbb2cdd1bb4872f38f17ede2a09` |
+| Reviewed source | `c17e8e9fd9eaa977c3870289424818a00b9d873b` |
+| Vercel | UX-update deployment `dpl_Gt7FQXpEv1Dt6ECZMGZTVyj6PNnb` is READY and promoted for reviewed source `c17e8e9fd9eaa977c3870289424818a00b9d873b` |
 | Domain | [coatria.com](https://coatria.com) returned HTTP 200 over HTTPS and health reported ready; live nonce-based CSP verified |
 | Production database | Neon `coatria-production` preserved; all five numbered migrations applied. Runtime avatar INSERT/UPDATE allowed; email verification UPDATE and schema CREATE remain denied |
 | Project environment | Only production `APP_URL` and sensitive Secret `DATABASE_URL`; no owner aliases or preview database credentials. Resource environment injection detached without deleting Neon |
@@ -14,6 +14,16 @@ Status recorded **2026-09-08**. The character update is deployed at [coatria.com
 | Deployment protection | Vercel reports `ssoProtection: all_except_custom_domains`; this does not invalidate old deployment credentials |
 | Main branch | Read-only inspection reported unprotected `main` and no repository rulesets; administrator configuration remains open |
 | Scale | Small-team implementation with bounded polling and calls; no million-user load test has been completed |
+
+UX release validation: [CI run 34281690406](https://github.com/stratostormstudios/coatria/actions/runs/34281690406) passed **40 tests with zero failures or skips** on PostgreSQL 17.11, plus the complete-history credential scan, dependency audit (zero reported vulnerabilities), TypeScript and production build. The licensed local build verified all 12 runtime characters. **36 distinct local browser cases** passed across focused/regression runs, including real authenticated two-person collaboration and character/profile synchronization. The additional production CSP case passed on the promoted custom domain, bringing the exercised browser coverage to 37 cases.
+
+Automated axe checks reported zero violations in 40 sampled page/dialog/auth states for the selected WCAG 2 A/AA and 2.1 AA rules. All 15 destinations were checked at desktop and phone sizes without horizontal overflow, including furnished layout labels. The office and infrastructure summaries were rechecked at both sizes after the final corrections. These checks are not accessibility certification.
+
+The promoted domain returned HTTPS HTTP 200 and a ready database health response. Read-only live checks passed for password visibility, sign-in navigation, mobile overflow, public opportunity discovery/filtering and absence of browser runtime errors. Authenticated workflow regressions ran locally; no production test accounts or customer records were created or modified for this UX release. Local screenshots and machine-readable evidence remain outside the public repository in `C:/CODEX/Agent002/output/coatria-ux/`.
+
+## Earlier character-release validation evidence
+
+For source `8054156419b5adbb2cdd1bb4872f38f17ede2a09` and deployment `dpl_2cWJPenrZBDmNNAy2hdfoHagmV4T`:
 
 Character release validation: [CI run 34271385417](https://github.com/stratostormstudios/coatria/actions/runs/34271385417) passed 40 tests with zero skips on PostgreSQL 17.11, plus audit, TypeScript and the source-only production build. Local licensed-asset builds passed. Thirteen distinct browser cases passed across production-build security/renderer tests and real-database development-service profile/collaboration tests; the authored-model motion suite additionally passed with adult and senior variants. An initial isolated-port test setup rejected three fixtures because its APP_URL named another port; those fixtures passed against the correctly configured local service. The two-tab regression confirms an untouched character field cannot overwrite a newer selection.
 
