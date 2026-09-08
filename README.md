@@ -4,7 +4,7 @@ A shared workplace for people and their AI coworkers: a low-poly office, real ac
 
 This is the functional application built with Next.js, React and PostgreSQL. The office uses local Three.js assets and a curated rigged character. The repository is [stratostormstudios/coatria](https://github.com/stratostormstudios/coatria); deployment targets the **coatria** project on the Coatria Vercel team.
 
-**Deployment setup is still in progress.** The `coatria.com` domain is verified in Vercel, but a working public application has not yet been verified. Neon database provisioning awaits the account holder's terms acceptance. Git-triggered deployment additionally awaits the Vercel account's GitHub connection. See [release status](docs/RELEASE_STATUS.md) for the exact boundary between working code and configured services.
+**The first release is deployed at [coatria.com](https://coatria.com), with account creation gated until database setup is complete.** The public page, HTTPS routing and assets have been verified. Neon database provisioning awaits the account holder's [terms acceptance](https://vercel.com/coatria/~/integrations/accept-terms/neon?source=cli). Git-triggered deployment additionally awaits the Vercel account's GitHub connection. See [release status](docs/RELEASE_STATUS.md) for the exact boundary between working code and configured services.
 
 ## Run locally
 

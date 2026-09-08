@@ -1,17 +1,17 @@
 # Coatria 0.1 — release status
 
-Status recorded 8 September 2026. The first-release application has been implemented and tested locally. A working production deployment is **not yet verified**. The database provider and Git deployment connection still require account-holder setup.
+Status recorded 8 September 2026. The first-release application is deployed at [coatria.com](https://coatria.com). HTTPS routing, the public page, session setup response and application assets have been verified. Hosted accounts and persistence remain disabled until database provisioning and migrations are complete. The database provider and automatic Git deployment connection still require account-holder setup.
 
 | Item | Current state |
 | --- | --- |
-| Repository | [stratostormstudios/coatria](https://github.com/stratostormstudios/coatria) exists |
-| Vercel | Project `coatria` exists on the Coatria team; deployment is in progress |
-| Domain | `coatria.com` is verified in the Vercel project; live application routing remains a deployment check |
+| Repository | [stratostormstudios/coatria](https://github.com/stratostormstudios/coatria) contains the application, migrations, tests and implementation plan |
+| Vercel | Production deployment `dpl_39RaNyPLGaeBZuugDxNViPzzuquk` is READY; deployed application commit `fbc0dce1ae56dec428c9d14c38e8d8c19354461b` |
+| Domain | [coatria.com](https://coatria.com) routes over HTTPS to the application; HTTP 200 page and assets verified |
 | Production database | Neon provisioning awaits account-holder acceptance of provider terms; no configured production persistence is claimed |
 | Git deployments | Vercel's GitHub login connection is pending; a repository alone does not enable automatic deployments |
 | Scale | Small-team implementation with bounded polling and calls; no million-user load test has been completed |
 
-This record separates implemented behavior from external service readiness. Update the deployment state and verification evidence after the live checks pass.
+The deployed health endpoint deliberately returns HTTP 503 with `setup_required` and `configured:false`; the session endpoint returns HTTP 200 with `configured:false`. This is a verified setup state, not a successful production database check. Update this record after the provider setup, migrations and live collaboration checks pass.
 
 ## Implemented
 
@@ -43,7 +43,11 @@ Reliable media across restrictive networks requires a TURN service. Without it, 
 
 ## Validation evidence
 
-The following evidence is local development validation, not a claim about the live Vercel environment:
+[GitHub Actions run 34240295975](https://github.com/stratostormstudios/coatria/actions/runs/34240295975) passed for the deployed application commit: **20 tests passed, zero failed and zero skipped**, using PostgreSQL 17.11. All three migrations, 84 API responses, concurrent signaling and the PostgreSQL transaction-lock ordering test passed. The secret scan, TypeScript check and production build also passed.
+
+Read-only production browser checks passed at 1536 × 1000 and 390 × 844: the database setup explanation is visible, signup is unavailable, and there are no JavaScript errors or horizontal overflow. These checks validate the deployed setup page; production signup and collaboration await the database.
+
+The additional evidence below is local development validation:
 
 | Check | Evidence |
 | --- | --- |
