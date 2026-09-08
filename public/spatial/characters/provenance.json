@@ -1,0 +1,25 @@
+{
+  "asset": "coworker-runtime.glb",
+  "created": "2026-09-08",
+  "generator": "Meshy API",
+  "preview_task_id": "01a08077-11aa-70e0-ac01-2ffacda3c541",
+  "refine_task_id": "01a08078-f245-732a-8a15-1f140687e97c",
+  "rig_task_id": "01a0807a-7b98-75ac-9169-8c7b2303b2f4",
+  "prompt": "One original stylized low-poly adult office coworker, friendly professional life-simulation game character. Full body alone, neutral A-pose, arms separated from torso, legs separated, feet flat, no props or floor. Slightly oversized head, simple clean face, short neat dark hair, warm medium skin, forest green long-sleeve crewneck sweater, sand straight trousers, minimal off-white sneakers. Readable faceted silhouette, restrained contemporary proportions, clean deformation-friendly joints, no accessories, no logos, no text. Front-facing upright human, approximately 1.75 meters.",
+  "model": "meshy-t2",
+  "target_triangles": 4000,
+  "preview_triangles": 4114,
+  "credits": {
+    "mesh": 5,
+    "texture": 10,
+    "rig": 5,
+    "total": 20
+  },
+  "purpose": "One art-direction and rigging test. Other office characters use procedural placeholder geometry.",
+  "review": "Rig imported into Blender and checked separately; see accompanying audit. Not a production-approved character library.",
+  "runtime_bytes": 360772,
+  "original_walk_bytes": 7312220,
+  "runtime_triangles": 4097,
+  "joints": 24,
+  "optimization": "Blender 5.2: base-color texture resized from 2048 to 1024 and JPEG80 GLB export; rig and walking action preserved."
+}

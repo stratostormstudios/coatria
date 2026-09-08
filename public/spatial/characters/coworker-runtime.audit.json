@@ -1,0 +1,114 @@
+{
+  "input_name": "coworker-runtime.glb",
+  "sha256": "ccb665f72538aae60987a92b7d9b9613eb289bb3a5770ac7281de35591bcc74e",
+  "bytes": 360772,
+  "blender_version": "5.2.0 LTS",
+  "audit_version": 1,
+  "source_glb": {
+    "mesh_definitions": 1,
+    "mesh_nodes": 1,
+    "skinned_nodes": 1,
+    "primitives": 1,
+    "triangle_count_per_mesh_definition": 4097,
+    "vertex_count_summed_over_primitives": 3684,
+    "materials": 1,
+    "textures": 2,
+    "skins": [
+      {
+        "name": "Armature",
+        "joints": 24
+      }
+    ],
+    "animations": [
+      {
+        "name": "Armature|walking_man|baselayer",
+        "channels": 72,
+        "duration_seconds": 1.0417
+      }
+    ],
+    "unsupported_primitive_modes": [],
+    "extensions_used": [
+      "KHR_materials_specular",
+      "KHR_materials_ior"
+    ]
+  },
+  "imported_meshes": [
+    {
+      "name": "char1",
+      "vertices": 3684,
+      "polygons": 4097,
+      "triangles": 4097,
+      "material_slots": 1,
+      "armature": "Armature",
+      "unweighted_vertices": 0,
+      "vertices_with_more_than_four_influences": 0,
+      "vertices_with_unnormalized_weights": 0,
+      "boundary_edges": 2801,
+      "non_manifold_edges_excluding_boundaries": 0
+    },
+    {
+      "name": "Icosphere",
+      "vertices": 42,
+      "polygons": 80,
+      "triangles": 80,
+      "material_slots": 0,
+      "armature": null,
+      "unweighted_vertices": 0,
+      "vertices_with_more_than_four_influences": 0,
+      "vertices_with_unnormalized_weights": 0,
+      "boundary_edges": 0,
+      "non_manifold_edges_excluding_boundaries": 0
+    }
+  ],
+  "armatures": [
+    {
+      "name": "Armature",
+      "bones": 24,
+      "deform_bones": 24
+    }
+  ],
+  "images": [
+    {
+      "name": "texture_0",
+      "width": 1024,
+      "height": 1024,
+      "channels": 4,
+      "packed": true
+    }
+  ],
+  "rest_bounds": {
+    "coordinate_system": "Blender world; Z up; scene units",
+    "min": [
+      -0.95106,
+      -1.0,
+      -1.0
+    ],
+    "max": [
+      0.95106,
+      1.0,
+      1.75
+    ],
+    "dimensions": [
+      1.90212,
+      2.0,
+      2.75
+    ]
+  },
+  "budget": {
+    "status": "proposed targets, not benchmark results",
+    "triangles": 6000,
+    "materials": 2,
+    "joints_per_skin": 64,
+    "texture_max_dimension": 1024
+  },
+  "automated_checks_pass": true,
+  "warnings": [],
+  "manual_review_required": [
+    "Silhouette, face and clothing at actual office-camera distance",
+    "Shoulder, elbow, hip and knee deformation throughout clips",
+    "Feet contact, floor origin, root motion and chair alignment",
+    "Runtime decoder support, visual comparison after compression, and device frame-time measurement",
+    "Input rights, provider plan/license, animation provenance, and reviewer approval"
+  ],
+  "limits": "Rest-pose structural report only. It does not certify topology quality, animation deformation, retargeting compatibility, licensing, or frame rate. Mesh-definition triangle counts do not multiply scene instances."
+}

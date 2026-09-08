@@ -1,0 +1,4 @@
+Three.js 0.185.1
+Source: https://www.npmjs.com/package/three/v/0.185.1
+MIT license: THREE-LICENSE.txt
+Local import specifiers adjusted for static hosting.

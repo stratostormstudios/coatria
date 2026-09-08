@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.glb -text
+*.webp -text
+public/spatial/vendor/** -whitespace

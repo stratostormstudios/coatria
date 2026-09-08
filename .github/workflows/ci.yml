@@ -1,0 +1,43 @@
+name: Coatria checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  application:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: coatria_test
+          POSTGRES_PASSWORD: local_ci_test_only
+          POSTGRES_DB: coatria_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U coatria_test -d coatria_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://coatria_test:local_ci_test_only@127.0.0.1:5432/coatria_test
+      COATRIA_INTEGRATION_DATABASE_URL: postgresql://coatria_test:local_ci_test_only@127.0.0.1:5432/coatria_test
+      APP_URL: http://localhost:4180
+      NEXT_TELEMETRY_DISABLED: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/check-secrets.mjs
+      - run: npm run db:migrate
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build
