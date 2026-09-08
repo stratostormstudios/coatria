@@ -4,7 +4,7 @@ A shared workplace for people and their AI coworkers: a low-poly office, real ac
 
 This is the functional application built with Next.js, React and PostgreSQL. The office uses local Three.js assets and a curated rigged character. The repository is [stratostormstudios/coatria](https://github.com/stratostormstudios/coatria); deployment targets the **coatria** project on the Coatria Vercel team.
 
-**The first release is deployed at [coatria.com](https://coatria.com), with account creation gated until database setup is complete.** The public page, HTTPS routing and assets have been verified. Neon database provisioning awaits the account holder's [terms acceptance](https://vercel.com/coatria/~/integrations/accept-terms/neon?source=cli). Git-triggered deployment additionally awaits the Vercel account's GitHub connection. See [release status](docs/RELEASE_STATUS.md) for the exact boundary between working code and configured services.
+**The first release is live at [coatria.com](https://coatria.com), with accounts and persistence enabled.** The production Neon database is connected and all migrations are applied. Live verification passed 35 API checks and 14 browser checks, including signup, company setup, shared work and private skills. Temporary test accounts and companies were removed afterward. Automatic Git-triggered deployment still requires the Vercel account's GitHub connection. See [release status](docs/RELEASE_STATUS.md) for configured services and current limits.
 
 ## Run locally
 
@@ -66,7 +66,7 @@ This command requires a dedicated **local** test `DATABASE_URL`. Alternatively, 
 
 1. Complete the database provider setup and connect a dedicated production database to the Coatria project.
 2. Configure `DATABASE_URL` and canonical `APP_URL=https://coatria.com` in the appropriate Vercel environment. Keep preview and production data separate.
-3. Apply the repository migrations with the intended database credentials before enabling the app. Do not run migrations during every application request.
+3. Apply the repository migrations with the intended database credentials before enabling the app. For Neon, supply the direct `DATABASE_URL_UNPOOLED` connection as the migration process's `DATABASE_URL`; migrations use a session advisory lock. The web application uses the pooled `DATABASE_URL`. Do not run migrations during every application request.
 4. Deploy the source. A direct Vercel deployment is independent of the GitHub connection; automatic Git deployments require that connection to be completed.
 5. Check `/api/health`, then verify signup, invitation, cross-account collaboration and access revocation on the deployed URL. Verify domain routing and HTTPS separately.
 

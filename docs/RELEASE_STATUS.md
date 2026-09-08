@@ -1,17 +1,17 @@
 # Coatria 0.1 — release status
 
-Status recorded 8 September 2026. The first-release application is deployed at [coatria.com](https://coatria.com). HTTPS routing, the public page, session setup response and application assets have been verified. Hosted accounts and persistence remain disabled until database provisioning and migrations are complete. The database provider and automatic Git deployment connection still require account-holder setup.
+Status recorded 8 September 2026. The first-release application is live at [coatria.com](https://coatria.com), with hosted accounts and PostgreSQL persistence enabled. Neon provisioning, all three migrations, HTTPS routing, signup and shared collaboration have been verified. Automatic Git deployment still requires the Vercel account's GitHub connection.
 
 | Item | Current state |
 | --- | --- |
 | Repository | [stratostormstudios/coatria](https://github.com/stratostormstudios/coatria) contains the application, migrations, tests and implementation plan |
-| Vercel | Production deployment `dpl_39RaNyPLGaeBZuugDxNViPzzuquk` is READY; deployed application commit `fbc0dce1ae56dec428c9d14c38e8d8c19354461b` |
+| Vercel | Production deployment `dpl_6T2HFCxVdzhzJqt17Agm57t4cnMG` is READY; deployed source commit `80889682cce42c44ca5a598bd9dcaf3c3d0428cf` |
 | Domain | [coatria.com](https://coatria.com) routes over HTTPS to the application; HTTP 200 page and assets verified |
-| Production database | Neon provisioning awaits account-holder acceptance of provider terms; no configured production persistence is claimed |
+| Production database | Neon `coatria-production` on the Free plan is connected to production only; all three migrations applied over a direct TLS connection |
 | Git deployments | Vercel's GitHub login connection is pending; a repository alone does not enable automatic deployments |
 | Scale | Small-team implementation with bounded polling and calls; no million-user load test has been completed |
 
-The deployed health endpoint deliberately returns HTTP 503 with `setup_required` and `configured:false`; the session endpoint returns HTTP 200 with `configured:false`. This is a verified setup state, not a successful production database check. Update this record after the provider setup, migrations and live collaboration checks pass.
+The deployed health endpoint returns HTTP 200 with `status:ready` and `configured:true`. The unauthenticated session endpoint returns HTTP 200 with `configured:true`. Production signup, company creation, persistence and collaboration passed verification. Preview environments are not connected to the production database.
 
 ## Implemented
 
@@ -45,7 +45,9 @@ Reliable media across restrictive networks requires a TURN service. Without it, 
 
 [GitHub Actions run 34240295975](https://github.com/stratostormstudios/coatria/actions/runs/34240295975) passed for the deployed application commit: **20 tests passed, zero failed and zero skipped**, using PostgreSQL 17.11. All three migrations, 84 API responses, concurrent signaling and the PostgreSQL transaction-lock ordering test passed. The secret scan, TypeScript check and production build also passed.
 
-Read-only production browser checks passed at 1536 × 1000 and 390 × 844: the database setup explanation is visible, signup is unavailable, and there are no JavaScript errors or horizontal overflow. These checks validate the deployed setup page; production signup and collaboration await the database.
+After Neon activation, **35 live API checks** passed through `https://coatria.com`: secure session cookies, invitations and single-use enforcement, company isolation, shared chat and presence, task submission and independent approval, private vault isolation, agent token revocation, room signaling, offboarding and logout. Private skills remained accessible to their owner after company access was removed.
+
+**14 production browser checks** passed at 1536 × 1000 and 390 × 844: signup and company creation through the UI, the actual 3D office, task and private-skill persistence after reload, personal export, and responsive layouts without JavaScript errors or horizontal overflow. All three temporary verification users and both temporary companies were deleted using exact recorded IDs and fixture-identity checks. No sample coworkers or test companies were left in production.
 
 The additional evidence below is local development validation:
 
