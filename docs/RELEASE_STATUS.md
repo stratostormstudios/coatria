@@ -1,27 +1,29 @@
-# Coatria 0.1 — security-update release status
+# Coatria 0.1 — character-update release status
 
-Status recorded **2026-09-08**. The security update is deployed at [coatria.com](https://coatria.com). PostgreSQL CI passed all 38 tests, migration 004 is applied, the restricted production connection is verified, and 39 live API checks plus 16 production browser checks passed. Audit-fixture cleanup is complete. The [security review](SECURITY_REVIEW.md) records corrected issues and unresolved controls; historical first-release evidence is kept separately below.
+Status recorded **2026-09-08**. The character update is deployed at [coatria.com](https://coatria.com): 12 purchased characters, a saved visual profile picker, authored idle/walk blending and smooth human movement. PostgreSQL CI passed all 40 tests; migration 005 and its limited runtime grants are applied. All 40 live character checks passed, including matching every deployed GLB to its audited SHA-256. The temporary live account and company were removed and zero remaining rows verified. The [character pipeline](CHARACTERS.md) documents private asset packaging and measured budgets. The earlier [security review](SECURITY_REVIEW.md) remains applicable.
 
 | Item | Current state |
 | --- | --- |
 | Repository | [stratostormstudios/coatria](https://github.com/stratostormstudios/coatria) contains the application, migrations, tests and implementation plan |
-| Reviewed source | `5592ed26a0d584da316c4cf28d03f958c157df1a` |
-| Vercel | Security-update deployment `dpl_2EseivSFaWDinc7dJhZBok1wZcoA` is READY for source `5592ed26a0d584da316c4cf28d03f958c157df1a` |
+| Reviewed source | `8054156419b5adbb2cdd1bb4872f38f17ede2a09` |
+| Vercel | Character-update deployment `dpl_2cWJPenrZBDmNNAy2hdfoHagmV4T` is READY and promoted for source `8054156419b5adbb2cdd1bb4872f38f17ede2a09` |
 | Domain | [coatria.com](https://coatria.com) returned HTTP 200 over HTTPS and health reported ready; live nonce-based CSP verified |
-| Production database | Neon `coatria-production` preserved; all four numbered migrations applied. `coatria_runtime_v1` pooled login and restricted grants verified |
+| Production database | Neon `coatria-production` preserved; all five numbered migrations applied. Runtime avatar INSERT/UPDATE allowed; email verification UPDATE and schema CREATE remain denied |
 | Project environment | Only production `APP_URL` and sensitive Secret `DATABASE_URL`; no owner aliases or preview database credentials. Resource environment injection detached without deleting Neon |
 | Git deployments | No Git repository connection is configured in Vercel; automatic Git deployment is not enabled |
 | Deployment protection | Vercel reports `ssoProtection: all_except_custom_domains`; this does not invalidate old deployment credentials |
 | Main branch | Read-only inspection reported unprotected `main` and no repository rulesets; administrator configuration remains open |
 | Scale | Small-team implementation with bounded polling and calls; no million-user load test has been completed |
 
-For this update, 39 live API checks and 16 production browser checks passed. Browser verification covered desktop/mobile layouts, the actual 3D office and persistent task/vault writes without JavaScript errors. Five temporary users and four companies were removed across audit QA using exact recorded IDs. Credential rotation and privileged historical deployments remain separate open gates after a healthy deployment.
+Character release validation: [CI run 34271385417](https://github.com/stratostormstudios/coatria/actions/runs/34271385417) passed 40 tests with zero skips on PostgreSQL 17.11, plus audit, TypeScript and the source-only production build. Local licensed-asset builds passed. Thirteen distinct browser cases passed across production-build security/renderer tests and real-database development-service profile/collaboration tests; the authored-model motion suite additionally passed with adult and senior variants. An initial isolated-port test setup rejected three fixtures because its APP_URL named another port; those fixtures passed against the correctly configured local service. The two-tab regression confirms an untouched character field cannot overwrite a newer selection.
+
+Live verification passed all 40 checks: authenticated catalog and portraits, all 12 model hashes and headers, saved-profile persistence, actual walking and return to idle, mobile layout, no browser errors, cross-site/stale-account rejection and model access ending after logout. One temporary user/company pair was removed by exact recorded IDs with email, slug and membership guards. Runtime credentials and Vercel environment scope were unchanged. Earlier security-release evidence appears below; its credential rotation and privileged historical deployment follow-ups remain open.
 
 ## Implemented
 
 - Personal account registration/login/logout, profile editing, secure password changes and server sessions.
 - Company creation with a furnished or blank floor, company switching, invitations, member roles, ownership transfer and offboarding.
-- A real low-poly 3D office with the optimized rigged character, shared presence, walking, camera controls, floor editing and an accessible room list. Occupants use stable IDs; stale people and agents without recent heartbeats are not displayed as live coworkers.
+- A real low-poly 3D office with 12 selectable purchased characters for human coworkers, authored idle/walk blending, smooth turning, shared presence, camera controls, floor editing and an accessible room list. Bots retain a distinct design. Occupants use stable IDs; stale people and agents without recent heartbeats are not displayed as live coworkers. Sitting/waving clips are prepared but their interaction controls are not yet implemented.
 - Company and room chat, task assignment, contribution submission and independent acceptance. Accepted work is immutable.
 - Private personal skill vaults, immutable skill versions and export independent of company membership.
 - Scoped agent identities, real harness work/report APIs, pause/revoke controls and sponsor checks. The harness itself runs on the employee's infrastructure.
@@ -49,7 +51,7 @@ Reliable media across restrictive networks requires a TURN service. Without it, 
 - Personal-vault access is separate from company membership. A reviewed company-to-personal skill export and the related licensing/continuity workflow remain later work; ordinary personal export does not establish employment IP ownership.
 - Candidate acceptance issues an invitation to company membership in this release. Granular project-only guest engagements, contracts and marketplace payments remain future work.
 
-## Validation evidence
+## Earlier security-release validation evidence
 
 For reviewed source [`5592ed26a0d584da316c4cf28d03f958c157df1a`](https://github.com/stratostormstudios/coatria/commit/5592ed26a0d584da316c4cf28d03f958c157df1a):
 
