@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { uuid } from './security';
 import { getAvatarDefinition } from './avatar-catalog';
+import { LAYOUT_ROTATIONS, LAYOUT_TYPES, MAX_FLOOR_SIZE, MAX_LAYOUT_ITEMS, MIN_FLOOR_SIZE } from './floor-plan';
 
 export const text = (max: number) => z.string().trim().min(1).max(max);
 export const email = z.string().trim().toLowerCase().email().max(254);
@@ -9,8 +10,9 @@ export const loginInput = z.object({ email, password: z.string().min(1).max(256)
 export const avatarIdInput = z.string().max(64).refine(value => Boolean(getAvatarDefinition(value)), 'Choose an avatar from the available collection.');
 export const profileInput = z.object({ name: text(80), roleTitle: z.string().trim().max(100), avatarColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/), avatarId: avatarIdInput.nullable().optional() }).strict();
 export const roomInput = z.object({ name: text(80), kind: z.enum(['meeting','focus','lounge','auditorium']), capacity: z.number().int().min(1).max(500) }).strict();
-export const layoutItem = z.object({ id: text(80), type: z.enum(['desk','meeting','focus','lounge','plant']), x: z.number().min(0).max(100), y: z.number().min(0).max(100), w: z.number().min(0.1).max(100), h: z.number().min(0.1).max(100), label: text(80) }).strict().refine(v => v.x + v.w <= 100 && v.y + v.h <= 100, 'Furniture must fit inside the floor.');
-export const layoutInput = z.object({ layout: z.array(layoutItem).max(100).refine(items => new Set(items.map(x => x.id)).size === items.length, 'Furniture IDs must be unique.') }).strict();
+export const floorSizeInput = z.object({width:z.number().min(MIN_FLOOR_SIZE).max(MAX_FLOOR_SIZE),depth:z.number().min(MIN_FLOOR_SIZE).max(MAX_FLOOR_SIZE)}).strict();
+export const layoutItem = z.object({ id: text(80), type: z.enum(LAYOUT_TYPES), x: z.number().min(0).max(100), y: z.number().min(0).max(100), w: z.number().min(0.1).max(100), h: z.number().min(0.1).max(100), label: text(80), rotation:z.union(LAYOUT_ROTATIONS.map(rotation=>z.literal(rotation))).optional() }).strict().refine(v => v.x + v.w <= 100 && v.y + v.h <= 100, 'Furniture must fit inside the floor.');
+export const layoutInput = z.object({ layout: z.array(layoutItem).max(MAX_LAYOUT_ITEMS).refine(items => new Set(items.map(x => x.id)).size === items.length, 'Furniture IDs must be unique.'), floor:floorSizeInput, revision:z.number({error:'Reload the office editor before saving. A current layout revision is required.'}).int().min(0).max(Number.MAX_SAFE_INTEGER-1) }).strict();
 export const presenceInput = z.object({ roomId: uuid.nullable(), x: z.number().min(-20).max(20), z: z.number().min(-20).max(20), status: z.enum(['available','focus','away']) }).strict();
 export const submissionUrl = z.string().url().max(2048).refine(url => { const parsed = new URL(url); return ['https:', 'http:'].includes(parsed.protocol) && !parsed.username && !parsed.password; }, 'Use an HTTP or HTTPS link without credentials.');
 export const taskInput = z.object({ title: text(160), description: z.string().trim().max(12000).default(''), assigneeId: uuid.nullable().optional() }).strict();

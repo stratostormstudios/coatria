@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { selectAvatarForUser, type AvatarDefinition } from "@/lib/avatar-catalog";
+import { DEFAULT_FLOOR, type FloorSize } from "@/lib/floor-plan";
 
 type Entity = Record<string, any>;
 type Position = { x: number; z: number };
@@ -32,6 +33,7 @@ export type OfficeSceneProps = {
   presence: Entity[];
   rooms: Entity[];
   layout: Entity[];
+  floor?: FloorSize;
   onMove: (position: Position) => void;
   onOpenRoom: (roomId: string) => void;
   onOpenAgent: (agentId: string) => void;
@@ -65,7 +67,7 @@ export default function OfficeScene(props: OfficeSceneProps) {
   const [retry, setRetry] = useState(0);
   current.current = props;
 
-  const geometryKey = JSON.stringify({ company: props.company.id, name: props.company.name, template: props.company.template, user: props.user.id, layout: props.layout, rooms: props.rooms.map(room => ({ id: room.id, name: room.name, kind: room.kind })) });
+  const geometryKey = JSON.stringify({ company: props.company.id, name: props.company.name, template: props.company.template, user: props.user.id, layout: props.layout, floor: props.floor ?? DEFAULT_FLOOR, rooms: props.rooms.map(room => ({ id: room.id, name: room.name, kind: room.kind })) });
 
   useEffect(() => {
     let cancelled = false;
@@ -84,6 +86,7 @@ export default function OfficeScene(props: OfficeSceneProps) {
         // Stored editor coordinates are authoritative for both studio and blank.
         customLayout: true,
         layout: latest.layout.map(item => ({ ...item, kind: item.type, name: item.label })),
+        floor: latest.floor,
         rooms: latest.rooms,
         members: latest.members,
         agents: latest.agents,

@@ -1,3 +1,5 @@
+import type {FloorSize,LayoutItem} from './floor-plan';
+export type {FloorSize,LayoutItem} from './floor-plan';
 export type User = { id:string; name:string; email:string; roleTitle:string; avatarColor:string; avatarId:string|null };
 export type Company = { id:string; name:string; slug:string; template:string; role:string };
 export type Member = { id:string; userId:string; name:string; email:string; role:string; roleTitle:string; avatarColor:string; avatarId:string|null };
@@ -10,9 +12,8 @@ export type Drive = { id:string; name:string; kind:string; description:string; s
 export type Opening = { id:string; companyId:string; companyName?:string; title:string; description:string; type:string; compensation:string; budget?:string; status:string; createdAt:string };
 export type Application = { id:string; openingId:string; userId:string; message:string; status:string; name?:string; applicantName?:string; applicantEmail?:string; openingTitle?:string; companyName?:string; agentId?:string; createdAt:string };
 export type Skill = { id:string; title:string; description:string; content:string; version:number; updatedAt:string };
-export type LayoutItem = { id:string; type:'desk'|'meeting'|'focus'|'lounge'|'plant'; x:number; y:number; w:number; h:number; label:string };
 export type Activity = { id:string; description?:string; action?:string; body?:string; message?:string; actorName?:string; createdAt:string };
-export type Workspace = { company:Company; rooms:Room[]; members:Member[]; agents:Agent[]; tasks:Task[]; messages:Message[]; presence:Presence[]; activity:Activity[]; drives:Drive[]; openings:Opening[]; applications:Application[]; layout:LayoutItem[] };
+export type Workspace = { company:Company; rooms:Room[]; members:Member[]; agents:Agent[]; tasks:Task[]; messages:Message[]; presence:Presence[]; activity:Activity[]; drives:Drive[]; openings:Opening[]; applications:Application[]; layout:LayoutItem[]; floor?:FloorSize; layoutRevision?:number };
 export type Session = { user:User|null; companies:Company[]; configured?:boolean };
 let expectedUserId:string|null=null;
 let identityVersion=0;

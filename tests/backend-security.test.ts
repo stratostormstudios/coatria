@@ -21,7 +21,7 @@ test('validation rejects weak passwords, unsafe URLs and furniture outside floor
  assert.equal(signupInput.safeParse({name:'One',email:'one@example.test',password:'short'}).success,false);
  assert.equal(submissionUrl.safeParse('javascript:alert(1)').success,false);
  assert.equal(submissionUrl.safeParse('https://secret:password@example.test').success,false);
- assert.equal(layoutInput.safeParse({layout:[{id:'a',type:'desk',x:99,y:1,w:10,h:10,label:'Desk'}]}).success,false);
+ assert.equal(layoutInput.safeParse({layout:[{id:'a',type:'desk',x:99,y:1,w:10,h:10,label:'Desk'}],floor:{width:20,depth:16},revision:0}).success,false);
 });
 test('only an independent administrator may accept a reviewed contribution',()=>{
  const task={status:'review',created_by:'creator',assignee_id:'worker',submitted_by:'submitter',agent_sponsor:'sponsor'};

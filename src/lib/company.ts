@@ -4,6 +4,7 @@ import { query, transaction } from './db';
 import { lockMembership, requireMembership, requireUser, type Membership } from './auth';
 import { body, fail, hashToken, id, json, publicUrl, rateLimit, secret, uuid } from './security';
 import { agentColumns, driveColumns, email, layoutInput, openingColumns, presenceInput, roomInput, STUDIO_LAYOUT, taskColumns, text } from './model';
+import { DEFAULT_FLOOR, readFloorPlan, type FloorPlanDocument } from './floor-plan';
 
 export async function recordActivity(client: PoolClient, member: Membership, kind: string, description: string) {
   await client.query('INSERT INTO activity(company_id,actor_id,kind,description) VALUES($1,$2,$3,$4)', [member.companyId, member.userId, kind, description]);
@@ -43,7 +44,8 @@ export async function companyRoute(request: Request, parts: string[], method: st
     const company = await transaction(async client => {
       await client.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [user.id]);
       if (Number((await client.query("SELECT count(*) FROM memberships WHERE user_id=$1 AND role='owner'", [user.id])).rows[0].count) >= 5) fail(409, 'You can own up to five companies in this release.');
-      const row = (await client.query('INSERT INTO companies(name,slug,template,layout) VALUES($1,$2,$3,$4) RETURNING id,name,slug,template', [data.name, data.slug, data.template, JSON.stringify(data.template === 'studio' ? STUDIO_LAYOUT : [])])).rows[0];
+      const layout={version:1,items:data.template==='studio'?STUDIO_LAYOUT:[],floor:DEFAULT_FLOOR,revision:0};
+      const row = (await client.query('INSERT INTO companies(name,slug,template,layout) VALUES($1,$2,$3,$4) RETURNING id,name,slug,template', [data.name, data.slug, data.template, JSON.stringify(layout)])).rows[0];
       await client.query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'owner')", [row.id, user.id]);
       if (data.template === 'studio') {
         for (const room of [['Meeting room','meeting',8],['Focus room','focus',4],['Lounge','lounge',12],['Auditorium','auditorium',50]]) await client.query('INSERT INTO rooms(company_id,name,kind,capacity) VALUES($1,$2,$3,$4)', [row.id,...room]);
@@ -103,8 +105,8 @@ export async function companyRoute(request: Request, parts: string[], method: st
     ]);
     // Recheck after reads: revoked access must not return a workspace snapshot.
     const latestMember = await requireMembership(request,companyId);
-    const {layout,...details}=company.rows[0];
-    return json({company:{...details,role:latestMember.role},rooms:rooms.rows,members:members.rows,agents:agents.rows,tasks:tasks.rows,messages:messages.rows.reverse(),presence,activity:activity.rows,drives:drives.rows,openings:openings.rows,applications:latestMember.role==='member'?[]:applications.rows,layout});
+    const {layout:storedLayout,...details}=company.rows[0],plan=readFloorPlan(storedLayout);
+    return json({company:{...details,role:latestMember.role},rooms:rooms.rows,members:members.rows,agents:agents.rows,tasks:tasks.rows,messages:messages.rows.reverse(),presence,activity:activity.rows,drives:drives.rows,openings:openings.rows,applications:latestMember.role==='member'?[]:applications.rows,layout:plan.items,floor:plan.floor,layoutRevision:plan.revision});
   }
   if (resource === 'presence' && parts.length === 3) {
     const member = await requireMembership(request,companyId);
@@ -135,7 +137,19 @@ export async function companyRoute(request: Request, parts: string[], method: st
   }
   if(resource==='layout'&&parts.length===3&&method==='PATCH') {
     const member=await requireMembership(request,companyId,true);const data=await body(request,layoutInput);
-    await memberMutation(member,true,async client=>{await client.query('UPDATE companies SET layout=$2 WHERE id=$1',[companyId,JSON.stringify(data.layout)]);await recordActivity(client,member,'office.updated',`${member.user.name} updated the office layout.`);});return json(data);
+    const saved=await transaction(async client=>{
+      // Serialize layout changes before membership, using the lifecycle lock order.
+      // Starting with FOR UPDATE avoids an upgrade deadlock between two editors.
+      const row=(await client.query('SELECT layout FROM companies WHERE id=$1 FOR UPDATE',[companyId])).rows[0];
+      if(!row)fail(404,'Company not found.');
+      member.role=await lockMembership(client,member,true);
+      const current=readFloorPlan(row.layout);
+      if(data.revision!==current.revision)fail(409,'The floor plan changed since you opened it. Reload the latest floor before saving your changes.','LAYOUT_CONFLICT');
+      const plan:FloorPlanDocument={version:1,items:data.layout,floor:data.floor,revision:current.revision+1};
+      await client.query('UPDATE companies SET layout=$2 WHERE id=$1',[companyId,JSON.stringify(plan)]);
+      await recordActivity(client,member,'office.updated',`${member.user.name} updated the office layout.`);
+      return {layout:plan.items,floor:plan.floor,layoutRevision:plan.revision};
+    });return json(saved);
   }
   if(resource==='ownership'&&parts.length===3&&method==='POST') {
     const member=await requireMembership(request,companyId,true);

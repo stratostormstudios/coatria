@@ -71,16 +71,7 @@ test('rooms, people and activity offer meaningful search and recoverable no-resu
   await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);expect(await page.getByLabel('Search activity',{exact:true}).evaluate(element=>parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16);
 });
 
-test('layout preserves newer edits across a save and protects navigation with a discard path',async({page})=>{
-  const data=snapshot();let held:Route|undefined;const writes:any[]=[];
-  await fixture(page,data,async route=>{if(new URL(route.request().url()).pathname.endsWith('/layout')&&route.request().method()==='PATCH'){writes.push(route.request().postDataJSON());held=route;return true;}return false;});
-  await page.goto('/#layout');await page.getByRole('button',{name:'Workstation',exact:true}).click();await page.getByLabel('Label',{exact:true}).fill('First desk');await page.getByRole('button',{name:'Save shared floor plan',exact:true}).click();await expect.poll(()=>!!held).toBe(true);
-  await page.getByLabel('Label',{exact:true}).fill('Second draft');data.layout=writes[0].layout;await json(held!,{layout:data.layout});
-  await expect(page.getByText('You have unpublished changes',{exact:true})).toBeVisible();await expect(page.getByRole('button',{name:'Save shared floor plan',exact:true})).toBeEnabled();
-  page.once('dialog',dialog=>dialog.dismiss());await page.getByRole('button',{name:'People',exact:true}).click();await expect(page.getByLabel('Label',{exact:true})).toHaveValue('Second draft');
-  page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Discard changes',exact:true}).click();await expect(page.getByText('Shared floor plan is up to date',{exact:true})).toBeVisible();await page.getByRole('button',{name:'Select First desk',exact:true}).click();await expect(page.getByLabel('Label',{exact:true})).toHaveValue('First desk');
-  await page.getByLabel('Left (%)',{exact:true}).fill('99');await expect(page.getByText('This object extends beyond the floor. Reduce its position or size.')).toBeVisible();await expect(page.getByRole('button',{name:'Save shared floor plan',exact:true})).toBeDisabled();
-});
+// Floor editing, revision conflicts and navigation guards are exercised in floor-editor.spec.ts.
 
 test('profile shows a compact selection and applies searchable character choices only after explicit save',async({page})=>{
   const {profileWrites}=await fixture(page,snapshot());await page.goto('/#profile');await expect(page.getByRole('radio')).toHaveCount(0);await expect(page.getByRole('region',{name:'Your office character'})).toBeVisible();await page.getByRole('button',{name:'Change character',exact:true}).click();
