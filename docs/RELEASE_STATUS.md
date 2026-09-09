@@ -4,7 +4,11 @@ The purchased ITHappy Office Rooms integration is prepared for release: 78 searc
 
 Local verification passed 66 of 70 Node tests with zero failures and four PostgreSQL-only skips. Browser checks passed 11 furniture-editor fixtures, one real local database workflow, 15 legacy editor cases, six purchased-renderer cases and 10 renderer/character regressions. Both preview queue reproductions passed. The licensed build verified all 12 characters and 78 furniture objects. Scoped editor accessibility checks reported zero selected WCAG 2 A/AA and 2.1 AA violations at 1536 × 1100 and 390 × 844, without horizontal overflow; this is not certification.
 
-Production publication and PostgreSQL CI for this source are pending; the earlier live release is recorded below.
+Released at [coatria.com](https://coatria.com/#layout) from source `a1165b1498039b04c635ea083ae44a2f2b2d5e38`, Vercel deployment `dpl_DycyZ4khrLanfT7wPQ9wkhTuJPqg`. [PostgreSQL CI run 34370283330](https://github.com/stratostormstudios/coatria/actions/runs/34370283330) passed 69 tests with zero failures; its one skip is the purchased-file inspection in the source-only checkout. That inspection passed against the actual files locally, and the Vercel build verified all private assets. All PostgreSQL concurrency and runtime-role checks passed. The complete-history credential scan, dependency audit (zero reported vulnerabilities), TypeScript and production build passed.
+
+The promoted site returned HTTPS 200 and ready database health. The live CSP browser check passed. Anonymous catalogue/model/preview/plan requests returned 401, and the private filesystem path returned 404. Published editor placement, proportional sizing, movement, previews and the actual 3D renderer passed with isolated browser API fixtures and no runtime errors. These live fixture checks did not write production data; real authenticated persistence was exercised locally. Screenshots and verification data remain outside the public repository in `C:/CODEX/Agent002/output/office-assets/`.
+
+A compatible rollback must understand version 1 floor documents and purchased-asset items. The earlier releases below remain historical evidence, not rollback recommendations.
 
 ## Earlier floor-editor release
 

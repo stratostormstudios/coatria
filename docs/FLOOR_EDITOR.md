@@ -45,7 +45,7 @@ The floor slab, exterior, picking surface, camera framing, shadows and walking g
 
 There are at most 100 objects on a rectangular floor. This release does not add freeform wall drawing, multi-storey buildings, automatic seating assignments, arbitrary angles, multi-selection or CAD export. Spatial furniture does not itself create room conversations or grant access.
 
-## Verification
+## Earlier floor-editor release verification
 
 Release checks cover pointer placement, movement, edge/corner/floor resizing, physical dimension preservation, rotation limits, keyboard actions, cancellation, undo/redo, focused-field updates, delayed saves, stale revisions, authorization and mobile overflow. Renderer checks use 8 × 8, 20 × 16, 40 × 40, 8 × 40 and 32 × 12 metre floors, actual geometry bounds, camera framing, collision paths and character lifecycle regressions.
 
