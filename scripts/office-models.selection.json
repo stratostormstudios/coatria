@@ -1,0 +1,2106 @@
+[
+  {
+    "id": "office-desk-001",
+    "name": "Compact task desk",
+    "category": "desks",
+    "width": 1.584749,
+    "depth": 0.662975,
+    "height": 0.72934,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_table_001.glb",
+        "translation": [
+          -0.0021598339080810547,
+          4.5151487952413545e-8,
+          -0.013774380087852395
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-desk-003",
+    "name": "White pedestal desk",
+    "category": "desks",
+    "width": 1.283176,
+    "depth": 0.627003,
+    "height": 0.738887,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_table_003.glb",
+        "translation": [
+          -0.2954089194536209,
+          0.3747718632221223,
+          0.17057805508375168
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-desk-007",
+    "name": "Studio desk with shelving",
+    "category": "desks",
+    "width": 1.504793,
+    "depth": 0.639802,
+    "height": 1.006163,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_table_007.glb",
+        "translation": [
+          0.03765431046485901,
+          1.1946389126516442e-7,
+          -0.13387724757194508
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-desk-010",
+    "name": "Walnut writing desk",
+    "category": "desks",
+    "width": 1.584749,
+    "depth": 0.662966,
+    "height": 0.723243,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_table_010.glb",
+        "translation": [
+          -0.002164304256439209,
+          1.624741089065171e-7,
+          -0.0027393698692320945
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-desk-011",
+    "name": "Walnut computer workstation",
+    "category": "desks",
+    "width": 1.287222,
+    "depth": 0.71614,
+    "height": 1.079185,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_table_011.glb",
+        "translation": [
+          -0.06886908411979675,
+          1.6906506069715652e-7,
+          -0.0009856373071669422
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-desk-014",
+    "name": "Double-pedestal desk",
+    "category": "desks",
+    "width": 2.056178,
+    "depth": 0.71955,
+    "height": 0.757472,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_table_014.glb",
+        "translation": [
+          -0.0013467669486999512,
+          2.057174271749156e-7,
+          0.008792191743850791
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-desk-015",
+    "name": "Sand computer workstation",
+    "category": "desks",
+    "width": 1.283176,
+    "depth": 0.627003,
+    "height": 1.130523,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_table_015.glb",
+        "translation": [
+          -0.06339171528816223,
+          1.6775656781789512e-7,
+          0.0001241713762284713
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-desk-016",
+    "name": "Powder blue desk",
+    "category": "desks",
+    "width": 1.400044,
+    "depth": 0.627005,
+    "height": 0.660048,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_table_016.glb",
+        "translation": [
+          0.0011771023273468018,
+          2.282263694300213e-7,
+          0.007662847638130271
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-desk-017",
+    "name": "Oak frame desk",
+    "category": "desks",
+    "width": 1.287424,
+    "depth": 0.627003,
+    "height": 0.773814,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_table_017.glb",
+        "translation": [
+          -0.000007569789886474609,
+          1.694484837585501e-7,
+          1.0430812844020032e-7
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-desk-024",
+    "name": "Trestle desk",
+    "category": "desks",
+    "width": 1.40543,
+    "depth": 0.67562,
+    "height": 0.851186,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_table_024.glb",
+        "translation": [
+          0.000005185604095458984,
+          1.742455283033207e-7,
+          1.1920928963404798e-7
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-desk-029",
+    "name": "Slim writing desk",
+    "category": "desks",
+    "width": 1.147061,
+    "depth": 0.370986,
+    "height": 0.645312,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_table_029.glb",
+        "translation": [
+          0.0000024437904357910156,
+          1.1845664009368779e-7,
+          1.0430812842632253e-7
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-desk-030",
+    "name": "Graphite executive desk",
+    "category": "desks",
+    "width": 1.502261,
+    "depth": 0.610045,
+    "height": 0.750084,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_table_030.glb",
+        "translation": [
+          -0.00007927417755126953,
+          1.680607369491601e-7,
+          -0.005174309015273965
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-desk-031",
+    "name": "Walnut corner desk",
+    "category": "desks",
+    "width": 1.918442,
+    "depth": 1.417266,
+    "height": 0.773815,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_table_031.glb",
+        "translation": [
+          0.2373906672000885,
+          1.9461359112415208e-7,
+          -0.24066743254661552
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-desk-033",
+    "name": "Graphite corner desk",
+    "category": "desks",
+    "width": 2.170049,
+    "depth": 2.027754,
+    "height": 0.732584,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_table_033.glb",
+        "translation": [
+          0.40976765751838684,
+          0.000006028545613069289,
+          -0.4089896082878112
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-desk-035",
+    "name": "White frame desk",
+    "category": "desks",
+    "width": 1.287422,
+    "depth": 0.627002,
+    "height": 0.773814,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_table_035.glb",
+        "translation": [
+          -0.0000060498714447021484,
+          1.694484837585501e-7,
+          6.854534150002589e-7
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-desk-040",
+    "name": "White computer workstation",
+    "category": "desks",
+    "width": 1.283176,
+    "depth": 0.627003,
+    "height": 1.130523,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_table_040.glb",
+        "translation": [
+          -0.06339171528816223,
+          1.6775656781789512e-7,
+          0.0001241713762284713
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-chair-001",
+    "name": "Graphite task chair",
+    "category": "seating",
+    "width": 0.654941,
+    "depth": 0.688916,
+    "height": 1.171887,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_chair_001.glb",
+        "translation": [
+          0.002421647310256958,
+          0.0015217381296680217,
+          0.03318689763546004
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-chair-006",
+    "name": "Grey visitor chair",
+    "category": "seating",
+    "width": 0.602729,
+    "depth": 0.690756,
+    "height": 1.048319,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_chair_006.glb",
+        "translation": [
+          -3.129243850708008e-7,
+          0.00059998448705307,
+          -0.060977160930633434
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-chair-007",
+    "name": "Blush visitor chair",
+    "category": "seating",
+    "width": 0.602729,
+    "depth": 0.559437,
+    "height": 0.874575,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_chair_007.glb",
+        "translation": [
+          5.364418029785156e-7,
+          0.0005999546847306536,
+          -0.12485630065202703
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-chair-009",
+    "name": "Sand task chair",
+    "category": "seating",
+    "width": 0.610344,
+    "depth": 0.655167,
+    "height": 0.999766,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_chair_009.glb",
+        "translation": [
+          0.000002562999725341797,
+          7.157546385457952e-8,
+          0.016771078109741322
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-chair-012",
+    "name": "Mesh task chair",
+    "category": "seating",
+    "width": 0.65397,
+    "depth": 0.674788,
+    "height": 1.067452,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_chair_012.glb",
+        "translation": [
+          0.0000014007091522216797,
+          9.705726719299607e-8,
+          0.026581913232803456
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-chair-014",
+    "name": "Slate task chair",
+    "category": "seating",
+    "width": 0.610342,
+    "depth": 0.72013,
+    "height": 1.135195,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_chair_014.glb",
+        "translation": [
+          8.046627044677734e-7,
+          9.705706825109797e-8,
+          0.0492527931928636
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-chair-017",
+    "name": "Executive task chair",
+    "category": "seating",
+    "width": 0.654939,
+    "depth": 0.688916,
+    "height": 1.158469,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_chair_017.glb",
+        "translation": [
+          0.0024218708276748657,
+          0.0015217055333779101,
+          0.0331874787807466
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-chair-022",
+    "name": "White beanbag",
+    "category": "seating",
+    "width": 0.878677,
+    "depth": 0.838529,
+    "height": 0.761608,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "office_chair_022.glb",
+        "translation": [
+          -5.513429641723633e-7,
+          0.00007425190415243754,
+          0.04821868240833291
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-armchair-001",
+    "name": "Sand lounge chair",
+    "category": "seating",
+    "width": 0.91666,
+    "depth": 1.003147,
+    "height": 0.785866,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "armchair_001.glb",
+        "translation": [
+          -0.007987439632415771,
+          1.2792612847796978e-7,
+          0.04276135563850414
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-armchair-002",
+    "name": "Graphite lounge chair",
+    "category": "seating",
+    "width": 1.097544,
+    "depth": 1.06999,
+    "height": 0.741016,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "armchair_002.glb",
+        "translation": [
+          -3.5762786865234375e-7,
+          0.00005495237564912887,
+          0.005294263362884577
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-armchair-003",
+    "name": "White frame armchair",
+    "category": "seating",
+    "width": 0.768774,
+    "depth": 0.828822,
+    "height": 0.68536,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "armchair_003.glb",
+        "translation": [
+          0.000018477439880371094,
+          0.0001395112776664077,
+          0.001146391034126365
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-armchair-006",
+    "name": "Wingback chair",
+    "category": "seating",
+    "width": 0.82885,
+    "depth": 0.880471,
+    "height": 0.906147,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "armchair_006.glb",
+        "translation": [
+          -0.0030248165130615234,
+          1.1431988876144688e-7,
+          -0.013146892189979442
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-armchair-008",
+    "name": "Cloud blue armchair",
+    "category": "seating",
+    "width": 0.857883,
+    "depth": 0.865916,
+    "height": 0.68681,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "armchair_008.glb",
+        "translation": [
+          0.0002378225326538086,
+          1.1638633178500491e-7,
+          0.025009199976921165
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-armchair-011",
+    "name": "Walnut lounge chair",
+    "category": "seating",
+    "width": 1.007998,
+    "depth": 0.802491,
+    "height": 0.835677,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "armchair_011.glb",
+        "translation": [
+          5.364418029785156e-7,
+          1.2120389678085124e-7,
+          -0.02315181493759147
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-sofa-001",
+    "name": "Cloud blue three-seat sofa",
+    "category": "seating",
+    "width": 2.049165,
+    "depth": 0.868053,
+    "height": 0.688505,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "sofa_001.glb",
+        "translation": [
+          -0.0007429122924804688,
+          2.0593341797583362e-7,
+          0.02507029473781594
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-sofa-004",
+    "name": "Sand three-seat sofa",
+    "category": "seating",
+    "width": 2.234744,
+    "depth": 1.069992,
+    "height": 0.59588,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "sofa_004.glb",
+        "translation": [
+          -0.000004410743713378906,
+          0.0023739635944368016,
+          0.1688885390758515
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-sofa-005",
+    "name": "Graphite two-seat sofa",
+    "category": "seating",
+    "width": 2.050205,
+    "depth": 1.009338,
+    "height": 0.730855,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "sofa_005.glb",
+        "translation": [
+          -0.002263486385345459,
+          0.00896275043487561,
+          0.045899793505668696
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-sofa-011",
+    "name": "Cloud blue loveseat",
+    "category": "seating",
+    "width": 1.448562,
+    "depth": 0.865917,
+    "height": 0.68681,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "sofa_011.glb",
+        "translation": [
+          -0.0016337335109710693,
+          1.7599138867518284e-7,
+          0.025011092424392783
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-sofa-013",
+    "name": "Walnut frame sofa",
+    "category": "seating",
+    "width": 1.839956,
+    "depth": 0.927554,
+    "height": 0.68143,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "sofa_013.glb",
+        "translation": [
+          -0.013302147388458252,
+          0.0020559933036566882,
+          0.03224939107894906
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-sofa-019",
+    "name": "Sand corner sofa",
+    "category": "seating",
+    "width": 2.932185,
+    "depth": 3.209363,
+    "height": 0.581229,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "sofa_019.glb",
+        "translation": [
+          0.26102161407470703,
+          1.8501036461406565e-7,
+          -0.46909576654434193
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-sofa-022",
+    "name": "Slate lounge sofa",
+    "category": "seating",
+    "width": 1.968484,
+    "depth": 0.949119,
+    "height": 0.778951,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "sofa_022.glb",
+        "translation": [
+          0,
+          7.024452497849378e-8,
+          0.04340270161628734
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-sofa-032",
+    "name": "White lounge sofa",
+    "category": "seating",
+    "width": 2.050205,
+    "depth": 1.009338,
+    "height": 0.730855,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "sofa_032.glb",
+        "translation": [
+          -0.002263486385345459,
+          0.00896275043487561,
+          0.045899793505668696
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-coffee-table-003",
+    "name": "Oak side table",
+    "category": "tables",
+    "width": 0.548525,
+    "depth": 0.535697,
+    "height": 0.482847,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "coffee_table_003.glb",
+        "translation": [
+          0.000002473592758178711,
+          6.212202669501896e-8,
+          0.007338821887970026
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-coffee-table-006",
+    "name": "Glass coffee table",
+    "category": "tables",
+    "width": 0.592776,
+    "depth": 0.935403,
+    "height": 0.312705,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "coffee_table_006.glb",
+        "translation": [
+          -6.109476089477539e-7,
+          1.1518399400227734e-7,
+          1.7881393435392745e-7
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-coffee-table-007",
+    "name": "White oval coffee table",
+    "category": "tables",
+    "width": 1.317895,
+    "depth": 0.615558,
+    "height": 0.390547,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "coffee_table_007.glb",
+        "translation": [
+          0.0026110708713531494,
+          0.004348191898316212,
+          -0.005415678024291937
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-coffee-table-009",
+    "name": "Round table with books",
+    "category": "tables",
+    "width": 0.486145,
+    "depth": 0.486145,
+    "height": 0.56431,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "coffee_table_009.glb",
+        "translation": [
+          -0.000002086162567138672,
+          5.8698582049004265e-8,
+          -4.097819327614216e-7
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-coffee-table-014",
+    "name": "Round walnut coffee table",
+    "category": "tables",
+    "width": 0.901211,
+    "depth": 0.901208,
+    "height": 0.314363,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "coffee_table_014.glb",
+        "translation": [
+          -0.0000039637088775634766,
+          9.631094154429852e-8,
+          2.0861625674162276e-7
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-coffee-table-016",
+    "name": "Graphite coffee table",
+    "category": "tables",
+    "width": 1.531484,
+    "depth": 0.738911,
+    "height": 0.383252,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "coffee_table_016.glb",
+        "translation": [
+          0.000006377696990966797,
+          1.9430235917316084e-7,
+          -1.6391277307681307e-7
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-coffee-table-019",
+    "name": "Slim coffee table",
+    "category": "tables",
+    "width": 1.572919,
+    "depth": 0.684666,
+    "height": 0.270265,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "coffee_table_019.glb",
+        "translation": [
+          0.000008225440979003906,
+          1.6247426523073737e-7,
+          0.008111149072647122
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-coffee-table-022",
+    "name": "Slate coffee table",
+    "category": "tables",
+    "width": 0.91259,
+    "depth": 0.91259,
+    "height": 0.302661,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "coffee_table_022.glb",
+        "translation": [
+          0,
+          1.4884582820868707e-7,
+          7.897615433016814e-7
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-shelf-001",
+    "name": "Walnut drawer cabinet",
+    "category": "storage",
+    "width": 1.224645,
+    "depth": 0.60242,
+    "height": 0.728793,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "shelf_001.glb",
+        "translation": [
+          -6.258487701416016e-7,
+          1.3740468325243074e-7,
+          -0.006602019071578896
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-shelf-010",
+    "name": "Open graphite shelf",
+    "category": "storage",
+    "width": 1.172773,
+    "depth": 0.371065,
+    "height": 0.704868,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "shelf_010.glb",
+        "translation": [
+          0,
+          1.196340662502699e-7,
+          5.140900612710109e-7
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-shelf-020",
+    "name": "Tall display shelf",
+    "category": "storage",
+    "width": 0.942505,
+    "depth": 0.303189,
+    "height": 1.591772,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "shelf_020.glb",
+        "translation": [
+          -0.09654664993286133,
+          8.033569546320867e-8,
+          0.001061797142028989
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-shelf-026",
+    "name": "Narrow bookcase",
+    "category": "storage",
+    "width": 0.503242,
+    "depth": 0.328578,
+    "height": 1.986001,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "shelf_026.glb",
+        "translation": [
+          -0.0000014007091522216797,
+          2.6313321337603376e-8,
+          0.0066218823194506005
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-shelf-028",
+    "name": "Graphite bookcase",
+    "category": "storage",
+    "width": 0.93522,
+    "depth": 0.579451,
+    "height": 1.986272,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "shelf_028.glb",
+        "translation": [
+          0.000004455447196960449,
+          1.0551647740056441e-7,
+          0.01290373504161857
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-shelf-030",
+    "name": "White storage tower",
+    "category": "storage",
+    "width": 0.724194,
+    "depth": 0.300045,
+    "height": 1.221055,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "shelf_030.glb",
+        "translation": [
+          -0.0000012367963790893555,
+          8.494754414457659e-8,
+          0.005531199276447435
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-shelf-031",
+    "name": "Office pigeonhole cabinet",
+    "category": "storage",
+    "width": 1.356707,
+    "depth": 0.421111,
+    "height": 0.925544,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "shelf_031.glb",
+        "translation": [
+          -0.0000024437904357910156,
+          1.137813541601844e-7,
+          -0.013038627803325556
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-shelf-032",
+    "name": "Powder blue bookcase",
+    "category": "storage",
+    "width": 0.628489,
+    "depth": 0.311413,
+    "height": 0.864751,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "shelf_032.glb",
+        "translation": [
+          0.0000021904706954956055,
+          8.370253826766453e-8,
+          -0.003487870097160242
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-shelf-036",
+    "name": "Open oak shelving",
+    "category": "storage",
+    "width": 1.101733,
+    "depth": 0.382173,
+    "height": 0.703674,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "shelf_036.glb",
+        "translation": [
+          -0.00004673004150390625,
+          1.200562565348388e-7,
+          0.0027102455496788858
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-shelf-037",
+    "name": "White drawer cabinet",
+    "category": "storage",
+    "width": 0.497659,
+    "depth": 0.611038,
+    "height": 0.658707,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "shelf_037.glb",
+        "translation": [
+          -0.0000869259238243103,
+          1.0938000378891014e-7,
+          2.831220627663722e-7
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-shelf-049",
+    "name": "White bookcase",
+    "category": "storage",
+    "width": 1.026294,
+    "depth": 0.402716,
+    "height": 1.275164,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "shelf_049.glb",
+        "translation": [
+          0,
+          0.00024738608044576647,
+          0.0000014752149583296958
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-shelf-066",
+    "name": "Walnut sideboard",
+    "category": "storage",
+    "width": 0.818698,
+    "depth": 0.439715,
+    "height": 0.657043,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "shelf_066.glb",
+        "translation": [
+          -0.004046082496643066,
+          2.5678522779700523e-7,
+          0.0009833201766014793
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-lamp-floor-001",
+    "name": "Adjustable task lamp",
+    "category": "lighting",
+    "width": 0.774146,
+    "depth": 0.710776,
+    "height": 2.203733,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "lamp_floor_001.glb",
+        "translation": [
+          1.4901161193847656e-8,
+          5.790005993664151e-8,
+          2.498001805406602e-16
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-lamp-floor-002",
+    "name": "White tripod lamp",
+    "category": "lighting",
+    "width": 0.57615,
+    "depth": 0.558019,
+    "height": 1.718286,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "lamp_floor_002.glb",
+        "translation": [
+          0.011192113161087036,
+          0.005534223746508422,
+          0.003743022680282787
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-lamp-floor-004",
+    "name": "Graphite arc lamp",
+    "category": "lighting",
+    "width": 1.637832,
+    "depth": 0.60828,
+    "height": 2.23584,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "lamp_floor_004.glb",
+        "translation": [
+          -0.5193982422351837,
+          -1.0428360035416226e-7,
+          9.834766390437455e-7
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-lamp-floor-006",
+    "name": "Graphite tripod lamp",
+    "category": "lighting",
+    "width": 0.57615,
+    "depth": 0.558019,
+    "height": 1.718286,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "lamp_floor_006.glb",
+        "translation": [
+          0.011192113161087036,
+          0.005534223746508422,
+          0.003743022680282787
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-lamp-floor-007",
+    "name": "Column floor lamp",
+    "category": "lighting",
+    "width": 0.435946,
+    "depth": 0.435946,
+    "height": 1.997309,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "lamp_floor_007.glb",
+        "translation": [
+          0,
+          3.551229004594101e-8,
+          2.220446049250313e-16
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-lamp-floor-012",
+    "name": "Double reading lamp",
+    "category": "lighting",
+    "width": 0.811006,
+    "depth": 0.521303,
+    "height": 2.03952,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "lamp_floor_012.glb",
+        "translation": [
+          8.940696716308594e-8,
+          4.246555823886926e-8,
+          -1.4901160971803051e-8
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-partitions-005",
+    "name": "Walnut slat divider",
+    "category": "architecture",
+    "width": 1.930364,
+    "depth": 0.149996,
+    "height": 1,
+    "resize": "footprint",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "Partitions_005.glb",
+        "translation": [
+          -0.000002562999725341797,
+          1.2218931660923235e-8,
+          0.000001274049282184997
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-partitions-039",
+    "name": "Graphite privacy panel",
+    "category": "architecture",
+    "width": 1.892686,
+    "depth": 0.064324,
+    "height": 0.749641,
+    "resize": "footprint",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "Partitions_039.glb",
+        "translation": [
+          -6.556510925292969e-7,
+          5.239613194909651e-9,
+          -0.0000014659017323614965
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-partitions-048",
+    "name": "Grey privacy panel",
+    "category": "architecture",
+    "width": 1.892686,
+    "depth": 0.064324,
+    "height": 0.749641,
+    "resize": "footprint",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "Partitions_048.glb",
+        "translation": [
+          -6.556510925292969e-7,
+          5.239613194909651e-9,
+          -0.0000014659017323614965
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-partitions-055",
+    "name": "White slat divider",
+    "category": "architecture",
+    "width": 4,
+    "depth": 0.079304,
+    "height": 0.780952,
+    "resize": "footprint",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "Partitions_055.glb",
+        "translation": [
+          0,
+          -0.009187691844999782,
+          0.000002136453986254644
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-partitions-057",
+    "name": "White privacy panel",
+    "category": "architecture",
+    "width": 1.892686,
+    "depth": 0.064324,
+    "height": 0.749641,
+    "resize": "footprint",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "Partitions_057.glb",
+        "translation": [
+          -6.556510925292969e-7,
+          5.239613194909651e-9,
+          -0.0000014659017323614965
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-floor-004",
+    "name": "Walnut floor finish",
+    "category": "architecture",
+    "width": 4,
+    "depth": 4,
+    "height": 0.001,
+    "resize": "footprint",
+    "collidable": false,
+    "parts": [
+      {
+        "source": "floor_004.glb",
+        "translation": [
+          -7.748603820800781e-7,
+          9.531465257062167e-7,
+          5.364418029785156e-7
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-floor-009",
+    "name": "Slate tile finish",
+    "category": "architecture",
+    "width": 4,
+    "depth": 4,
+    "height": 0.001,
+    "resize": "footprint",
+    "collidable": false,
+    "parts": [
+      {
+        "source": "floor_009.glb",
+        "translation": [
+          -0.000015616416931152344,
+          3.5302548484498594e-7,
+          0.0001672506332397461
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-floor-014",
+    "name": "White tile finish",
+    "category": "architecture",
+    "width": 4,
+    "depth": 4,
+    "height": 0.001,
+    "resize": "footprint",
+    "collidable": false,
+    "parts": [
+      {
+        "source": "floor_014.glb",
+        "translation": [
+          0.000003933906555175781,
+          3.530283838593478e-7,
+          0.0001671910285949707
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-floor-018",
+    "name": "Oak floor finish",
+    "category": "architecture",
+    "width": 4,
+    "depth": 3.991195,
+    "height": 0.001,
+    "resize": "footprint",
+    "collidable": false,
+    "parts": [
+      {
+        "source": "floor_018.glb",
+        "translation": [
+          -5.960464477539062e-7,
+          3.258412850648539e-7,
+          0.0044019222259521484
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-floor-020",
+    "name": "Sand tile finish",
+    "category": "architecture",
+    "width": 4,
+    "depth": 4,
+    "height": 0.001,
+    "resize": "footprint",
+    "collidable": false,
+    "parts": [
+      {
+        "source": "floor_020.glb",
+        "translation": [
+          0.00000286102294921875,
+          0.000001788139343705808,
+          -4.76837158203125e-7
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-plant-001",
+    "name": "Rubber plant in white planter",
+    "category": "plants",
+    "width": 1.04574,
+    "depth": 0.600553,
+    "height": 1.617445,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "flowerpot_022.glb",
+        "translation": [
+          0.000002123415470123291,
+          2.625450083932747e-8,
+          3.6507844930477873e-7
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      },
+      {
+        "source": "flower_001.glb",
+        "translation": [
+          -0.08226280212402344,
+          0.5008523344589944,
+          -0.0296689152717589
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ],
+        "scale": [
+          0.4,
+          0.4,
+          0.4
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-plant-002",
+    "name": "Dracaena in slate planter",
+    "category": "plants",
+    "width": 0.656681,
+    "depth": 0.588726,
+    "height": 1.530354,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "flowerpot_013.glb",
+        "translation": [
+          -0.00007560849189758301,
+          0.004117518197745124,
+          0.00007700920104984632
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      },
+      {
+        "source": "flower_002.glb",
+        "translation": [
+          -0.04125438928604126,
+          0.33589794951993657,
+          0.03194634914398207
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ],
+        "scale": [
+          0.4,
+          0.4,
+          0.4
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-plant-022",
+    "name": "Snake plant in graphite planter",
+    "category": "plants",
+    "width": 0.50102,
+    "depth": 0.469707,
+    "height": 1.331563,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "flowerpot_040.glb",
+        "translation": [
+          0.000018931925296783447,
+          2.2147089536697944e-8,
+          0.00009718537330630217
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      },
+      {
+        "source": "flower_022.glb",
+        "translation": [
+          -0.00011853575706481933,
+          0.26554607060014346,
+          -0.006587353348731878
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ],
+        "scale": [
+          0.6,
+          0.6,
+          0.6
+        ]
+      }
+    ]
+  },
+  {
+    "id": "office-plant-023",
+    "name": "Palm in white planter",
+    "category": "plants",
+    "width": 0.975098,
+    "depth": 0.922841,
+    "height": 1.766627,
+    "resize": "uniform",
+    "collidable": true,
+    "parts": [
+      {
+        "source": "flowerpot_022.glb",
+        "translation": [
+          0.000002123415470123291,
+          2.625450083932747e-8,
+          3.6507844930477873e-7
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ]
+      },
+      {
+        "source": "flower_023.glb",
+        "translation": [
+          0.0648514986038208,
+          0.500852346207481,
+          0.049500894546508925
+        ],
+        "rotation": [
+          0.7071067811865476,
+          0,
+          0,
+          0.7071067811865476
+        ],
+        "scale": [
+          0.4,
+          0.4,
+          0.4
+        ]
+      }
+    ]
+  }
+]

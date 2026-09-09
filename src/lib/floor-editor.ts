@@ -1,4 +1,5 @@
 import {DEFAULT_FLOOR,MIN_FLOOR_SIZE,MAX_FLOOR_SIZE,type FloorSize,type LayoutItem} from './floor-plan';
+import {getOfficeAsset} from './office-catalog';
 
 export type EditorPlan = {floor:FloorSize;layout:LayoutItem[]};
 export type Rect = {x:number;y:number;w:number;h:number};
@@ -32,11 +33,34 @@ export function moveItem(item:LayoutItem,floor:FloorSize,dx:number,dy:number,sna
 }
 export function resizeItem(item:LayoutItem,floor:FloorSize,edge:Edge,dx:number,dy:number,snapping:boolean):LayoutItem {
   const r=metres(item,floor);let left=r.x,top=r.y,right=r.x+r.w,bottom=r.y+r.h;
-  if(edge.includes('w'))left=clamp(snap(left+dx,snapping),0,right-MIN_OBJECT_SIZE);
-  if(edge.includes('e'))right=clamp(snap(right+dx,snapping),left+MIN_OBJECT_SIZE,floor.width);
-  if(edge.includes('n'))top=clamp(snap(top+dy,snapping),0,bottom-MIN_OBJECT_SIZE);
-  if(edge.includes('s'))bottom=clamp(snap(bottom+dy,snapping),top+MIN_OBJECT_SIZE,floor.depth);
+  const asset=item.type==='asset'&&item.assetId?getOfficeAsset(item.assetId):undefined;
+  if(asset?.resize==='uniform'){
+    const horizontal=edge.includes('w')||edge.includes('e'),vertical=edge.includes('n')||edge.includes('s');
+    const changeX=horizontal?(edge.includes('w')?left-snap(left+dx,snapping):snap(right+dx,snapping)-right)/r.w:0;
+    const changeY=vertical?(edge.includes('n')?top-snap(top+dy,snapping):snap(bottom+dy,snapping)-bottom)/r.h:0;
+    const factor=1+(Math.abs(changeX)>=Math.abs(changeY)?changeX:changeY);
+    const ax=edge.includes('w')?right:edge.includes('e')?left:left+r.w/2,ay=edge.includes('n')?bottom:edge.includes('s')?top:top+r.h/2;
+    const maxX=horizontal?(edge.includes('w')?ax:floor.width-ax)/r.w:Math.min(ax,floor.width-ax)*2/r.w;
+    const maxY=vertical?(edge.includes('n')?ay:floor.depth-ay)/r.h:Math.min(ay,floor.depth-ay)*2/r.h;
+    const max=Math.min(maxX,maxY),min=Math.min(max,Math.max(.04/r.w,.04/r.h));
+    const f=clamp(factor,min,max),w=r.w*f,h=r.h*f;
+    return place(item,{x:edge.includes('w')?ax-w:edge.includes('e')?ax:ax-w/2,y:edge.includes('n')?ay-h:edge.includes('s')?ay:ay-h/2,w,h},floor);
+  }
+  const minimum=asset?.resize==='footprint'?.04:MIN_OBJECT_SIZE;
+  if(edge.includes('w'))left=clamp(snap(left+dx,snapping),0,right-minimum);
+  if(edge.includes('e'))right=clamp(snap(right+dx,snapping),left+minimum,floor.width);
+  if(edge.includes('n'))top=clamp(snap(top+dy,snapping),0,bottom-minimum);
+  if(edge.includes('s'))bottom=clamp(snap(bottom+dy,snapping),top+minimum,floor.depth);
   return place(item,{x:left,y:top,w:right-left,h:bottom-top},floor);
+}
+/** Numeric size edits keep the top-left fixed, with linked furniture proportions. */
+export function setItemDimension(item:LayoutItem,floor:FloorSize,key:'w'|'h',value:number):LayoutItem {
+  const r=metres(item,floor),asset=item.assetId?getOfficeAsset(item.assetId):undefined;
+  if(item.type==='asset'&&asset?.resize==='uniform'){
+    const max=Math.min((floor.width-r.x)/r.w,(floor.depth-r.y)/r.h),min=Math.min(max,Math.max(.04/r.w,.04/r.h));
+    const factor=clamp(value/r[key],min,max);return place(item,{...r,w:r.w*factor,h:r.h*factor},floor);
+  }
+  return place(item,{...r,[key]:value},floor);
 }
 export function floorMinimum(plan:EditorPlan):FloorSize {
   return plan.layout.reduce((size,item)=>{const r=metres(item,plan.floor);return {width:Math.max(size.width,Math.min(plan.floor.width,r.x+r.w)),depth:Math.max(size.depth,Math.min(plan.floor.depth,r.y+r.h))};},{width:MIN_FLOOR_SIZE,depth:MIN_FLOOR_SIZE});
@@ -64,11 +88,14 @@ export const furniture = [
   {type:'lounge',name:'Lounge',description:'A softer place to meet',w:4.5,h:3},
   {type:'plant',name:'Plant',description:'A little room to grow',w:1,h:1},
 ] as const;
-export function newItem(type:LayoutItem['type'],plan:EditorPlan,id:string,point?:{x:number;y:number},snapping=true):LayoutItem {
-  const definition=furniture.find(item=>item.type===type)!;
+export function newItem(type:LayoutItem['type'],plan:EditorPlan,id:string,point?:{x:number;y:number},snapping=true,assetId?:string):LayoutItem {
+  const asset=type==='asset'&&assetId?getOfficeAsset(assetId):undefined;
+  const definition=asset?{name:asset.name,w:asset.width,h:asset.depth}:furniture.find(item=>item.type===type);
+  if(!definition)throw new Error('Choose furniture from the library.');
   let count=1;const labels=new Set(plan.layout.map(item=>item.label.toLowerCase()));
   while(labels.has((definition.name+' '+String(count).padStart(2,'0')).toLowerCase()))count++;
-  const item:LayoutItem={id,type,label:definition.name+' '+String(count).padStart(2,'0'),x:0,y:0,w:1,h:1,rotation:0};
+  const item:LayoutItem={id,type,label:definition.name+' '+String(count).padStart(2,'0'),x:0,y:0,w:1,h:1,rotation:0,...(asset?{assetId:asset.id}:{})};
   const centre=point||{x:plan.floor.width/2,y:plan.floor.depth/2};
-  return place(item,{x:snap(centre.x-definition.w/2,snapping),y:snap(centre.y-definition.h/2,snapping),w:definition.w,h:definition.h},plan.floor);
+  const fit=Math.min(1,plan.floor.width/definition.w,plan.floor.depth/definition.h),w=definition.w*fit,h=definition.h*fit;
+  return place(item,{x:snap(centre.x-w/2,snapping),y:snap(centre.y-h/2,snapping),w,h},plan.floor);
 }

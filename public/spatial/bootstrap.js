@@ -1,6 +1,7 @@
 import { mount } from './office-scene.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { clone as cloneSkeleton } from './vendor/SkeletonUtils.js';
+import { createOfficeAssetLibrary } from './office-asset-library.js';
 
 function disposeSkeletons(model) {
   const skeletons = new Set();
@@ -101,4 +102,4 @@ export function createCharacterLibrary({ userId, selectAvatar }) {
 }
 
 // Paid model files are available only through the authenticated asset endpoint.
-window.CoatriaOfficeRuntime = { mount, createCharacterLibrary };
+window.CoatriaOfficeRuntime = { mount, createCharacterLibrary, createOfficeAssetLibrary };

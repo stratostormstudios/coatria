@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { selectAvatarForUser, type AvatarDefinition } from "@/lib/avatar-catalog";
 import { DEFAULT_FLOOR, type FloorSize } from "@/lib/floor-plan";
+import { OFFICE_CATALOG, type OfficeAssetDefinition } from "@/lib/office-catalog";
 
 type Entity = Record<string, any>;
 type Position = { x: number; z: number };
@@ -15,6 +16,11 @@ type SceneInstance = {
 type SceneRuntime = {
   mount: (host: HTMLElement, options: Entity) => SceneInstance;
   createCharacterLibrary: (options: { userId: string; selectAvatar: typeof selectAvatarForUser }) => CharacterLibrary;
+  createOfficeAssetLibrary: (options: { userId: string; catalog: readonly OfficeAssetDefinition[] }) => OfficeAssetLibrary;
+};
+type OfficeAssetLibrary = {
+  loadAsset: (assetId: string) => Promise<{scene: unknown; metadata: OfficeAssetDefinition; release: () => void}>;
+  dispose: () => void;
 };
 type CharacterLibrary = {
   loadCharacter: (person: { id: string; avatarId?: string | null }) => Promise<{ scene: unknown; animations: unknown[]; metadata: AvatarDefinition; release: () => void }>;
@@ -73,6 +79,7 @@ export default function OfficeScene(props: OfficeSceneProps) {
     let cancelled = false;
     let mounted: SceneInstance | null = null;
     let library: CharacterLibrary | null = null;
+    let furnitureLibrary: OfficeAssetLibrary | null = null;
     setState("loading");
     const savedQuality = (() => { try { return localStorage.getItem("coatria-graphics"); } catch { return null; } })();
     loadRuntime().then(runtime => {
@@ -80,6 +87,7 @@ export default function OfficeScene(props: OfficeSceneProps) {
       const latest = current.current;
       const ownPresence = latest.presence.find(person => person.userId === latest.user.id);
       library = runtime.createCharacterLibrary?.({ userId: latest.user.id, selectAvatar: selectAvatarForUser }) || null;
+      furnitureLibrary = runtime.createOfficeAssetLibrary({ userId: latest.user.id, catalog: OFFICE_CATALOG });
       mounted = runtime.mount(host.current, {
         state: { user: latest.user, spatialPosition: ownPresence ? { x: ownPresence.x, z: ownPresence.z } : undefined },
         companyName: latest.company.name,
@@ -92,6 +100,8 @@ export default function OfficeScene(props: OfficeSceneProps) {
         agents: latest.agents,
         presence: latest.presence,
         loadCharacter: library?.loadCharacter,
+        officeCatalog: OFFICE_CATALOG,
+        loadOfficeAsset: furnitureLibrary.loadAsset,
         quality: savedQuality === "low" ? "low" : "balanced",
         onMove: (position: Position) => current.current.onMove(position),
         onOpenRoom: (id: string) => current.current.onOpenRoom(id),
@@ -99,12 +109,12 @@ export default function OfficeScene(props: OfficeSceneProps) {
         onOpenPerson: (id: string) => current.current.onOpenPerson(id),
         onQualityChange: (quality: string) => { try { localStorage.setItem("coatria-graphics", quality); } catch { /* A browser preference is optional. */ } }
       });
-      if (!mounted || mounted.error) { mounted?.dispose(); mounted = null; library?.dispose(); library = null; setState("unavailable"); return; }
+      if (!mounted || mounted.error) { mounted?.dispose(); mounted = null; library?.dispose(); library = null; furnitureLibrary?.dispose(); furnitureLibrary = null; setState("unavailable"); return; }
       instance.current = mounted;
       setState("ready");
       current.current.onMove(mounted.diagnostics.position);
-    }).catch(() => { mounted?.dispose(); library?.dispose(); if (!cancelled) setState("unavailable"); });
-    return () => { cancelled = true; mounted?.dispose(); library?.dispose(); if (instance.current === mounted) instance.current = null; };
+    }).catch(() => { mounted?.dispose(); library?.dispose(); furnitureLibrary?.dispose(); if (!cancelled) setState("unavailable"); });
+    return () => { cancelled = true; mounted?.dispose(); library?.dispose(); furnitureLibrary?.dispose(); if (instance.current === mounted) instance.current = null; };
   }, [geometryKey, retry]);
 
   useEffect(() => {

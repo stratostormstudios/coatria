@@ -7,6 +7,7 @@ import {handleApi} from '../src/lib/api';
 import {database,query} from '../src/lib/db';
 import {dummyPasswordHash,hashToken,secret} from '../src/lib/security';
 import {DEFAULT_FLOOR,type LayoutItem} from '../src/lib/floor-plan';
+import {OFFICE_CATALOG} from '../src/lib/office-catalog';
 
 const emulator=process.env.COATRIA_TEST_EMULATOR==='1',testDatabase=process.env.COATRIA_INTEGRATION_DATABASE_URL;
 const local=Boolean(testDatabase&&['localhost','127.0.0.1'].includes(new URL(testDatabase).hostname));
@@ -57,6 +58,11 @@ test('floor API preserves legacy offices, tenant access and revision-checked sav
    const first={layout:furniture,floor:{width:30,depth:20},revision:currentRevision},second={layout:[],floor:{width:18,depth:12},revision:currentRevision};
    const results=await Promise.all([write(owner,first),write(admin,second)]);assert.deepEqual(results.map(result=>result.status).sort(),[200,409]);
    const saved=results.find(result=>result.status===200)!.data;currentRevision++;assert.equal(saved.layoutRevision,currentRevision);const visible=(await snapshot()).data;assert.deepEqual(visible.layout,saved.layout);assert.deepEqual(visible.floor,saved.floor);assert.equal(visible.layoutRevision,currentRevision);
+  });
+  await t.test('licensed office furniture persists only with a valid catalog reference',async()=>{
+   const assetId=OFFICE_CATALOG[0].id,floor={width:20,depth:16},item={id:'library-chair',type:'asset',assetId,x:10,y:10,w:10,h:10,label:'Team chair',rotation:90};
+   for(const invalid of [{...item,assetId:undefined},{...item,assetId:'https://example.com/model.glb'},{...item,type:'desk'}])assert.equal((await write(owner,{layout:[invalid],floor,revision:currentRevision})).status,400);
+   const result=await write(owner,{layout:[item],floor,revision:currentRevision});assert.equal(result.status,200);currentRevision++;assert.equal(result.data.layoutRevision,currentRevision);assert.deepEqual(result.data.layout,[item]);assert.deepEqual((await stored()).items,[item]);assert.deepEqual((await snapshot()).data.layout,[item]);
   });
   await t.test('PostgreSQL serializes editors blocked on the same company row',{skip:emulator},async()=>{
    const blocker=await database().connect();let pending:Array<ReturnType<typeof write>>=[];let committed=false;

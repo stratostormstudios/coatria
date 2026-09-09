@@ -7,6 +7,9 @@ import { handleApi } from '../src/lib/api';
 import { database, query } from '../src/lib/db';
 import { AVATAR_CATALOG } from '../src/lib/avatar-catalog';
 import { avatarAssetPath, handleAvatarRequest } from '../src/lib/avatar-assets';
+import {OFFICE_CATALOG} from '../src/lib/office-catalog';
+import {handleOfficeAssetRequest,officeAssetPath} from '../src/lib/office-assets';
+import {hashToken} from '../src/lib/security';
 
 const testDatabase=process.env.COATRIA_INTEGRATION_DATABASE_URL;
 const useEmulator=process.env.COATRIA_TEST_EMULATOR==='1';
@@ -55,6 +58,25 @@ test('real database API: tenant isolation, invitations, independent approvals, p
       const asset=await handleAvatarRequest(avatarRequest(owner.cookie),modelId,kind);
       if(exists){assert.equal(asset.status,200);assert.equal(asset.headers.get('content-type'),kind==='preview'?'image/png':'model/gltf-binary');assert.equal(asset.headers.get('cache-control'),'private, no-store');assert.equal(asset.headers.get('cross-origin-resource-policy'),'same-origin');const bytes=Buffer.from(await asset.arrayBuffer());assert.equal(Number(asset.headers.get('content-length')),bytes.byteLength);if(kind==='model')assert.equal(bytes.readUInt32LE(0),0x46546c67);else assert.deepEqual(bytes.subarray(0,8),Buffer.from([137,80,78,71,13,10,26,10]));}
       else{assert.equal(asset.status,503);assert.equal((await asset.json()).code,'AVATAR_UNAVAILABLE');}
+    }
+    // Paid office objects use the same account and origin boundaries as avatars.
+    assert.equal((await handleOfficeAssetRequest(avatarRequest())).status,401);
+    assert.equal((await handleOfficeAssetRequest(avatarRequest(),'../private')).status,401);
+    const officeCatalog=await handleOfficeAssetRequest(avatarRequest(owner.cookie));assert.equal(officeCatalog.status,200);assert.deepEqual((await officeCatalog.json()).assets,OFFICE_CATALOG);assert.equal(officeCatalog.headers.get('cache-control'),'private, no-store');
+    assert.equal((await handleOfficeAssetRequest(avatarRequest(owner.cookie,{'X-Coatria-User':outsider.userId}))).status,409);
+    for(const headers of [{'Sec-Fetch-Site':'cross-site'},{Origin:'https://outside.example'}] as Record<string,string>[])assert.equal((await handleOfficeAssetRequest(avatarRequest(owner.cookie,headers))).status,403);
+    for(const id of ['unknown-office-object','../private','%2e%2e%2fprivate','https://example.com/object.glb'])assert.equal((await handleOfficeAssetRequest(avatarRequest(owner.cookie),id)).status,404);
+    for(const kind of ['model','preview','plan'] as const){
+      const id=OFFICE_CATALOG[0].id;
+      assert.equal((await handleOfficeAssetRequest(avatarRequest(),id,kind)).status,401);
+      assert.equal((await handleOfficeAssetRequest(avatarRequest(owner.cookie,{'X-Coatria-User':outsider.userId}),id,kind)).status,409);
+      assert.equal((await handleOfficeAssetRequest(avatarRequest(owner.cookie,{'Sec-Fetch-Site':'cross-site'}),id,kind)).status,403);
+      let exists=false;try{exists=(await stat(officeAssetPath(id,kind))).isFile();}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+      const asset=await handleOfficeAssetRequest(avatarRequest(owner.cookie),id,kind);
+      if(exists){assert.equal(asset.status,200);assert.equal(asset.headers.get('content-type'),kind==='model'?'model/gltf-binary':'image/png');assert.equal(asset.headers.get('cache-control'),'private, no-store');assert.equal(asset.headers.get('cross-origin-resource-policy'),'same-origin');const bytes=Buffer.from(await asset.arrayBuffer());assert.equal(Number(asset.headers.get('content-length')),bytes.byteLength);assert.deepEqual(bytes,await readFile(officeAssetPath(id,kind)));assert.equal(asset.headers.get('content-disposition'),`inline; filename="${id}.${kind==='model'?'glb':kind==='plan'?'plan.png':'png'}"`);}
+      else{assert.equal(asset.status,503);assert.equal((await asset.json()).code,'OFFICE_ASSET_UNAVAILABLE');}
+      const key=hashToken(`office-${kind==='model'?'model':'preview'}:${owner.userId}`),limit=kind==='model'?240:360;
+      await query('UPDATE rate_limits SET count=$2,expires_at=now()+interval \'1 minute\' WHERE key=$1',[key,limit]);assert.equal((await handleOfficeAssetRequest(avatarRequest(owner.cookie),id,kind)).status,429);await query('DELETE FROM rate_limits WHERE key=$1',[key]);
     }
     const companyA=(await call(owner,'companies','POST',{name:`Test ${run}`,slug:`test-${run}`,template:'studio'},201)).data.company;companies.push(companyA.id);
     const companyB=(await call(outsider,'companies','POST',{name:`Other ${run}`,slug:`other-${run}`,template:'blank'},201)).data.company;companies.push(companyB.id);

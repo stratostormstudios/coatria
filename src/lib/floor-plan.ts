@@ -5,12 +5,14 @@ export const MIN_FLOOR_SIZE = 8;
 export const MAX_FLOOR_SIZE = 40;
 export const MAX_LAYOUT_ITEMS = 100;
 export const LAYOUT_ROTATIONS = [0,90,180,270] as const;
-export const LAYOUT_TYPES = ['desk','meeting','focus','lounge','plant'] as const;
+export const LAYOUT_TYPES = ['desk','meeting','focus','lounge','plant','asset'] as const;
 export type LayoutItem = {
   id:string; type:typeof LAYOUT_TYPES[number];
   /** Axis-aligned footprint as percentages of the floor, including rotation. */
   x:number; y:number; w:number; h:number; label:string;
   rotation?:typeof LAYOUT_ROTATIONS[number];
+  /** Catalog reference for licensed library objects; never a path or URL. */
+  assetId?:string;
 };
 export type FloorPlanDocument = { version:1; items:LayoutItem[]; floor:FloorSize; revision:number };
 

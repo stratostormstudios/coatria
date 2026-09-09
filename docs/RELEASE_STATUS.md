@@ -1,4 +1,12 @@
-# Coatria 0.1 — floor-editor release status
+# Coatria 0.1 — office-furniture release status
+
+The purchased ITHappy Office Rooms integration is prepared for release: 78 searchable furniture objects, real isometric and top-down previews, proportional furniture sizing, adjustable partitions/floor finishes, and authenticated private model delivery. Existing offices and character assets are preserved. See the [office asset guide](OFFICE_ASSETS.md) for preparation, deployment boundaries and compatibility.
+
+Local verification passed 66 of 70 Node tests with zero failures and four PostgreSQL-only skips. Browser checks passed 11 furniture-editor fixtures, one real local database workflow, 15 legacy editor cases, six purchased-renderer cases and 10 renderer/character regressions. Both preview queue reproductions passed. The licensed build verified all 12 characters and 78 furniture objects. Scoped editor accessibility checks reported zero selected WCAG 2 A/AA and 2.1 AA violations at 1536 × 1100 and 390 × 844, without horizontal overflow; this is not certification.
+
+Production publication and PostgreSQL CI for this source are pending; the earlier live release is recorded below.
+
+## Earlier floor-editor release
 
 Status recorded **2026-09-09 UTC**. The direct-manipulation floor editor is deployed at [coatria.com](https://coatria.com/#layout). Administrators can drag furniture onto the plan, move and resize it with handles, adjust the floor, rotate/duplicate objects, and undo or redo changes. The 3D office uses the saved geometry. Atomic revision checks protect shared saves. The [floor editor guide](FLOOR_EDITOR.md) explains controls, compatibility and limits. This release stores a versioned document in the existing JSONB field; it needs no production SQL migration or broader runtime grants. The earlier [UX review](UX_REVIEW.md), [character pipeline](CHARACTERS.md) and [security review](SECURITY_REVIEW.md) remain applicable.
 

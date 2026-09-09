@@ -24,7 +24,9 @@ export function mount(host, options = {}) {
   let disposed = false, quality = options.quality === 'low' ? 'low' : 'balanced';
   let dirty = true, walking = false, frame = 0, lastFrame = 0, lastMoveSent = 0, lastExpiryCheck = 0, selected = null, path = [], expanded = false, previousOverflow = '';
   let scene, camera, renderer, controls, sun, player, selectionRing, destinationRing;
-  const geometries = new Map(), materials = new Map(), clickable = [], characters = [], labels = [], obstacles = [], listeners = [];
+  const geometries = new Map(), materials = new Map(), clickable = [], characters = [], labels = [], obstacles = [], listeners = [], officeAssets = [];
+  const officeCatalog = new Map((options.officeCatalog || []).map(asset => [asset.id, asset]));
+  let framingHeight = 3.8;
   const hostClass = host.className;
   host.classList.add('cs-scene');
   host.innerHTML = `<div class="cs-scene-stage" tabindex="0" role="application" aria-label="Interactive 3D office. Drag to orbit, scroll to zoom, click the floor to walk. Use the labeled people and room buttons or the office List view for keyboard navigation."></div>
@@ -78,6 +80,15 @@ export function mount(host, options = {}) {
   const architecture = new THREE.Group(); scene.add(architecture);
   let staticParent=architecture;
   const dynamic = new THREE.Group(); scene.add(dynamic);
+  // Async licensed models keep their source geometry/materials shared. They are
+  // deliberately excluded from procedural architecture batching and disposal.
+  const assetLayer = new THREE.Group(); assetLayer.name='office-asset-instances'; scene.add(assetLayer);
+  const assetNotice = document.createElement('div'), assetMessage = document.createElement('span'), assetRetry = document.createElement('button');
+  assetNotice.dataset.officeAssetStatus=''; assetNotice.setAttribute('role','status'); assetNotice.hidden=true;
+  Object.assign(assetNotice.style,{position:'absolute',left:'16px',bottom:'160px',zIndex:'6',maxWidth:'min(340px, calc(100% - 32px))',padding:'10px 12px',border:'1px solid #b6c1ae',borderRadius:'10px',background:'#f8faf3',color:'#304337',fontSize:'13px',lineHeight:'1.5',boxShadow:'0 4px 18px #20342812'});
+  assetRetry.type='button';assetRetry.textContent='Retry furniture';Object.assign(assetRetry.style,{display:'block',marginTop:'8px',padding:'7px 10px',border:'1px solid #405740',borderRadius:'6px',background:'#304a36',color:'#fff',font:'inherit',cursor:'pointer'});
+  assetNotice.append(assetMessage,assetRetry);host.append(assetNotice);
+  on(assetRetry,'click',event=>{event.stopPropagation();retryOfficeAssets();});
   function mat(color, extra = {}) {
     const key = `${color}/${JSON.stringify(extra)}`;
     if (!materials.has(key)) materials.set(key, new THREE.MeshStandardMaterial({color, roughness:.84, metalness:0, ...extra}));
@@ -107,6 +118,62 @@ export function mount(host, options = {}) {
     el.setAttribute('aria-label', data.type==='room' ? `View ${text}` : `Select ${text}`);
     el.onclick = event=>{event.stopPropagation(); select(data);};
     labelHost.append(el); labels.push({el,position:new THREE.Vector3(x,y,z),data});
+  }
+  function updateAssetNotice() {
+    if(disposed)return;
+    const failed=officeAssets.filter(entry=>entry.status==='failed').length,pending=officeAssets.filter(entry=>entry.status==='loading').length;
+    assetNotice.hidden=!failed&&!pending;assetRetry.hidden=!failed;assetRetry.style.display=failed?'block':'none';
+    assetMessage.textContent=failed?`${failed} furniture ${failed===1?'item couldn’t':'items couldn’t'} load. Basic shapes are shown.${pending?' Other furniture is still loading.':''}`:`Loading furniture… ${officeAssets.length-pending} of ${officeAssets.length}`;
+  }
+  function setAssetBounds(entry,box3) {
+    const bounds={minX:box3.min.x,maxX:box3.max.x,minZ:box3.min.z,maxZ:box3.max.z};
+    entry.footprint.meshBounds={...bounds};entry.footprint.furnitureBounds={...bounds};
+    if(entry.obstacle)Object.assign(entry.obstacle,bounds);
+    entry.data.bounds={...bounds};
+  }
+  async function loadOfficeAsset(entry) {
+    if(disposed||entry.status==='loading')return;
+    const revision=++entry.revision;entry.status='loading';updateAssetNotice();
+    let lease;
+    try {
+      if(!entry.metadata||typeof options.loadOfficeAsset!=='function')throw new Error('Furniture is unavailable.');
+      lease=await options.loadOfficeAsset(entry.assetId);
+      if(disposed||entry.revision!==revision){lease.release();return;}
+      const model=lease.scene,sourceBounds=new THREE.Box3().setFromObject(model),size=sourceBounds.getSize(new THREE.Vector3()),center=sourceBounds.getCenter(new THREE.Vector3());
+      if(![size.x,size.y,size.z].every(value=>Number.isFinite(value)&&value>=0)||size.x<.000001||size.z<.000001)throw new Error('Furniture dimensions are invalid.');
+      const uniform=Math.min(entry.localW/size.x,entry.localD/size.z),sx=entry.metadata.resize==='footprint'?entry.localW/size.x:uniform,sz=entry.metadata.resize==='footprint'?entry.localD/size.z:uniform,sy=entry.metadata.resize==='footprint'?1:uniform;
+      const alignment=new THREE.Group();alignment.scale.set(sx,sy,sz);alignment.position.set(-center.x*sx,-sourceBounds.min.y*sy,-center.z*sz);alignment.add(model);entry.root.add(alignment);
+      model.userData.coatriaOfficeAsset=entry.assetId;
+      model.traverse(object=>{if(object.isMesh){object.castShadow=entry.metadata.collidable!==false;object.receiveShadow=true;}});
+      entry.lease=lease;entry.model=model;entry.alignment=alignment;entry.placeholder.visible=false;entry.status='ready';
+      entry.root.updateMatrixWorld(true);
+      const bounds=new THREE.Box3().setFromObject(alignment);setAssetBounds(entry,bounds);
+      const actual=bounds.getSize(new THREE.Vector3());entry.height=actual.y;entry.scale={x:sx,y:sy,z:sz};
+      entry.hit.scale.set(size.x*sx,Math.max(.06,actual.y),size.z*sz);entry.hit.position.y=Math.max(.06,actual.y)/2;
+      if(bounds.max.y>framingHeight){framingHeight=bounds.max.y;resize();}
+      dirty=true;
+    } catch {
+      lease?.release();
+      if(disposed||entry.revision!==revision)return;
+      entry.status='failed';
+    }
+    updateAssetNotice();
+  }
+  function retryOfficeAssets(){for(const entry of officeAssets)if(entry.status==='failed')void loadOfficeAsset(entry);}
+  function addOfficeAsset(item,{x,z,width,depth,localW,localD,rotation}) {
+    const metadata=officeCatalog.get(item.assetId),root=group(x,z,-rotation*Math.PI/180,assetLayer),id=String(item.id||`furniture-${officeAssets.length}`);
+    root.name='office-asset:'+id;root.position.y=.08+(metadata?.collidable===false ? .002+officeAssets.length*.00002 : 0);
+    const height=Math.max(.025,Math.min(metadata?.height||.4,1.2)),placeholder=box(localW,height,localD,M.sage,0,height/2,0,root);
+    const bounds={minX:x-width/2,maxX:x+width/2,minZ:z-depth/2,maxZ:z+depth/2};
+    const data={type:'furniture',id,assetId:item.assetId,name:item.name||item.label||metadata?.name||'Furniture',x,z,bounds:{...bounds},description:metadata?`${metadata.name}. ${metadata.collidable===false?'A walkable floor finish.':'Select “Walk nearby” to move beside this piece.'}`:'This piece is unavailable. Its saved footprint is shown.'};
+    const hit=pick(0,0,1,1,1,data);root.add(hit);hit.position.y=height/2;hit.scale.set(localW,height,localD);
+    // Floor finishes must not intercept every ordinary click-to-walk gesture.
+    if(metadata?.collidable===false)clickable.splice(clickable.indexOf(hit),1);
+    const obstacle=metadata?.collidable===false?null:{...bounds};if(obstacle)obstacles.push(obstacle);
+    const footprint={id,assetId:item.assetId,kind:'asset',rotation,x,z,width,depth,forward:{x:-Math.sin(rotation*Math.PI/180),z:Math.cos(rotation*Math.PI/180)},bounds:{...bounds},meshBounds:{...bounds},furnitureBounds:{...bounds}};
+    footprints.push(footprint);
+    const entry={id,assetId:item.assetId,metadata,root,placeholder,hit,obstacle,footprint,data,localW,localD,status:'pending',revision:0,lease:null,model:null,height,scale:null};
+    officeAssets.push(entry);void loadOfficeAsset(entry);
   }
   function plant(x,z,size=1) {
     cyl(.28*size,.23*size,.53*size,8,M.cream,x,.27*size,z);
@@ -255,9 +322,11 @@ export function mount(host, options = {}) {
     };
     const transformData=(data,matrix)=>{const point=new THREE.Vector3(data.x,0,data.z).applyMatrix4(matrix);data.x=point.x;data.z=point.z;if(data.approach){const approach=new THREE.Vector3(data.approach.x,0,data.approach.z).applyMatrix4(matrix);data.approach={x:approach.x,z:approach.z};}};
     for(const item of options.layout || []) {
-      const left=clamp(item.x,0,99),top=clamp(item.y,0,99),width=clamp(item.w,1,100-left)*floor.width/100,depth=clamp(item.h,1,100-top)*floor.depth/100;
+      const kind=item.kind||item.type,minimum=kind==='asset'?.001:1;
+      const left=clamp(item.x,0,100-minimum),top=clamp(item.y,0,100-minimum),width=clamp(item.w,minimum,100-left)*floor.width/100,depth=clamp(item.h,minimum,100-top)*floor.depth/100;
       const x=-halfWidth+left*floor.width/100+width/2,z=-halfDepth+top*floor.depth/100+depth/2;
-      const rotation=[0,90,180,270].includes(item.rotation)?item.rotation:0,quarter=rotation===90||rotation===270,localW=quarter?depth:width,localD=quarter?width:depth,kind=item.kind||item.type;
+      const rotation=[0,90,180,270].includes(item.rotation)?item.rotation:0,quarter=rotation===90||rotation===270,localW=quarter?depth:width,localD=quarter?width:depth;
+      if(kind==='asset'){addOfficeAsset(item,{x,z,width,depth,localW,localD,rotation});continue;}
       const root=group(0,0,0,architecture),labelStart=labels.length,obstacleStart=obstacles.length,pickStart=clickable.length;
       root.name='floor-object:'+String(item.id||footprints.length);staticParent=root;
       if(!['desk','plant'].includes(kind))roomZone(item.name||item.label||'Room',0,0,localW,localD,kind==='focus'?M.sage:kind==='lounge'?mat('#d9d0bb'):M.powder,kind,item.roomId);
@@ -440,8 +509,8 @@ export function mount(host, options = {}) {
     selected=data;
     const person=characters.find(c=>c.data===data),p=person?.g.position || data;
     selectionRing.position.set(p.x,.084,p.z);selectionRing.visible=true;
-    const type=data.type==='agent'?'AI COWORKER':data.type==='person'?(data.you?'YOUR CHARACTER':'TEAM MEMBER'):data.type==='desk'?'WORKSTATION':'SHARED SPACE';
-    const actionLabel=data.type==='agent'?'Open agent profile':data.type==='person'?(data.you?'View my profile':'View teammate'):data.type==='desk'?'Walk here':'Open room';
+    const type=data.type==='agent'?'AI COWORKER':data.type==='person'?(data.you?'YOUR CHARACTER':'TEAM MEMBER'):data.type==='desk'?'WORKSTATION':data.type==='furniture'?'FURNITURE':'SHARED SPACE';
+    const actionLabel=data.type==='agent'?'Open agent profile':data.type==='person'?(data.you?'View my profile':'View teammate'):data.type==='desk'?'Walk here':data.type==='furniture'?'Walk nearby':'Open room';
     context.innerHTML=`<button type="button" class="cs-scene-close" aria-label="Close selection">×</button><span class="cs-scene-context-type ${data.type==='agent'?'ai':''}">${type}</span><strong>${html(data.name)}</strong><p>${html(data.description)}</p><button type="button" class="cs-scene-primary">${actionLabel} <span>↗</span></button>`;
     context.hidden=false;
     context.querySelector('.cs-scene-close').onclick=()=>{context.hidden=true;selectionRing.visible=false;selected=null;dirty=true;};
@@ -449,6 +518,11 @@ export function mount(host, options = {}) {
       if(expanded)toggleExpanded(false);
       if(data.type==='room')options.onOpenRoom?.(data.id);
       else if(data.type==='desk')routeTo(data.approach?.x??data.x,data.approach?.z??data.z+1.4);
+      else if(data.type==='furniture'){
+        const bounds=data.bounds,position=player.g.position,candidates=[{x:data.x,z:bounds.maxZ+.45},{x:data.x,z:bounds.minZ-.45},{x:bounds.maxX+.45,z:data.z},{x:bounds.minX-.45,z:data.z}];
+        candidates.sort((a,b)=>Math.hypot(a.x-position.x,a.z-position.z)-Math.hypot(b.x-position.x,b.z-position.z));
+        if(!candidates.some(point=>open(point.x,point.z)&&routeTo(point.x,point.z)))say('There is no clear aisle beside this piece. Choose another open spot.');
+      }
       else if(data.type==='agent')options.onOpenAgent?.(data.id,data.name);
       else options.onOpenPerson?.(data.id);
     };
@@ -547,7 +621,7 @@ export function mount(host, options = {}) {
     const button=host.querySelector('[data-scene="quality"]');button.textContent=quality==='low'?'Low':'Balanced';button.setAttribute('aria-label',`Graphics quality: ${quality}. Switch quality.`);
     options.onQualityChange?.(quality);dirty=true;return quality;
   }
-  function resize(){if(disposed)return;const width=stage.clientWidth,height=stage.clientHeight;if(!width||!height)return;renderer.setSize(width,height,false);const aspect=width/height;const right=new THREE.Vector3(29,0,-24).normalize(),up=new THREE.Vector3().crossVectors(new THREE.Vector3(24,27,29).normalize(),right).normalize();const halfX=(floor.width*Math.abs(right.x)+floor.depth*Math.abs(right.z))/2+.6;const halfY=(floor.width*Math.abs(up.x)+floor.depth*Math.abs(up.z))/2+3.8*Math.abs(up.y)+.4;const halfH=Math.max(halfY*1.18,halfX/aspect*1.18);camera.left=-halfH*aspect;camera.right=halfH*aspect;camera.top=halfH;camera.bottom=-halfH;camera.updateProjectionMatrix();dirty=true;}
+  function resize(){if(disposed)return;const width=stage.clientWidth,height=stage.clientHeight;if(!width||!height)return;renderer.setSize(width,height,false);const aspect=width/height;const right=new THREE.Vector3(29,0,-24).normalize(),up=new THREE.Vector3().crossVectors(new THREE.Vector3(24,27,29).normalize(),right).normalize();const halfX=(floor.width*Math.abs(right.x)+floor.depth*Math.abs(right.z))/2+.6;const halfY=(floor.width*Math.abs(up.x)+floor.depth*Math.abs(up.z))/2+framingHeight*Math.abs(up.y)+.4;const halfH=Math.max(halfY*1.18,halfX/aspect*1.18);camera.left=-halfH*aspect;camera.right=halfH*aspect;camera.top=halfH;camera.bottom=-halfH;camera.updateProjectionMatrix();dirty=true;}
   const resizeObserver=new ResizeObserver(resize);resizeObserver.observe(stage);
   // Tear down if navigation removes the host, including failed routes/re-renders.
   const mutationObserver=new MutationObserver(()=>{if(!host.isConnected)dispose();});mutationObserver.observe(document.body,{childList:true,subtree:true});
@@ -652,13 +726,14 @@ export function mount(host, options = {}) {
   function dispose() {
     if(disposed)return;disposed=true;if(expanded)document.body.style.overflow=previousOverflow;cancelAnimationFrame(frame);resizeObserver.disconnect();mutationObserver.disconnect();listeners.forEach(fn=>fn());controls.dispose();
     for(const c of characters){c.removed=true;c.assetRevision++;releaseCharacterModel(c);}
+    for(const entry of officeAssets){entry.revision++;entry.lease?.release();entry.lease=null;entry.model=null;}
     const geos=new Set(),mats=new Set();scene.traverse(obj=>{if(obj.geometry)geos.add(obj.geometry);if(obj.material)(Array.isArray(obj.material)?obj.material:[obj.material]).forEach(m=>mats.add(m));});
     const textures=new Set();geometries.forEach(g=>geos.add(g));materials.forEach(m=>mats.add(m));geos.forEach(g=>g.dispose());mats.forEach(m=>{Object.values(m).forEach(v=>{if(v?.isTexture)textures.add(v);});m.dispose();});textures.forEach(t=>t.dispose());renderer.dispose();renderer.forceContextLoss();host.innerHTML='';host.className=hostClass;
     if(activeInstance===api)activeInstance=null;
   }
   setQuality(quality);resize();controls.update();updateSnapshot(options);frame=requestAnimationFrame(animate);
-  const api={dispose,reset,setQuality,toggleExpanded,walkTo:routeTo,updateSnapshot,selectEntity(id){const c=characters.find(c=>c.data.id===id);const item=c?.data||labels.find(l=>l.data.id===id)?.data;if(item)select(item);return!!item;},setCharacterModel,
-    get diagnostics(){return{renderer:'Three.js / WebGL',quality,customLayout:custom,floor:{...floor},floorBounds:{minX:-halfWidth,maxX:halfWidth,minZ:-halfDepth,maxZ:halfDepth},navigation:{...nav,columns,rows,stepX,stepZ},objects:footprints.map(item=>({...item,forward:{...item.forward},bounds:{...item.bounds},meshBounds:{...item.meshBounds},furnitureBounds:{...item.furnitureBounds}})),obstacles:obstacles.map(bounds=>({...bounds})),plannedPath:path.map(point=>({...point})),characters:characters.length,occupants:characters.map(c=>({id:c.id,type:c.data.type,name:c.name,x:c.g.position.x,z:c.g.position.z,rotation:c.g.rotation.y,avatarId:c.avatarId||null,modelLoaded:!!c.model,speed:c.motionSpeed||0,walkWeight:c.walkBlend||0,walkPlaybackRate:c.walkAction?.getEffectiveTimeScale()||0,referenceSpeed:c.referenceSpeed||null,pathLength:c.you?path.length:c.path?.length||0})),drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,walking,position:{x:player.g.position.x,z:player.g.position.z},pathLength:path.length,disposed,proceduralCharacters:characters.filter(c=>!c.model).length,loadedCharacterModels:characters.filter(c=>c.model).length};},
+  const api={dispose,reset,setQuality,toggleExpanded,walkTo:routeTo,updateSnapshot,retryOfficeAssets,selectEntity(id){const c=characters.find(c=>c.data.id===id);const item=c?.data||labels.find(l=>l.data.id===id)?.data||officeAssets.find(entry=>entry.id===id)?.data;if(item)select(item);return!!item;},setCharacterModel,
+    get diagnostics(){return{renderer:'Three.js / WebGL',quality,customLayout:custom,floor:{...floor},floorBounds:{minX:-halfWidth,maxX:halfWidth,minZ:-halfDepth,maxZ:halfDepth},navigation:{...nav,columns,rows,stepX,stepZ},officeAssets:officeAssets.map(entry=>({id:entry.id,assetId:entry.assetId,status:entry.status,modelLoaded:!!entry.model,collidable:entry.metadata?.collidable!==false,resize:entry.metadata?.resize||null,height:entry.height,scale:entry.scale?{...entry.scale}:null,bounds:{...entry.footprint.meshBounds}})),objects:footprints.map(item=>({...item,forward:{...item.forward},bounds:{...item.bounds},meshBounds:{...item.meshBounds},furnitureBounds:{...item.furnitureBounds}})),obstacles:obstacles.map(bounds=>({...bounds})),plannedPath:path.map(point=>({...point})),characters:characters.length,occupants:characters.map(c=>({id:c.id,type:c.data.type,name:c.name,x:c.g.position.x,z:c.g.position.z,rotation:c.g.rotation.y,avatarId:c.avatarId||null,modelLoaded:!!c.model,speed:c.motionSpeed||0,walkWeight:c.walkBlend||0,walkPlaybackRate:c.walkAction?.getEffectiveTimeScale()||0,referenceSpeed:c.referenceSpeed||null,pathLength:c.you?path.length:c.path?.length||0})),drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,walking,position:{x:player.g.position.x,z:player.g.position.z},pathLength:path.length,disposed,proceduralCharacters:characters.filter(c=>!c.model).length,loadedCharacterModels:characters.filter(c=>c.model).length};},
     scene,camera,renderer};
   activeInstance=api;
   return api;

@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --port 4180",
-    "prebuild": "node --import tsx scripts/check-avatar-assets.ts",
+    "prebuild": "node --import tsx scripts/check-avatar-assets.ts && node --import tsx scripts/check-office-assets.ts",
     "build": "next build",
     "start": "next start --port 4180",
     "typecheck": "tsc --noEmit",

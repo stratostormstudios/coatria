@@ -1,6 +1,6 @@
 # Coatria floor design studio
 
-The space editor supports direct mouse, touch-pointer and keyboard manipulation. Administrators can arrange the shared office without editing percentage coordinates. The public 3D office uses the saved floor dimensions, furniture sizes, positions and quarter-turn rotations.
+The space editor supports direct mouse, touch-pointer and keyboard manipulation. Administrators can arrange the shared office without editing percentage coordinates. The shared 3D office uses the saved floor dimensions, furniture sizes, positions and quarter-turn rotations. The searchable [office furniture collection](OFFICE_ASSETS.md) adds 78 purchased models with isometric catalogue previews and top-down plan images. Furniture keeps its proportions while resizing; partitions and floor finishes support independent width/depth changes. The original five object types remain under **Quick spaces**.
 
 ## Editing a floor
 
@@ -37,7 +37,7 @@ The workspace API continues to return the furniture array as `layout`. It also r
 
 The existing `companies.layout` JSONB field stores a versioned document: `{version: 1, items, floor, revision}`. Legacy arrays are read as a 20 × 16 metre floor at revision 0 and remain intact until successfully saved. New companies use the versioned document. This requires no SQL migration or broader runtime permissions. Unknown stored versions fail explicitly rather than replacing the office with an empty layout. Old editor tabs without a revision receive a reload error.
 
-**Rollback requirement:** once a versioned plan has been saved, use an application build that understands both legacy arrays and version 1 documents. Promoting an older build that assumes the JSONB field is always an array is not a compatible rollback. Preserve the document data when preparing any later migration.
+**Rollback requirement:** once a versioned plan has been saved, use an application build that understands both legacy arrays and version 1 documents. After purchased furniture has been saved, the rollback build must also understand `type: "asset"` and its `assetId`. Earlier editors that reject these items are not compatible rollback targets. Preserve the document data when preparing any later migration.
 
 ## 3D behavior and limits
 

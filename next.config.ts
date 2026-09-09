@@ -5,7 +5,10 @@ const config: NextConfig = {
   // They are not public files or part of the open-source repository.
   outputFileTracingIncludes: {
     '/api/avatars/*/model': ['./.runtime-assets/city-characters/*.glb'],
-    '/api/avatars/*/preview': ['./.runtime-assets/city-characters/*.png']
+    '/api/avatars/*/preview': ['./.runtime-assets/city-characters/*.png'],
+    '/api/office-assets/*/model': ['./.runtime-assets/office-models/*.glb'],
+    '/api/office-assets/*/preview': ['./.runtime-assets/office-models/*.png'],
+    '/api/office-assets/*/plan': ['./.runtime-assets/office-models/*.plan.png']
   },
   async headers() {
     return [{ source: '/(.*)', headers: [
