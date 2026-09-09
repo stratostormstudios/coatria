@@ -1,12 +1,12 @@
-# Coatria 0.1 — UX-update release status
+# Coatria 0.1 — floor-editor release status
 
-Status recorded **2026-09-08**. The page-by-page UX update is deployed at [coatria.com](https://coatria.com). All 15 authenticated destinations and account entry were reviewed, with clearer navigation, readable controls, mobile work/chat flows, recoverable search and draft states, guided connection setup, and a compact character picker. The [UX review](UX_REVIEW.md) records the findings, primary product/design references, acceptance checks and remaining product work. This release changes no database schema or API contracts. The [character pipeline](CHARACTERS.md) and [security review](SECURITY_REVIEW.md) remain applicable.
+Status recorded **2026-09-09 UTC**. The direct-manipulation floor editor is deployed at [coatria.com](https://coatria.com/#layout). Administrators can drag furniture onto the plan, move and resize it with handles, adjust the floor, rotate/duplicate objects, and undo or redo changes. The 3D office uses the saved geometry. Atomic revision checks protect shared saves. The [floor editor guide](FLOOR_EDITOR.md) explains controls, compatibility and limits. This release stores a versioned document in the existing JSONB field; it needs no production SQL migration or broader runtime grants. The earlier [UX review](UX_REVIEW.md), [character pipeline](CHARACTERS.md) and [security review](SECURITY_REVIEW.md) remain applicable.
 
 | Item | Current state |
 | --- | --- |
 | Repository | [stratostormstudios/coatria](https://github.com/stratostormstudios/coatria) contains the application, migrations, tests and implementation plan |
-| Reviewed source | `c17e8e9fd9eaa977c3870289424818a00b9d873b` |
-| Vercel | UX-update deployment `dpl_Gt7FQXpEv1Dt6ECZMGZTVyj6PNnb` is READY and promoted for reviewed source `c17e8e9fd9eaa977c3870289424818a00b9d873b` |
+| Reviewed source | `72713f29466d5db255b068de6adf8e075888cdf5` |
+| Vercel | Floor-editor deployment `dpl_3NDfVX3eCQRuumw5p7wyPXE9FdJo` is READY and promoted for reviewed source `72713f29466d5db255b068de6adf8e075888cdf5` |
 | Domain | [coatria.com](https://coatria.com) returned HTTP 200 over HTTPS and health reported ready; live nonce-based CSP verified |
 | Production database | Neon `coatria-production` preserved; all five numbered migrations applied. Runtime avatar INSERT/UPDATE allowed; email verification UPDATE and schema CREATE remain denied |
 | Project environment | Only production `APP_URL` and sensitive Secret `DATABASE_URL`; no owner aliases or preview database credentials. Resource environment injection detached without deleting Neon |
@@ -14,6 +14,18 @@ Status recorded **2026-09-08**. The page-by-page UX update is deployed at [coatr
 | Deployment protection | Vercel reports `ssoProtection: all_except_custom_domains`; this does not invalidate old deployment credentials |
 | Main branch | Read-only inspection reported unprotected `main` and no repository rulesets; administrator configuration remains open |
 | Scale | Small-team implementation with bounded polling and calls; no million-user load test has been completed |
+
+Floor-editor release validation: [CI run 34319224150](https://github.com/stratostormstudios/coatria/actions/runs/34319224150) passed **59 tests with zero failures or skips** on PostgreSQL, including competing floor saves and a membership demotion while waiting for the company lock. The complete-history credential scan, dependency audit (zero reported vulnerabilities), TypeScript and production build passed. The licensed local build verified all 12 private runtime characters.
+
+**38 distinct local browser cases passed** across targeted runs: 15 floor-editor interactions, one real HTTP/database save–reload–3D workflow, six renderer cases, four character lifecycle cases, and 12 navigation/workplace/security regressions. The production CSP case then passed on the promoted custom domain. Automated axe checks of the furnished editor reported zero selected WCAG 2 A/AA and 2.1 AA violations at desktop and phone sizes, with no horizontal overflow. These are sampled checks, not accessibility certification.
+
+The live domain returned HTTPS HTTP 200 and ready database health. Published editor assets rendered and handled mouse movement/undo using isolated in-browser API fixtures, with no browser runtime errors. Those live fixture checks did not write to production; authenticated persistence was exercised against the local database. Local test setup required applying existing migrations 004 and 005 to an outdated local database and binding the development host to the actual loopback origin. Production database state and credentials were unchanged.
+
+**Compatible rollback:** after a versioned floor is saved, a rollback build must understand both legacy layout arrays and version 1 documents. Older array-only releases are not a compatible rollback target. The floor guide records this requirement and the remaining rectangular-floor/100-object limits.
+
+## Earlier UX-release validation evidence
+
+For source `c17e8e9fd9eaa977c3870289424818a00b9d873b` and deployment `dpl_Gt7FQXpEv1Dt6ECZMGZTVyj6PNnb`:
 
 UX release validation: [CI run 34281690406](https://github.com/stratostormstudios/coatria/actions/runs/34281690406) passed **40 tests with zero failures or skips** on PostgreSQL 17.11, plus the complete-history credential scan, dependency audit (zero reported vulnerabilities), TypeScript and production build. The licensed local build verified all 12 runtime characters. **36 distinct local browser cases** passed across focused/regression runs, including real authenticated two-person collaboration and character/profile synchronization. The additional production CSP case passed on the promoted custom domain, bringing the exercised browser coverage to 37 cases.
 
@@ -34,6 +46,7 @@ Live verification passed all 40 checks: authenticated catalog and portraits, all
 - Personal account registration/login/logout, profile editing, secure password changes and server sessions.
 - Company creation with a furnished or blank floor, company switching, invitations, member roles, ownership transfer and offboarding.
 - A real low-poly 3D office with 12 selectable purchased characters for human coworkers, authored idle/walk blending, smooth turning, shared presence, camera controls, floor editing and an accessible room list. Bots retain a distinct design. Occupants use stable IDs; stale people and agents without recent heartbeats are not displayed as live coworkers. Sitting/waving clips are prepared but their interaction controls are not yet implemented.
+- Drag-and-drop floor editing with eight furniture resize handles, 8–40 metre floor dimensions, quarter-turn rotation, duplication, undo/redo, grid snapping, keyboard alternatives, and atomic revision-checked saves. Furniture keeps its physical size as the floor changes.
 - Company and room chat, task assignment, contribution submission and independent acceptance. Accepted work is immutable.
 - Private personal skill vaults, immutable skill versions and export independent of company membership.
 - Scoped agent identities, real harness work/report APIs, pause/revoke controls and sponsor checks. The harness itself runs on the employee's infrastructure.
