@@ -1,0 +1,205 @@
+{
+  "schemaVersion": 1,
+  "kind": "coatria-connections",
+  "generatedAt": "2026-09-10T23:04:01.634Z",
+  "summary": {
+    "clients": 50,
+    "durationSeconds": 60.01,
+    "requests": 5408,
+    "unexpectedErrors": 0,
+    "errorRate": 0,
+    "p50Ms": 6.75,
+    "p95Ms": 13.8,
+    "maxMs": 277.02,
+    "bytesReceived": 106703347,
+    "requestsPerSecond": 90.12,
+    "correctnessPassed": true,
+    "performancePassed": true,
+    "passed": true,
+    "verificationRequests": 292,
+    "wallClockSeconds": 107
+  },
+  "checks": [
+    {
+      "id": "independent-sessions",
+      "label": "Independent authenticated clients connected",
+      "passed": true,
+      "detail": "50 distinct users and opaque sessions made real HTTP presence writes."
+    },
+    {
+      "id": "initial-roster",
+      "label": "Every connected client appears exactly once",
+      "passed": true,
+      "detail": "Expected 50 presence entries."
+    },
+    {
+      "id": "chat-visibility",
+      "label": "Concurrent messages are visible across sessions",
+      "passed": true,
+      "detail": "50 simultaneous message submissions checked from three sessions."
+    },
+    {
+      "id": "task-visibility",
+      "label": "Concurrent task updates are visible across sessions",
+      "passed": true,
+      "detail": "50 independently assigned task updates checked from three sessions."
+    },
+    {
+      "id": "movement-visibility",
+      "label": "Latest movement coordinates reach other sessions",
+      "passed": true,
+      "detail": "Observers agree with the last acknowledged position for every client."
+    },
+    {
+      "id": "tenant-isolation",
+      "label": "Other-company sessions cannot read or write the office",
+      "passed": true,
+      "detail": "Four cross-tenant HTTP requests were denied."
+    },
+    {
+      "id": "identity-binding",
+      "label": "Stale browser identity cannot overwrite presence",
+      "passed": true,
+      "detail": "A mismatched identity assertion was rejected."
+    },
+    {
+      "id": "session-expiry",
+      "label": "Expired authentication cannot read a workspace",
+      "passed": true,
+      "detail": "The deliberately expired sentinel session received HTTP 401."
+    },
+    {
+      "id": "presence-expiry",
+      "label": "Disconnected clients disappear after the real presence TTL",
+      "passed": true,
+      "detail": "5 clients stopped sending heartbeats for at least 47 seconds; 45 remained active."
+    },
+    {
+      "id": "reconnect",
+      "label": "Reconnected clients return without duplicate occupants",
+      "passed": true,
+      "detail": "The same valid sessions rejoined through real HTTP presence writes."
+    },
+    {
+      "id": "source-isolation",
+      "label": "Next generated files stayed in an owned source copy",
+      "passed": true,
+      "detail": "Source/build copy retained under .devdata; its dependency link was removed without changing installed dependencies."
+    },
+    {
+      "id": "request-errors",
+      "label": "Measured HTTP requests completed without unexpected errors",
+      "passed": true,
+      "detail": "0 unexpected errors among 5408 measured requests."
+    },
+    {
+      "id": "cleanup",
+      "label": "Only the exact test identities and companies were cleaned up",
+      "passed": true,
+      "detail": "Owned server stopped, exact fixture IDs removed, fixture database connection closed."
+    },
+    {
+      "id": "latency-budget",
+      "label": "p95 request latency meets the 1,000 ms budget",
+      "passed": true,
+      "detail": "Measured p95 13.8 ms; 0 unexpected errors. Correctness is reported separately."
+    }
+  ],
+  "environment": {
+    "applicationMode": "production",
+    "database": "PostgreSQL",
+    "databaseVersion": "17.11 (Debian 17.11-1.pgdg13+2)",
+    "isolated": true,
+    "origin": "http://127.0.0.1:4196",
+    "databasePoolMax": 5,
+    "floor": {
+      "width": 30,
+      "depth": 20
+    },
+    "layoutItems": 148,
+    "uniqueAssetCount": 25,
+    "limitations": [
+      "Real Next HTTP requests with separate authenticated sessions; no browser rendering, assets, WebRTC or network geography are measured.",
+      "An isolated local PostgreSQL service measures real database concurrency. It does not establish Vercel capacity, internet latency or worldwide scale.",
+      "Authentication sessions are inserted only into the owned fixture; signup/password hashing is outside the measured workload."
+    ]
+  },
+  "policy": {
+    "workspaceMs": 5000,
+    "presencePollMs": 2000,
+    "movementMs": 1000,
+    "sessionMs": 15000,
+    "noOverlap": true
+  },
+  "metrics": [
+    {
+      "operation": "session-read",
+      "requests": 206,
+      "unexpectedErrors": 0,
+      "errorRate": 0,
+      "p50Ms": 5.47,
+      "p95Ms": 8.67,
+      "maxMs": 99.8,
+      "bytesReceived": 87092
+    },
+    {
+      "operation": "presence-read",
+      "requests": 1501,
+      "unexpectedErrors": 0,
+      "errorRate": 0,
+      "p50Ms": 4.59,
+      "p95Ms": 8.75,
+      "maxMs": 151.32,
+      "bytesReceived": 15610220
+    },
+    {
+      "operation": "workspace-read",
+      "requests": 600,
+      "unexpectedErrors": 0,
+      "errorRate": 0,
+      "p50Ms": 9.4,
+      "p95Ms": 13.82,
+      "maxMs": 251.96,
+      "bytesReceived": 59761577
+    },
+    {
+      "operation": "chat-write",
+      "requests": 50,
+      "unexpectedErrors": 0,
+      "errorRate": 0,
+      "p50Ms": 228.25,
+      "p95Ms": 260.75,
+      "maxMs": 272.38,
+      "bytesReceived": 12681
+    },
+    {
+      "operation": "presence-write",
+      "requests": 3001,
+      "unexpectedErrors": 0,
+      "errorRate": 0,
+      "p50Ms": 7,
+      "p95Ms": 13.04,
+      "maxMs": 276.73,
+      "bytesReceived": 31209987
+    },
+    {
+      "operation": "task-write",
+      "requests": 50,
+      "unexpectedErrors": 0,
+      "errorRate": 0,
+      "p50Ms": 222.99,
+      "p95Ms": 267.78,
+      "maxMs": 277.02,
+      "bytesReceived": 21790
+    }
+  ],
+  "cleanup": {
+    "verified": true,
+    "remainingUsers": 0,
+    "remainingCompanies": 0
+  },
+  "reference": {
+    "sourceCommit": "2eb14ac2b69cb73c0ff96bcef3867bd64aed35d3",
+    "ciUrl": "https://github.com/stratostormstudios/coatria/actions/runs/34540216174"
+  }
+}

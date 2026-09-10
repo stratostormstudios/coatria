@@ -2,7 +2,9 @@
 
 The 50-person studio and Test lab are prepared for release. The office has 50 independent workstations and 148 furnishings on a 30 × 20 metre floor. Administrators can apply it as an editable draft and run browser simulations with 10, 25 or 50 people. The isolated HTTP harness tests 50 authenticated sessions against a production Next build and fresh PostgreSQL service. See the [scale testing guide](SCALE_TESTING.md) for controls, evidence and capacity limits.
 
-Renderer testing on Edge 152 with an AMD Radeon 890M at 1536 × 1000, DPR 1, measured 60.0 FPS with all 50 characters moving and 148 furnishings loaded in balanced quality; rendered-frame p95 was 16.8 ms. Low quality reached its 30 FPS cap, with frame p95 33.4 ms. These are device-specific steady-state samples, not general hardware or hosting guarantees. Production-database CI and publication evidence will be recorded below.
+Renderer testing on Edge 152 with an AMD Radeon 890M at 1536 × 1000, DPR 1, measured 60.0 FPS with all 50 characters moving and 148 furnishings loaded in balanced quality; rendered-frame p95 was 16.8 ms. Low quality reached its 30 FPS cap, with frame p95 33.4 ms. These are device-specific steady-state samples, not general hardware or hosting guarantees. The full 60-second user-facing moving scenario also passed: average 59.96 FPS, worst sampled frame p95 17.1 ms, all assets loaded and no runtime errors.
+
+[PostgreSQL CI reference run 34540216174](https://github.com/stratostormstudios/coatria/actions/runs/34540216174) passed for source `2eb14ac2b69cb73c0ff96bcef3867bd64aed35d3`: 50 sessions, 5,408 requests in 60.01 seconds, p95 13.8 ms, zero errors, all 14 checks and cleanup passed. This is isolated loopback CI, not Coatria.com capacity. The application job passed 95 of 96 tests; the only skip is private licensed-file inspection, verified locally. History credential scanning, audit (zero vulnerabilities), TypeScript, source-only CI build and licensed local build passed. Browser coverage includes 36 tester/navigation/synchronization/reference cases and 19 renderer regressions. Publication evidence follows after promotion.
 
 ## Earlier office-furniture release
 
