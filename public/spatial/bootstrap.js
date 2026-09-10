@@ -9,6 +9,19 @@ function disposeSkeletons(model) {
   skeletons.forEach(skeleton => skeleton.dispose());
 }
 
+// SkeletonUtils clones each skinned primitive separately. Primitives of one
+// character often use identical cloned bones/inverses; share that skeleton's
+// matrix buffer within the character, never between different people.
+function shareCharacterSkeletons(model) {
+  const byBones=new Map();
+  model.traverse(object=>{
+    const skeleton=object.skeleton;if(!skeleton)return;
+    const key=skeleton.bones.map(bone=>bone.uuid).join(','),existing=byBones.get(key);
+    if(existing&&existing.boneInverses.length===skeleton.boneInverses.length&&existing.boneInverses.every((matrix,index)=>matrix.equals(skeleton.boneInverses[index]))){object.skeleton=existing;if(skeleton!==existing)skeleton.dispose();}
+    else byBones.set(key,skeleton);
+  });
+}
+
 function disposeSource(model) {
   const geometry = new Set(), materials = new Set(), textures = new Set(), images = new Set();
   model.traverse(object => {
@@ -73,6 +86,7 @@ export function createCharacterLibrary({ userId, selectAvatar }) {
     const source = await entry.promise;
     assertOpen();
     const scene = cloneSkeleton(source.scene);
+    shareCharacterSkeletons(scene);
     let released = false;
     const lease = {
       scene, animations: source.animations, metadata,

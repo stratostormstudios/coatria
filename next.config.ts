@@ -1,5 +1,8 @@
 import type { NextConfig } from 'next';
+const testBuildDirectory=process.env.COATRIA_BUILD_DIR;
+if(testBuildDirectory&&!/^\.next-(?:load|test)(?:-[a-z0-9-]{1,40})?$/.test(testBuildDirectory))throw new Error('COATRIA_BUILD_DIR must name a local .next-load or .next-test directory.');
 const config: NextConfig = {
+  ...(testBuildDirectory?{distDir:testBuildDirectory}:{}),
   poweredByHeader: false,
   // Purchased runtime models are supplied privately by the licensed operator.
   // They are not public files or part of the open-source repository.

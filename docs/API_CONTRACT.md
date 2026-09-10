@@ -20,7 +20,7 @@ All API JSON response data is camelCase. Errors: `{error: string, code?: string}
 - Room `{id,name,kind:'meeting'|'focus'|'lounge'|'auditorium',capacity}`.
 - Member `{id,userId,name,email,role,roleTitle,avatarColor,avatarId:string|null}`.
 - Presence `{userId,name,avatarColor,avatarId:string|null,roomId,x,z,status,updatedAt}` expires after 45 seconds.
-- POST /api/companies/:id/presence `{roomId:string|null,x:number,z:number,status:'available'|'focus'|'away'}` -> `{presence}` including current users; heartbeat ~15s, client refresh ~5s visible only. Bounds -20..20.
+- POST /api/companies/:id/presence `{roomId:string|null,x:number,z:number,status:'available'|'focus'|'away'}` -> `{presence}` including current users; heartbeat ~15s, movement writes at most once per second; presence reads ~2s on visible Office/People/Rooms and workspace refresh ~5s. Bounds -20..20.
 - GET /api/companies/:id/presence -> `{presence}`.
 - POST /api/companies/:id/rooms `{name,kind,capacity}` -> `{room}` admin only.
 - PATCH /api/companies/:id/layout `{layout: LayoutItem[]}` -> `{layout}` admin only. LayoutItem `{id,type:'desk'|'meeting'|'focus'|'lounge'|'plant',x,y,w,h,label}` bounds numbers 0..100.

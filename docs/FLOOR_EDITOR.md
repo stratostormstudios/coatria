@@ -43,7 +43,7 @@ The existing `companies.layout` JSONB field stores a versioned document: `{versi
 
 The floor slab, exterior, picking surface, camera framing, shadows and walking grid adapt to the saved dimensions. Each furniture group—including its chairs—fits the saved axis-aligned footprint. Quarter-turn rotation transforms its meshes, picking regions and collision boundaries together. Existing presence positions are clamped to the new usable floor. Straight movement segments are checked against obstacles to avoid cutting through corners.
 
-There are at most 100 objects on a rectangular floor. This release does not add freeform wall drawing, multi-storey buildings, automatic seating assignments, arbitrary angles, multi-selection or CAD export. Spatial furniture does not itself create room conversations or grant access.
+There are at most 180 objects on a rectangular floor. This release does not add freeform wall drawing, multi-storey buildings, automatic seating assignments, arbitrary angles, multi-selection or CAD export. Spatial furniture does not itself create room conversations or grant access.
 
 ## Earlier floor-editor release verification
 

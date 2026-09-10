@@ -1,5 +1,7 @@
 node_modules/
 .next/
+.next-load/
+load-reports/
 .vercel/
 .env
 .env.*

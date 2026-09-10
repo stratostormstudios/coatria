@@ -26,7 +26,19 @@ export function mount(host, options = {}) {
   let scene, camera, renderer, controls, sun, player, selectionRing, destinationRing;
   const geometries = new Map(), materials = new Map(), clickable = [], characters = [], labels = [], obstacles = [], listeners = [], officeAssets = [];
   const officeCatalog = new Map((options.officeCatalog || []).map(asset => [asset.id, asset]));
-  let framingHeight = 3.8;
+  let framingHeight = 3.8,shadowDirty=true,lastShadowUpdate=0;
+  const assetBatches=new Map(),assetOccurrences=new Map();
+  for(const item of options.layout||[])if(item.assetId)assetOccurrences.set(item.assetId,(assetOccurrences.get(item.assetId)||0)+1);
+  // Bounded CPU-side observations. These are not GPU timings or connection load.
+  const frameSamples=[],routeQueue=new Map(),pathMetrics={requests:0,lastMs:0,maxMs:0,pending:0,routesLastFrame:0,processingMs:0};
+  let mixerUpdatesLastFrame=0,lastVisibilityUpdate=0,visibilityDirty=true,lastRenderedFrame=0,sceneVisible=true,hoveredLabel=null;
+  const labelStats={full:0,compact:0,hidden:0,total:0},labelMeasure=document.createElement('canvas').getContext('2d');if(labelMeasure)labelMeasure.font='650 10px system-ui';
+  const animationBudget={visibleHumans:0,fullRateHumans:0,reducedRateHumans:0,culledHumans:0,fullRateBudget:24};
+  const viewFrustum=new THREE.Frustum(),viewProjection=new THREE.Matrix4(),characterSphere=new THREE.Sphere(new THREE.Vector3(),1.7),labelProjection=new THREE.Vector3();
+  function percentile(values,fraction){if(!values.length)return 0;const sorted=[...values].sort((a,b)=>a-b);return sorted[Math.max(0,Math.ceil(sorted.length*fraction)-1)];}
+  function performanceSnapshot(){const count=frameSamples.length,total=frameSamples.reduce((sum,sample)=>sum+sample.frameMs,0),pair=(key,samples=frameSamples)=>({p50:percentile(samples.map(sample=>sample[key]),.5),p95:percentile(samples.map(sample=>sample[key]),.95),max:Math.max(0,...samples.map(sample=>sample[key]))}),renderedSamples=frameSamples.filter(sample=>sample.rendered&&sample.renderIntervalMs>0);const state=disposed?'disposed':document.hidden||!sceneVisible?'suspended':walking||routeQueue.size||characters.some(c=>!c.robot&&(c.motionSpeed>0||c.mixer&&c.animationHz>0&&!reducedMotion))?'active':'idle',suspended=state==='disposed'||state==='suspended';return{state,sampleCount:count,renderedSampleCount:renderedSamples.length,windowSeconds:total/1000,fps:!suspended&&total?frameSamples.filter(sample=>sample.rendered).length*1000/total:0,loopFps:!suspended&&total?count*1000/total:0,frameMs:pair('renderIntervalMs',renderedSamples),loopFrameMs:pair('frameMs'),workMs:pair('workMs'),animationMs:pair('animationMs'),renderMs:pair('renderMs'),labelsMs:pair('labelsMs'),drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,peakDrawCalls:Math.max(0,...frameSamples.map(sample=>sample.drawCalls)),peakTriangles:Math.max(0,...frameSamples.map(sample=>sample.triangles)),shadowUpdates:frameSamples.filter(sample=>sample.shadowUpdated).length};}
+  function resourceSnapshot(){let skinnedMeshes=0;const skeletons=new Set(),bones=new Set();scene.traverse(object=>{if(object.isSkinnedMesh){skinnedMeshes++;if(object.skeleton&&!skeletons.has(object.skeleton)){skeletons.add(object.skeleton);object.skeleton.bones.forEach(bone=>bones.add(bone));}}});return{geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,programs:renderer.info.programs?.length||0,loadedCharacterModels:characters.filter(c=>c.model).length,skinnedMeshes,bones:bones.size,skeletons:skeletons.size,instancedBatches:assetBatches.size,pickTargets:clickable.length};}
+  function resetPerformance(){frameSamples.length=0;lastRenderedFrame=0;pathMetrics.requests=0;pathMetrics.lastMs=0;pathMetrics.maxMs=0;}
   const hostClass = host.className;
   host.classList.add('cs-scene');
   host.innerHTML = `<div class="cs-scene-stage" tabindex="0" role="application" aria-label="Interactive 3D office. Drag to orbit, scroll to zoom, click the floor to walk. Use the labeled people and room buttons or the office List view for keyboard navigation."></div>
@@ -36,8 +48,9 @@ export function mount(host, options = {}) {
     <div class="cs-scene-bottom"><div class="cs-scene-help"><span class="cs-scene-mouse">↗</span><span><strong>Make yourself at home.</strong><small>Click to walk · Drag to orbit · Scroll to zoom</small></span></div>
     <div class="cs-scene-controls" aria-label="3D view controls"><button type="button" data-scene="zoom-out" aria-label="Zoom out" title="Zoom out">−</button><button type="button" data-scene="reset" aria-label="Reset camera" title="Reset camera"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/></svg></button><button type="button" data-scene="zoom-in" aria-label="Zoom in" title="Zoom in">+</button><span></span><button type="button" data-scene="quality" aria-label="Graphics quality: ${quality}. Switch quality." title="Switch graphics quality">${quality === 'low' ? 'Low' : 'Balanced'}</button></div></div>
     <div class="cs-scene-status" aria-live="polite">${custom && !options.layout?.length ? 'An empty floor, ready for your first room.' : 'Click a person, an AI coworker, or a desk to connect.'}</div>
-    <div class="cs-scene-key"><span><i></i> HUMAN</span><span><i class="ai"></i> AI AGENT</span><span class="cs-scene-prototype">Presence refreshes every 5 seconds</span></div>`;
+    <div class="cs-scene-key"><span><i></i> HUMAN</span><span><i class="ai"></i> AI AGENT</span><span class="cs-scene-prototype">Presence refreshes every 2 seconds</span></div>`;
   const stage = host.querySelector('.cs-scene-stage'), labelHost = host.querySelector('.cs-scene-labels'), context = host.querySelector('.cs-scene-context'), status = host.querySelector('.cs-scene-status');
+  const labelStyle=document.createElement('style');labelStyle.textContent='.cs-scene-label[data-label-mode="compact"]{display:grid;place-items:center;width:18px;height:18px;min-width:18px;padding:0;border-radius:50%;font-size:0!important;line-height:0;box-shadow:0 1px 4px #293f2720;backdrop-filter:none}.cs-scene-label[data-label-mode="compact"]::before{margin:0;width:6px;height:6px}.cs-scene-label[data-label-mode="compact"]:not(.is-person):not(.is-you):not(.is-ai)::before{content:"";width:6px;height:6px;background:currentColor;border-radius:2px}';host.append(labelStyle);
   const on = (el, event, fn, opts) => { el.addEventListener(event, fn, opts); listeners.push(() => el.removeEventListener(event, fn, opts)); };
   const say = message => { status.textContent = message; };
   try {
@@ -55,6 +68,7 @@ export function mount(host, options = {}) {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.07;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.autoUpdate=false;
   scene = new THREE.Scene();
   scene.background = new THREE.Color('#e9ede7');
   camera = new THREE.OrthographicCamera(-15, 15, 13, -13, .1, 180*Math.max(1,sceneScale));
@@ -68,7 +82,7 @@ export function mount(host, options = {}) {
   controls.minPolarAngle = .35; controls.maxPolarAngle = Math.PI / 2.6;
   controls.mouseButtons = {LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN};
   controls.touches = {ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN};
-  controls.addEventListener('change', () => { dirty = true; });
+  controls.addEventListener('change', () => { dirty = true;visibilityDirty=true; });
   scene.add(new THREE.HemisphereLight('#f8fcff', '#7a8770', 1.8));
   const fill = new THREE.DirectionalLight('#c7dfe8', 1.15); fill.position.set(-12, 7, 4); scene.add(fill);
   sun = new THREE.DirectionalLight('#fff1d6', 3.4);
@@ -117,7 +131,8 @@ export function mount(host, options = {}) {
     const el = document.createElement('button'); el.type='button'; el.className='cs-scene-label '+className; el.textContent=text;
     el.setAttribute('aria-label', data.type==='room' ? `View ${text}` : `Select ${text}`);
     el.onclick = event=>{event.stopPropagation(); select(data);};
-    labelHost.append(el); labels.push({el,position:new THREE.Vector3(x,y,z),data});
+    const item={el,position:new THREE.Vector3(x,y,z),data};labelHost.append(el);labels.push(item);el.title=text;
+    el.onpointerenter=()=>{hoveredLabel=item;dirty=true;};el.onpointerleave=()=>{if(hoveredLabel===item)hoveredLabel=null;dirty=true;};el.onfocus=()=>{dirty=true;};el.onblur=()=>{dirty=true;};
   }
   function updateAssetNotice() {
     if(disposed)return;
@@ -130,6 +145,19 @@ export function mount(host, options = {}) {
     entry.footprint.meshBounds={...bounds};entry.footprint.furnitureBounds={...bounds};
     if(entry.obstacle)Object.assign(entry.obstacle,bounds);
     entry.data.bounds={...bounds};
+  }
+  function freezeStatic(root){root.updateMatrixWorld(true);root.traverse(object=>{object.matrixAutoUpdate=false;object.matrixWorldAutoUpdate=false;});}
+  function instanceAsset(entry){
+    // One GPU draw per shared primitive, while every placed object retains its
+    // own logical model, exact bounds, pick proxy, and source-resource lease.
+    const parts=[],counts=new Map();
+    entry.model.traverse(object=>{if(!object.isMesh||object.isSkinnedMesh)return;const materialKey=(Array.isArray(object.material)?object.material:[object.material]).map(material=>material.uuid).join(','),key=object.geometry.uuid+':'+materialKey+':'+object.castShadow;parts.push({object,key});counts.set(key,(counts.get(key)||0)+1);});
+    for(const {object,key} of parts){
+      let batch=assetBatches.get(key);
+      if(!batch){batch=new THREE.InstancedMesh(object.geometry,object.material,Math.max(1,(assetOccurrences.get(entry.assetId)||1)*counts.get(key)));batch.count=0;batch.name='office-asset-batch:'+entry.assetId;batch.castShadow=object.castShadow;batch.receiveShadow=true;batch.frustumCulled=false;assetLayer.add(batch);freezeStatic(batch);assetBatches.set(key,batch);}
+      batch.setMatrixAt(batch.count++,object.matrixWorld);batch.instanceMatrix.needsUpdate=true;
+    }
+    entry.alignment.visible=false;
   }
   async function loadOfficeAsset(entry) {
     if(disposed||entry.status==='loading')return;
@@ -150,6 +178,7 @@ export function mount(host, options = {}) {
       const bounds=new THREE.Box3().setFromObject(alignment);setAssetBounds(entry,bounds);
       const actual=bounds.getSize(new THREE.Vector3());entry.height=actual.y;entry.scale={x:sx,y:sy,z:sz};
       entry.hit.scale.set(size.x*sx,Math.max(.06,actual.y),size.z*sz);entry.hit.position.y=Math.max(.06,actual.y)/2;
+      instanceAsset(entry);freezeStatic(entry.root);shadowDirty=true;
       if(bounds.max.y>framingHeight){framingHeight=bounds.max.y;resize();}
       dirty=true;
     } catch {
@@ -399,6 +428,7 @@ export function mount(host, options = {}) {
     }
   }
   batchStatic();
+  freezeStatic(architecture);
 
   function human(name,id,x,z,look={},you=false) {
     if(custom){const spot=nearestOpen(x,z);x=spot.x;z=spot.z;}
@@ -457,10 +487,10 @@ export function mount(host, options = {}) {
   function removeCharacter(c) {
     if(c.you)return;
     if(selected===c.data){selected=null;context.hidden=true;selectionRing.visible=false;}
-    c.removed=true;c.assetRevision++;releaseCharacterModel(c);c.g.removeFromParent();c.hit.removeFromParent();c.hit.material.dispose();
+    c.removed=true;c.assetRevision++;releaseCharacterModel(c);c.g.removeFromParent();c.hit.removeFromParent();c.hit.material.dispose();visibilityDirty=true;routeQueue.delete(c.id);pathMetrics.pending=routeQueue.size;
     clickable.splice(clickable.indexOf(c.hit),1);
-    if(c.label){c.label.el.onclick=null;c.label.el.remove();labels.splice(labels.indexOf(c.label),1);}
-    characters.splice(characters.indexOf(c),1);dirty=true;
+    if(c.label){if(hoveredLabel===c.label)hoveredLabel=null;c.label.el.onclick=null;c.label.el.remove();labels.splice(labels.indexOf(c.label),1);}
+    characters.splice(characters.indexOf(c),1);dirty=true;shadowDirty=true;
   }
   function updateSnapshot(snapshot={}) {
     if(disposed)return;
@@ -485,9 +515,9 @@ export function mount(host, options = {}) {
       const distance=Math.hypot(point.x-c.g.position.x,point.z-c.g.position.z);
       if(c.lastPresenceAt!==record.updatedAt){
         c.lastPresenceAt=record.updatedAt;
-        if(reducedMotion||distance>8){c.g.position.set(point.x,0,point.z);c.path=[];c.speed=0;c.motionSpeed=0;}
-        else if(distance>.025)c.path=findPath({x:c.g.position.x,z:c.g.position.z},point)||[];
-        else {c.path=[];c.speed=0;c.motionSpeed=0;}
+        if(reducedMotion||distance>8){routeQueue.delete(c.id);c.g.position.set(point.x,0,point.z);c.path=[];c.speed=0;c.motionSpeed=0;}
+        else if(distance>.025)routeQueue.set(c.id,{character:c,target:point});
+        else {routeQueue.delete(c.id);c.path=[];c.speed=0;c.motionSpeed=0;}
       }
       updateCharacter(c);
     }
@@ -502,11 +532,11 @@ export function mount(host, options = {}) {
       c.data.description=`AI agent · ${String(agent.harness||'Connected harness')}. A recent API heartbeat was received. Company-scoped access remains under its sponsor's control.`;
     });
     for(const c of [...characters])if(!c.you&&!wanted.has(`${c.robot?'agent':'person'}:${c.id}`))removeCharacter(c);
-    dirty=true;
+    dirty=true;visibilityDirty=true;pathMetrics.pending=routeQueue.size;
   }
 
   function select(data) {
-    selected=data;
+    selected=data;visibilityDirty=true;
     const person=characters.find(c=>c.data===data),p=person?.g.position || data;
     selectionRing.position.set(p.x,.084,p.z);selectionRing.visible=true;
     const type=data.type==='agent'?'AI COWORKER':data.type==='person'?(data.you?'YOUR CHARACTER':'TEAM MEMBER'):data.type==='desk'?'WORKSTATION':data.type==='furniture'?'FURNITURE':'SHARED SPACE';
@@ -539,6 +569,21 @@ export function mount(host, options = {}) {
     return{x:THREE.MathUtils.clamp(0,nav.minX,nav.maxX),z:nav.maxZ};
   }
   function findPath(from,target) {
+    const started=performance.now();pathMetrics.requests++;
+    try{return computePath(from,target);}finally{pathMetrics.lastMs=performance.now()-started;pathMetrics.maxMs=Math.max(pathMetrics.maxMs,pathMetrics.lastMs);}
+  }
+  function processRouteQueue(){
+    const started=performance.now();let completed=0;
+    // A presence burst never computes dozens of detours in one UI event. Keep
+    // only each person's latest target; start the route from their current pose.
+    for(const [id,job] of routeQueue){
+      if(completed>=4||performance.now()-started>=3)break;
+      routeQueue.delete(id);const c=job.character;if(c.removed)continue;
+      c.path=findPath({x:c.g.position.x,z:c.g.position.z},job.target)||[];completed++;
+    }
+    pathMetrics.pending=routeQueue.size;pathMetrics.routesLastFrame=completed;pathMetrics.processingMs=performance.now()-started;
+  }
+  function computePath(from,target) {
     if(!open(from.x,from.z)||!open(target.x,target.z))return null;
     const clear=(a,b)=>{
       if(!open(a.x,a.z)||!open(b.x,b.z))return false;
@@ -616,16 +661,22 @@ export function mount(host, options = {}) {
   function reset(){camera.position.set(24*sceneScale,27*sceneScale,29*sceneScale);controls.target.set(0,.2,0);camera.zoom=1;camera.updateProjectionMatrix();controls.update();dirty=true;say('Camera reset. Click the floor to walk.');}
   function setQuality(value) {
     quality=value==='low'?'low':'balanced';renderer.setPixelRatio(quality==='low'?1:Math.min(window.devicePixelRatio||1,1.6));
-    renderer.shadowMap.enabled=quality!=='low';sun.shadow.mapSize.set(1024,1024);
-    if(sun.shadow.map){sun.shadow.map.dispose();sun.shadow.map=null;}
+    const shadowsEnabled=quality!=='low',shadowModeChanged=renderer.shadowMap.enabled!==shadowsEnabled;
+    renderer.shadowMap.enabled=shadowsEnabled;sun.shadow.mapSize.set(1024,1024);
+    // Shadow availability changes shader defines. The renderer does not treat
+    // this global toggle as a material version change; invalidate once so low
+    // mode cannot keep sampling the disposed balanced-mode shadow texture.
+    if(shadowModeChanged){const changed=new Set();scene.traverse(object=>{if(object.material)(Array.isArray(object.material)?object.material:[object.material]).forEach(material=>changed.add(material));});changed.forEach(material=>{material.needsUpdate=true;});}
+    if(shadowModeChanged&&sun.shadow.map){sun.shadow.map.dispose();sun.shadow.map=null;}
     const button=host.querySelector('[data-scene="quality"]');button.textContent=quality==='low'?'Low':'Balanced';button.setAttribute('aria-label',`Graphics quality: ${quality}. Switch quality.`);
-    options.onQualityChange?.(quality);dirty=true;return quality;
+    options.onQualityChange?.(quality);dirty=true;shadowDirty=true;visibilityDirty=true;return quality;
   }
   function resize(){if(disposed)return;const width=stage.clientWidth,height=stage.clientHeight;if(!width||!height)return;renderer.setSize(width,height,false);const aspect=width/height;const right=new THREE.Vector3(29,0,-24).normalize(),up=new THREE.Vector3().crossVectors(new THREE.Vector3(24,27,29).normalize(),right).normalize();const halfX=(floor.width*Math.abs(right.x)+floor.depth*Math.abs(right.z))/2+.6;const halfY=(floor.width*Math.abs(up.x)+floor.depth*Math.abs(up.z))/2+framingHeight*Math.abs(up.y)+.4;const halfH=Math.max(halfY*1.18,halfX/aspect*1.18);camera.left=-halfH*aspect;camera.right=halfH*aspect;camera.top=halfH;camera.bottom=-halfH;camera.updateProjectionMatrix();dirty=true;}
   const resizeObserver=new ResizeObserver(resize);resizeObserver.observe(stage);
+  const intersectionObserver=typeof IntersectionObserver==='function'?new IntersectionObserver(entries=>{const visible=entries.some(entry=>entry.isIntersecting);if(sceneVisible!==visible){sceneVisible=visible;lastFrame=0;lastRenderedFrame=0;dirty=true;}}):null;intersectionObserver?.observe(stage);
   // Tear down if navigation removes the host, including failed routes/re-renders.
   const mutationObserver=new MutationObserver(()=>{if(!host.isConnected)dispose();});mutationObserver.observe(document.body,{childList:true,subtree:true});
-  on(document,'visibilitychange',()=>{dirty=true;});
+  on(document,'visibilitychange',()=>{dirty=true;lastFrame=0;lastRenderedFrame=0;});
   function updateCharacter(c){c.hit.position.set(c.g.position.x,1.2,c.g.position.z);if(c.label)c.label.position.set(c.g.position.x,c.robot?2.38:2.52,c.g.position.z);if(selected===c.data)selectionRing.position.set(c.g.position.x,.084,c.g.position.z);}
   function requestCharacter(c,avatarId){
     if(!options.loadCharacter||c.robot||c.removed||disposed)return;
@@ -668,6 +719,16 @@ export function mount(host, options = {}) {
     if(travelled){updateCharacter(c);dirty=true;}
     return travelled>.0001;
   }
+  function updateAnimationBudget(now){
+    if(!visibilityDirty&&now-lastVisibilityUpdate<200)return;
+    lastVisibilityUpdate=now;visibilityDirty=false;camera.updateMatrixWorld();viewProjection.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);viewFrustum.setFromProjectionMatrix(viewProjection);
+    const humans=characters.filter(c=>!c.robot),visible=[];
+    for(const c of humans){characterSphere.center.set(c.g.position.x,1.1,c.g.position.z);const inView=viewFrustum.intersectsSphere(characterSphere);if(c.g.visible!==inView)shadowDirty=true;c.g.visible=inView;c.inView=inView;c.animationHz=0;if(inView)visible.push(c);}
+    visible.sort((a,b)=>{const rank=c=>c.you?0:selected===c.data?1:(c.motionSpeed||0)>.02?2:3;return rank(a)-rank(b)||Math.hypot(a.g.position.x-controls.target.x,a.g.position.z-controls.target.z)-Math.hypot(b.g.position.x-controls.target.x,b.g.position.z-controls.target.z);});
+    const budget=quality==='low'?12:24;
+    visible.forEach((c,index)=>{c.animationHz=index<budget?(quality==='low'?30:60):(c.motionSpeed||0)>.02?(quality==='low'?15:20):(quality==='low'?5:8);});
+    Object.assign(animationBudget,{visibleHumans:visible.length,fullRateHumans:Math.min(budget,visible.length),reducedRateHumans:Math.max(0,visible.length-budget),culledHumans:humans.length-visible.length,fullRateBudget:budget});
+  }
   function updateLocomotion(c,dt){
     const speed=reducedMotion?0:c.motionSpeed||0;
     if(c.mixer){
@@ -681,7 +742,8 @@ export function mount(host, options = {}) {
       c.walkAction.setEffectiveTimeScale(Math.max(.1,speed/(c.referenceSpeed||2.2)));
       c.walkAction.paused=speed<.015&&c.walkBlend===0;
       c.currentMotion=c.walkBlend>.01?'walk':'idle';
-      if(!reducedMotion){c.mixer.update(dt);dirty=true;}
+      c.poseElapsed=Math.min(.25,(c.poseElapsed||0)+dt);
+      if(!reducedMotion&&c.animationHz>0&&c.poseElapsed>=1/c.animationHz-.001){c.mixer.update(c.poseElapsed);c.poseElapsed=0;mixerUpdatesLastFrame++;dirty=true;}
     }else if(c.body.visible){
       const moving=speed>.02;
       if(moving){c.phase+=dt*8*speed/2.2;c.legs[0].rotation.x=Math.sin(c.phase)*.42;c.legs[1].rotation.x=-Math.sin(c.phase)*.42;c.arms[0].rotation.x=-Math.sin(c.phase)*.3;c.arms[1].rotation.x=Math.sin(c.phase)*.3;c.body.position.y=Math.abs(Math.sin(c.phase))*.025;dirty=true;}
@@ -689,11 +751,19 @@ export function mount(host, options = {}) {
       c.wasMoving=moving;
     }
   }
-  function updateLabels(){const width=stage.clientWidth,height=stage.clientHeight;for(const item of labels){const q=item.position.clone().project(camera);const x=(q.x*.5+.5)*width,y=(-q.y*.5+.5)*height;item.el.style.transform=`translate(-50%, -100%) translate(${x}px, ${y}px)`;item.el.style.visibility=q.z>1||x<15||x>width-15||y<20||y>height-90?'hidden':'visible';}}
+  function updateLabels(){
+    const width=stage.clientWidth,height=stage.clientHeight,projected=[],occupied=[];Object.assign(labelStats,{full:0,compact:0,hidden:0,total:labels.length});
+    for(const item of labels){const q=labelProjection.copy(item.position).project(camera);item.screenX=Math.round((q.x*.5+.5)*width*10)/10;item.screenY=Math.round((-q.y*.5+.5)*height*10)/10;const hidden=q.z>1||q.z< -1||item.screenX<15||item.screenX>width-15||item.screenY<20||item.screenY>height-90;const visibility=hidden?'hidden':'visible';if(item.lastVisibility!==visibility){item.el.style.visibility=visibility;item.lastVisibility=visibility;}if(hidden){labelStats.hidden++;continue;}projected.push(item);}
+    const priority=item=>document.activeElement===item.el?-2:hoveredLabel===item?-1:selected===item.data?0:item.data.you?1:item.data.type==='room'?2:item.el.dataset.labelMode==='full'?3:4;
+    projected.sort((a,b)=>priority(a)-priority(b)||Math.abs(a.screenX-width/2)-Math.abs(b.screenX-width/2));
+    for(const item of projected){const text=item.el.textContent||'';if(item.measuredText!==text){item.measuredText=text;item.labelWidth=Math.min(190,(labelMeasure?.measureText(text.toUpperCase()).width||text.length*8)+28);item.el.title=text;}const fullX=THREE.MathUtils.clamp(item.screenX,item.labelWidth/2+6,width-item.labelWidth/2-6),fullY=Math.max(34,item.screenY),rect={left:fullX-item.labelWidth/2,right:fullX+item.labelWidth/2,top:fullY-28,bottom:fullY+4};const compact=occupied.some(other=>rect.left<other.right&&rect.right>other.left&&rect.top<other.bottom&&rect.bottom>other.top);const mode=compact?'compact':'full';if(!compact)occupied.push(rect);labelStats[mode]++;if(item.el.dataset.labelMode!==mode)item.el.dataset.labelMode=mode;item.el.style.zIndex=compact?'1':priority(item)<3?'3':'2';const transform=`translate(-50%, -100%) translate(${compact?item.screenX:fullX}px, ${compact?item.screenY:fullY}px)`;if(item.lastTransform!==transform){item.el.style.transform=transform;item.lastTransform=transform;}}
+  }
   function animate(now) {
-    if(disposed)return;frame=requestAnimationFrame(animate);if(document.hidden){lastFrame=now;return;}
-    const dt=Math.min((now-lastFrame)/1000,.05);if(now-lastFrame<1000/(quality==='low'?30:60)-1)return;lastFrame=now;
+    if(disposed)return;frame=requestAnimationFrame(animate);if(document.hidden||!sceneVisible){lastFrame=0;lastRenderedFrame=0;return;}
+    const measured=lastFrame>0,elapsed=now-lastFrame,dt=Math.min(elapsed/1000,.05);if(elapsed<1000/(quality==='low'?30:60)-1)return;lastFrame=now;
+    const workStarted=performance.now();mixerUpdatesLastFrame=0;
     controls.update();
+    processRouteQueue();
     if(now-lastExpiryCheck>1000){lastExpiryCheck=now;for(const c of [...characters])if(!c.you&&c.expiresAt<=Date.now())removeCharacter(c);}
     if(walking&&path.length){
       advanceCharacter(player,path,dt);
@@ -703,8 +773,12 @@ export function mount(host, options = {}) {
     for(const c of characters)if(!c.you&&!c.robot){
       advanceCharacter(c,c.path,dt);
     }
+    const animationStarted=performance.now();updateAnimationBudget(now);
     for(const c of characters)if(!c.robot)updateLocomotion(c,dt);
-    if(dirty){renderer.render(scene,camera);updateLabels();dirty=false;}
+    const animationMs=performance.now()-animationStarted;let renderMs=0,labelsMs=0,rendered=false,shadowUpdated=false,renderIntervalMs=0;
+    if(dirty){const shadowInterval=walking?1000/30:1000/15;if(quality!=='low'&&(shadowDirty||now-lastShadowUpdate>=shadowInterval)){renderer.shadowMap.needsUpdate=true;lastShadowUpdate=now;shadowDirty=false;shadowUpdated=true;}const renderStarted=performance.now();renderer.render(scene,camera);renderMs=performance.now()-renderStarted;const labelStarted=performance.now();updateLabels();labelsMs=performance.now()-labelStarted;dirty=false;rendered=true;}
+    if(rendered){renderIntervalMs=lastRenderedFrame?now-lastRenderedFrame:0;lastRenderedFrame=now;}
+    if(measured){frameSamples.push({frameMs:elapsed,renderIntervalMs,workMs:performance.now()-workStarted,animationMs,renderMs,labelsMs,rendered,shadowUpdated,drawCalls:rendered?renderer.info.render.calls:0,triangles:rendered?renderer.info.render.triangles:0});if(frameSamples.length>300)frameSamples.shift();}
   }
   function setCharacterModel(name, model, animations=[],metadata={},release) {
     const c=characters.find(item=>item.data.id===name||name==='you'&&item.you);if(!c||!model)return false;
@@ -721,19 +795,21 @@ export function mount(host, options = {}) {
     c.mixer=new THREE.AnimationMixer(model);c.idleAction=c.mixer.clipAction(idle).setEffectiveWeight(1).play();c.walkAction=c.mixer.clipAction(walk).setEffectiveWeight(0).play();
     const phase=[...String(c.id)].reduce((sum,value)=>sum+value.charCodeAt(0),0)%997/997;
     c.idleAction.time=idle.duration*phase;c.walkAction.time=walk.duration*phase;c.walkAction.paused=true;c.currentMotion='idle';c.mixer.update(0);
-    dirty=true;return true;
+    dirty=true;shadowDirty=true;visibilityDirty=true;return true;
   }
   function dispose() {
-    if(disposed)return;disposed=true;if(expanded)document.body.style.overflow=previousOverflow;cancelAnimationFrame(frame);resizeObserver.disconnect();mutationObserver.disconnect();listeners.forEach(fn=>fn());controls.dispose();
+    if(disposed)return;disposed=true;if(expanded)document.body.style.overflow=previousOverflow;cancelAnimationFrame(frame);resizeObserver.disconnect();intersectionObserver?.disconnect();mutationObserver.disconnect();listeners.forEach(fn=>fn());controls.dispose();
     for(const c of characters){c.removed=true;c.assetRevision++;releaseCharacterModel(c);}
+    routeQueue.clear();pathMetrics.pending=0;
+    for(const batch of assetBatches.values()){batch.removeFromParent();batch.dispose();}assetBatches.clear();
     for(const entry of officeAssets){entry.revision++;entry.lease?.release();entry.lease=null;entry.model=null;}
     const geos=new Set(),mats=new Set();scene.traverse(obj=>{if(obj.geometry)geos.add(obj.geometry);if(obj.material)(Array.isArray(obj.material)?obj.material:[obj.material]).forEach(m=>mats.add(m));});
     const textures=new Set();geometries.forEach(g=>geos.add(g));materials.forEach(m=>mats.add(m));geos.forEach(g=>g.dispose());mats.forEach(m=>{Object.values(m).forEach(v=>{if(v?.isTexture)textures.add(v);});m.dispose();});textures.forEach(t=>t.dispose());renderer.dispose();renderer.forceContextLoss();host.innerHTML='';host.className=hostClass;
     if(activeInstance===api)activeInstance=null;
   }
   setQuality(quality);resize();controls.update();updateSnapshot(options);frame=requestAnimationFrame(animate);
-  const api={dispose,reset,setQuality,toggleExpanded,walkTo:routeTo,updateSnapshot,retryOfficeAssets,selectEntity(id){const c=characters.find(c=>c.data.id===id);const item=c?.data||labels.find(l=>l.data.id===id)?.data||officeAssets.find(entry=>entry.id===id)?.data;if(item)select(item);return!!item;},setCharacterModel,
-    get diagnostics(){return{renderer:'Three.js / WebGL',quality,customLayout:custom,floor:{...floor},floorBounds:{minX:-halfWidth,maxX:halfWidth,minZ:-halfDepth,maxZ:halfDepth},navigation:{...nav,columns,rows,stepX,stepZ},officeAssets:officeAssets.map(entry=>({id:entry.id,assetId:entry.assetId,status:entry.status,modelLoaded:!!entry.model,collidable:entry.metadata?.collidable!==false,resize:entry.metadata?.resize||null,height:entry.height,scale:entry.scale?{...entry.scale}:null,bounds:{...entry.footprint.meshBounds}})),objects:footprints.map(item=>({...item,forward:{...item.forward},bounds:{...item.bounds},meshBounds:{...item.meshBounds},furnitureBounds:{...item.furnitureBounds}})),obstacles:obstacles.map(bounds=>({...bounds})),plannedPath:path.map(point=>({...point})),characters:characters.length,occupants:characters.map(c=>({id:c.id,type:c.data.type,name:c.name,x:c.g.position.x,z:c.g.position.z,rotation:c.g.rotation.y,avatarId:c.avatarId||null,modelLoaded:!!c.model,speed:c.motionSpeed||0,walkWeight:c.walkBlend||0,walkPlaybackRate:c.walkAction?.getEffectiveTimeScale()||0,referenceSpeed:c.referenceSpeed||null,pathLength:c.you?path.length:c.path?.length||0})),drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,walking,position:{x:player.g.position.x,z:player.g.position.z},pathLength:path.length,disposed,proceduralCharacters:characters.filter(c=>!c.model).length,loadedCharacterModels:characters.filter(c=>c.model).length};},
+  const api={dispose,reset,resetPerformance,setQuality,toggleExpanded,walkTo:routeTo,updateSnapshot,retryOfficeAssets,selectEntity(id){const c=characters.find(c=>c.data.id===id);const item=c?.data||labels.find(l=>l.data.id===id)?.data||officeAssets.find(entry=>entry.id===id)?.data;if(item)select(item);return!!item;},setCharacterModel,
+    get diagnostics(){return{labels:{...labelStats},performance:performanceSnapshot(),resources:resourceSnapshot(),pathfinding:{...pathMetrics},animation:{...animationBudget,mixerUpdatesLastFrame},renderer:'Three.js / WebGL',quality,customLayout:custom,floor:{...floor},floorBounds:{minX:-halfWidth,maxX:halfWidth,minZ:-halfDepth,maxZ:halfDepth},navigation:{...nav,columns,rows,stepX,stepZ},officeAssets:officeAssets.map(entry=>({id:entry.id,assetId:entry.assetId,status:entry.status,modelLoaded:!!entry.model,collidable:entry.metadata?.collidable!==false,resize:entry.metadata?.resize||null,height:entry.height,scale:entry.scale?{...entry.scale}:null,bounds:{...entry.footprint.meshBounds}})),objects:footprints.map(item=>({...item,forward:{...item.forward},bounds:{...item.bounds},meshBounds:{...item.meshBounds},furnitureBounds:{...item.furnitureBounds}})),obstacles:obstacles.map(bounds=>({...bounds})),plannedPath:path.map(point=>({...point})),characters:characters.length,occupants:characters.map(c=>({id:c.id,type:c.data.type,name:c.name,x:c.g.position.x,z:c.g.position.z,rotation:c.g.rotation.y,avatarId:c.avatarId||null,modelLoaded:!!c.model,speed:c.motionSpeed||0,walkWeight:c.walkBlend||0,walkPlaybackRate:c.walkAction?.getEffectiveTimeScale()||0,referenceSpeed:c.referenceSpeed||null,pathLength:c.you?path.length:c.path?.length||0})),drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,walking,position:{x:player.g.position.x,z:player.g.position.z},pathLength:path.length,disposed,proceduralCharacters:characters.filter(c=>!c.model).length,loadedCharacterModels:characters.filter(c=>c.model).length};},
     scene,camera,renderer};
   activeInstance=api;
   return api;

@@ -40,7 +40,7 @@ Only idle and walking are connected to current office behavior. Sitting and wavi
 
 ## Movement and resource lifetime
 
-The scene normalizes character height to 2.2 world units and scales authored gait speed accordingly. Playback follows actual distance traveled. Acceleration, stopping and yaw are smoothed; idle and walking continuously blend. Remote humans follow bounded, obstacle-aware paths toward presence snapshots. Presence still refreshes approximately every five seconds, so it does not provide frame-by-frame multiplayer synchronization.
+The scene normalizes character height to 2.2 world units and scales authored gait speed accordingly. Playback follows actual distance traveled. Acceleration, stopping and yaw are smoothed; idle and walking continuously blend. Remote humans follow bounded, obstacle-aware paths toward presence snapshots. Presence now refreshes approximately every two seconds in the office, so it does not provide frame-by-frame multiplayer synchronization.
 
 One office instance downloads each required appearance once. Geometry and textures are shared, while every human receives an independent cloned skeleton and mixer. Removing one person releases their skeleton; closing the office aborts pending requests and disposes the library. Late responses cannot reattach a character after account/company teardown. Load failures preserve the procedural character and accessible room controls. Reduced-motion settings suppress continuous animation.
 

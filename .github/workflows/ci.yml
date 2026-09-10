@@ -51,3 +51,53 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
+  scale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_USER: coatria_test
+          POSTGRES_PASSWORD: local_ci_test_only
+          POSTGRES_DB: coatria_load_${{ github.run_id }}_${{ github.run_attempt }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U coatria_test -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGPASSWORD: local_ci_test_only
+      PGDATABASE: coatria_load_${{ github.run_id }}_${{ github.run_attempt }}
+      NEXT_TELEMETRY_DISABLED: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Test 50 actual HTTP sessions against production Next and PostgreSQL
+        run: |
+          node --input-type=module <<'NODE'
+          import {parseLoadOptions,runOfficeLoad} from './scripts/load-office.mjs';
+          const database=new URL('postgresql://127.0.0.1:5432');
+          database.username='coatria_test';
+          database.password=process.env.PGPASSWORD;
+          database.pathname=process.env.PGDATABASE;
+          process.env.COATRIA_LOAD_DATABASE_URL=database.href;
+          const report=await runOfficeLoad(parseLoadOptions(['--mode','production','--clients','50','--duration','60','--report','load-reports/connections.json']));
+          process.exitCode=report.summary.passed?0:1;
+          NODE
+      - name: Publish sanitized connection report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coatria-connections-${{ github.run_id }}
+          path: load-reports/connections.json
+          retention-days: 14
+          if-no-files-found: warn

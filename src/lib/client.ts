@@ -18,19 +18,27 @@ export type Session = { user:User|null; companies:Company[]; configured?:boolean
 let expectedUserId:string|null=null;
 let identityVersion=0;
 export function setClientIdentity(userId:string|null){if(expectedUserId!==userId)identityVersion++;expectedUserId=userId;}
-export async function api<T>(path:string, method='GET', body?:unknown):Promise<T> {
+export async function api<T>(path:string, method='GET', body?:unknown, options?:{signal?:AbortSignal}):Promise<T> {
   const identityIndependent=path==='/api/session'||path==='/api/auth/login'||path==='/api/auth/signup';
   const requestIdentityVersion=identityVersion;
   const headers:Record<string,string>={};
   if(body!==undefined)headers['Content-Type']='application/json';
   if(expectedUserId&&!identityIndependent)headers['X-Coatria-User']=expectedUserId;
-  const response = await fetch(path, { method, credentials:'same-origin', cache:'no-store', headers, body:body === undefined ? undefined : JSON.stringify(body) });
-  const data = await response.json().catch(() => ({error:'The server returned an unreadable response. Please try again.'}));
+  const response = await fetch(path, { method, credentials:'same-origin', cache:'no-store', headers, signal:options?.signal, body:body === undefined ? undefined : JSON.stringify(body) });
+  const unreadable='The server returned an unreadable response. Please try again.';
+  let readable=true;
+  let data = await response.json().catch((error:unknown) => {
+    if(error instanceof Error&&error.name==='AbortError')throw error;
+    options?.signal?.throwIfAborted();
+    readable=false;return {error:unreadable};
+  });
+  if(data===null||typeof data!=='object'||Array.isArray(data)){readable=false;data={error:unreadable};}
   if(!identityIndependent&&requestIdentityVersion!==identityVersion)throw Object.assign(new Error('Your account changed before this request finished. Please try again.'),{status:409,code:'SESSION_CHANGED'});
   if (!response.ok){
     if(!identityIndependent&&(response.status===401||data.code==='SESSION_CHANGED')&&typeof window!=='undefined')window.dispatchEvent(new Event('coatria:session-changed'));
     throw Object.assign(new Error(data.error || `Request failed (${response.status}).`),{status:response.status,code:data.code});
   }
+  if(!readable)throw Object.assign(new Error(unreadable),{status:502,code:'INVALID_RESPONSE'});
   return data as T;
 }
 export function values(form:HTMLFormElement) { return Object.fromEntries(new FormData(form).entries()) as Record<string,string>; }

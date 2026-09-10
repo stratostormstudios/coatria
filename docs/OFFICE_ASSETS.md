@@ -46,7 +46,7 @@ To add another object, review its source geometry/materials and performance, add
 
 The 78 GLBs contain 31,339 triangles in total and occupy 3,579,948 bytes. The largest single object has 5,384 triangles. Models and both preview sets together occupy approximately 5.0 MiB. These measurements describe asset size, not a multi-user capacity or device frame-rate benchmark.
 
-The current floor remains rectangular, 8–40 metres per axis and limited to 100 placed items. Furniture does not create conversation rooms, grant permissions or automatically assign seats. This release does not add hinged doors, freeform wall construction, automatic sitting, multi-storey buildings or arbitrary model uploads. Uniformly enlarging a desk also enlarges its height; the inspector explains the proportional behavior.
+The current floor remains rectangular, 8–40 metres per axis and limited to 180 placed items. Furniture does not create conversation rooms, grant permissions or automatically assign seats. This release does not add hinged doors, freeform wall construction, automatic sitting, multi-storey buildings or arbitrary model uploads. Uniformly enlarging a desk also enlarges its height; the inspector explains the proportional behavior.
 
 Saved asset items use `type: "asset"` and an allowlisted `assetId` in the existing version 1 floor document. A rollback must understand both version 1 documents and purchased-asset items. An earlier editor that does not recognize asset items is not a compatible rollback target once they have been saved.
 

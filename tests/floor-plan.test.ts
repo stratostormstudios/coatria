@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {DEFAULT_FLOOR,readFloorPlan,type LayoutItem} from '../src/lib/floor-plan';
+import {DEFAULT_FLOOR,MAX_LAYOUT_ITEMS,readFloorPlan,type LayoutItem} from '../src/lib/floor-plan';
 import {layoutInput,STUDIO_LAYOUT} from '../src/lib/model';
 
 const item:LayoutItem={id:'desk-1',type:'desk',x:20,y:10,w:15,h:25,label:'Design desk'};
@@ -28,7 +28,7 @@ test('floor writes require bounded dimensions, a current integer revision and ex
   {...valid,floor:{width:'20',depth:16}}, {...valid,floor:{width:20,depth:16,height:8}},
   {...valid,layout:[{...item,rotation:45}]}, {...valid,layout:[{...item,rotation:'90'}]},
   {...valid,layout:[{...item,x:90}]}, {...valid,layout:[{...item,h:0}]}, {...valid,layout:[{...item,y:NaN}]},
-  {...valid,layout:[item,item]}, {...valid,layout:Array.from({length:101},(_,index)=>({...item,id:String(index)}))},
+  {...valid,layout:[item,item]}, {...valid,layout:Array.from({length:MAX_LAYOUT_ITEMS+1},(_,index)=>({...item,id:String(index)}))},
   {...valid,layout:[{...item,modelUrl:'https://external.example/model.glb'}]}, {...valid,companyId:'another-company'}
  ];
  for(const value of invalid)assert.equal(layoutInput.safeParse(value).success,false,JSON.stringify(value));

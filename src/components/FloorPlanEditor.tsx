@@ -9,7 +9,9 @@ import {MAX_LAYOUT_ITEMS} from '@/lib/floor-plan';
 import {clamp,editorPlan,floorMaximum,floorMinimum,furniture,metres,moveItem,newItem,place,resizeFloor,resizeItem,rotateItem,round,signature,snap,setItemDimension,type EditorPlan,type Edge,type Rect} from '@/lib/floor-editor';
 import {OFFICE_CATALOG,OFFICE_CATEGORIES,getOfficeAsset} from '@/lib/office-catalog';
 import {useOfficePreviews} from './useOfficePreviews';
-import {Badge,Field,PageHead} from './ui';
+import {Badge,Field,PageHead,Modal} from './ui';
+import {OFFICE_50_PRESET} from '@/lib/office-presets';
+import OfficePresetPreview from './OfficePresetPreview';
 import s from './FloorPlanEditor.module.css';
 
 const edges:{edge:Edge;name:string}[]=[{edge:'nw',name:'Northwest'},{edge:'n',name:'North'},{edge:'ne',name:'Northeast'},{edge:'e',name:'East'},{edge:'se',name:'Southeast'},{edge:'s',name:'South'},{edge:'sw',name:'Southwest'},{edge:'w',name:'West'}];
@@ -37,6 +39,7 @@ function FurnitureGlyph({type,rotation=0}:{type:LayoutItem['type'];rotation?:num
 }
 
 export default function FloorPlanEditor(p:WorkspaceProps&{onDone:()=>void}) {
+  const [templates,setTemplates]=useState(false);
   const [plan,setPlan]=useState(()=>editorPlan(p.workspace.layout,p.workspace.floor));
   const [baseline,setBaseline]=useState(()=>({plan:editorPlan(p.workspace.layout,p.workspace.floor),revision:p.workspace.layoutRevision||0}));
   const [selected,setSelected]=useState<string|null>(null),[saving,setSaving]=useState(false),[conflict,setConflict]=useState(false),[resolving,setResolving]=useState(false);
@@ -132,7 +135,8 @@ export default function FloorPlanEditor(p:WorkspaceProps&{onDone:()=>void}) {
   const stageStyle={width:Math.max(viewportSize.width,plan.floor.width*scale+origin.left+50),height:Math.max(viewportSize.height,plan.floor.depth*scale+origin.top+50)};
   const boardStyle={...origin,width:plan.floor.width*scale,height:plan.floor.depth*scale,'--grid':`${scale*.5}px`} as CSSProperties;
   return <div ref={root} className={s.editor} onKeyDown={keys} onKeyUp={event=>{if(event.code==='Space')spaceHeld.current=false;}}>
-    <PageHead eyebrow="SPACE DESIGN STUDIO" title="A floor plan that fits your team." description="Drag in a building block. Give it room. Make it yours." action={<button className="button secondary" onClick={p.onDone}><ArrowLeft size={16}/> Back to the office</button>}/>
+    <PageHead eyebrow="SPACE DESIGN STUDIO" title="A floor plan that fits your team." description="Drag in a building block. Give it room. Make it yours." action={<div className="row"><button className="button secondary" disabled={saving||!!gestureKind} onClick={()=>setTemplates(true)}><Package size={16}/> Office templates</button><button className="button secondary" onClick={p.onDone}><ArrowLeft size={16}/> Back to the office</button></div>}/>
+    {templates&&<Modal wide title="Office templates" description="Start with a furnished plan, then make it your own. Applying a template changes your draft; Save publishes it for the company." onClose={()=>setTemplates(false)}><div className={s.templatePreview}><OfficePresetPreview/></div><div className={s.templateDescription}><div><Badge>50 workstations · 600 m²</Badge><h3>50-person studio</h3><p>Five teams of ten, a project lounge and shared commons. {OFFICE_50_PRESET.layout.length} editable furniture pieces, with walkways connecting every workstation.</p><small>Your current draft can be restored with Undo before saving. Rooms, memberships and desk assignments are managed separately.</small></div><button className="button primary" onClick={()=>{commit({floor:{...OFFICE_50_PRESET.floor},layout:OFFICE_50_PRESET.layout.map(item=>({...item}))});setSelected(null);setZoom(1);setError('');setTemplates(false);setAnnouncement('50-person studio applied to your draft. Undo restores the previous plan. Save to publish.');}}>Use 50-person studio <ArrowUpRight size={16}/></button></div></Modal>}
     {conflict&&<div className={s.conflict} role="alert"><AlertCircle size={21}/><div><strong>The shared floor plan changed while you were editing.</strong><p>Your draft is safe. Load the latest plan, or keep your draft and review it before replacing the shared version.</p><div className="row"><button className="button secondary small" disabled={resolving} onClick={()=>void resolve(false)}>Reload saved layout</button><button className="button secondary small" disabled={resolving} onClick={()=>void resolve(true)}>Keep my draft</button></div></div></div>}
     <div className={s.studio}>
       <aside className={s.palette} aria-label="Furniture library"><header><span className="eyebrow">FURNITURE COLLECTION</span><h2>Make yourself at work.</h2><p>Real furniture. Your arrangement. Drag or click to add.</p></header>

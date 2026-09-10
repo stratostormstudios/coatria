@@ -11,6 +11,7 @@
     "test": "tsx --test tests/*.test.ts",
     "test:integration": "tsx --test tests/backend-integration.test.ts tests/calls.test.ts",
     "test:media": "node --import tsx tests/room-call-browser.mjs",
+    "test:load": "node scripts/load-office.mjs",
     "check:secrets": "node scripts/check-secrets.mjs",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:migrate:local": "node --env-file=.env.local --import tsx scripts/migrate.ts"

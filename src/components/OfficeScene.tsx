@@ -7,10 +7,18 @@ import { OFFICE_CATALOG, type OfficeAssetDefinition } from "@/lib/office-catalog
 
 type Entity = Record<string, any>;
 type Position = { x: number; z: number };
+export type OfficeDiagnostics = {
+  performance?:{state?:'active'|'idle'|'suspended'|'disposed';renderedSampleCount?:number;sampleCount:number;windowSeconds:number;fps:number;frameMs:{p50:number;p95:number};workMs:{p50:number;p95:number};animationMs:{p50:number;p95:number};renderMs:{p50:number;p95:number};labelsMs:{p50:number;p95:number};drawCalls:number;triangles:number};
+  animation?:{visibleHumans:number;fullRateHumans:number;reducedRateHumans:number;culledHumans:number;mixerUpdatesLastFrame:number;fullRateBudget:number};
+  resources?:{geometries:number;textures:number;programs:number;loadedCharacterModels:number;skinnedMeshes:number;bones:number;pickTargets:number};
+  [key:string]:unknown;
+};
 type SceneInstance = {
   dispose: () => void;
   updateSnapshot: (snapshot: Entity) => void;
-  diagnostics: { position: Position };
+  diagnostics: OfficeDiagnostics & { position: Position };
+  resetPerformance?: () => void;
+  selectEntity?: (id:string) => boolean;
   error?: string;
 };
 type SceneRuntime = {
@@ -44,6 +52,9 @@ export type OfficeSceneProps = {
   onOpenRoom: (roomId: string) => void;
   onOpenAgent: (agentId: string) => void;
   onOpenPerson: (userId: string) => void;
+  onDiagnostics?: (diagnostics:OfficeDiagnostics) => void;
+  performanceResetKey?: number;
+  selectionRequest?: {id:string;sequence:number};
 };
 
 let runtimePromise: Promise<SceneRuntime> | undefined;
@@ -120,6 +131,10 @@ export default function OfficeScene(props: OfficeSceneProps) {
   useEffect(() => {
     instance.current?.updateSnapshot({ user: props.user, members: props.members, agents: props.agents, presence: props.presence });
   }, [props.user, props.members, props.agents, props.presence]);
+
+  useEffect(()=>{instance.current?.resetPerformance?.();},[props.performanceResetKey,state]);
+  useEffect(()=>{if(props.selectionRequest)instance.current?.selectEntity?.(props.selectionRequest.id);},[props.selectionRequest,state]);
+  useEffect(()=>{if(!props.onDiagnostics||state!=='ready')return;const sample=()=>{if(instance.current)current.current.onDiagnostics?.(instance.current.diagnostics);};sample();const timer=setInterval(sample,1000);return()=>clearInterval(timer);},[Boolean(props.onDiagnostics),state]);
 
   return <section className="coatria-office-scene" aria-label="Shared company office">
     <div ref={host} style={{ minHeight: state === "unavailable" ? undefined : 560 }} />

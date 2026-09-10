@@ -1,4 +1,10 @@
-# Coatria 0.1 — office-furniture release status
+# Coatria 0.1 — fifty-person office and test lab
+
+The 50-person studio and Test lab are prepared for release. The office has 50 independent workstations and 148 furnishings on a 30 × 20 metre floor. Administrators can apply it as an editable draft and run browser simulations with 10, 25 or 50 people. The isolated HTTP harness tests 50 authenticated sessions against a production Next build and fresh PostgreSQL service. See the [scale testing guide](SCALE_TESTING.md) for controls, evidence and capacity limits.
+
+Renderer testing on Edge 152 with an AMD Radeon 890M at 1536 × 1000, DPR 1, measured 60.0 FPS with all 50 characters moving and 148 furnishings loaded in balanced quality; rendered-frame p95 was 16.8 ms. Low quality reached its 30 FPS cap, with frame p95 33.4 ms. These are device-specific steady-state samples, not general hardware or hosting guarantees. Production-database CI and publication evidence will be recorded below.
+
+## Earlier office-furniture release
 
 The purchased ITHappy Office Rooms integration is prepared for release: 78 searchable furniture objects, real isometric and top-down previews, proportional furniture sizing, adjustable partitions/floor finishes, and authenticated private model delivery. Existing offices and character assets are preserved. See the [office asset guide](OFFICE_ASSETS.md) for preparation, deployment boundaries and compatibility.
 
@@ -76,7 +82,7 @@ Production application requests use the restricted runtime connection. Future mi
 
 Reliable media across restrictive networks requires a TURN service. Without it, calls use direct WebRTC connectivity. Calls are limited to the lower of room capacity and six participants.
 
-- Presence normally refreshes every five seconds and expires after 45 seconds. This is a small-team transport; continuous low-latency global presence needs another scaling phase.
+- Presence polls every two seconds on Office, People and Rooms, while full workspace refreshes every five seconds. Presence expires after 45 seconds. This is a small-team transport; continuous low-latency global presence needs another scaling phase.
 - Authenticated signaling polls approximately every 1.5 seconds. Capture and peers close after terminal access errors, on leaving the room, or when authorization cannot be refreshed for 45 seconds. Browser scheduling and network propagation mean this is not an instantaneous external-device erasure guarantee.
 - An agent avatar requires active status and a recent observed heartbeat. Naming a harness does not install or run it, and reported tokens are not independently metered.
 - The connector publishes metadata for at most 1,000 non-hidden files, with a directory-depth limit. It does not mount a drive, stream footage, synchronize files or provision a server. An incomplete index is not uploaded as a successful snapshot.

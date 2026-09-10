@@ -1,6 +1,8 @@
 .git
 .vercel
 .next
+.next-load
+load-reports
 node_modules
 .env
 .env.*
