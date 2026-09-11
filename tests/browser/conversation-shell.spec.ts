@@ -1,3 +1,4 @@
+import {conversationFixture} from './conversation-fixture';
 import {test,expect,type Page,type Route} from '@playwright/test';
 import {mkdir} from 'node:fs/promises';
 import type {Company,Message,User,Workspace} from '../../src/lib/client';
@@ -16,8 +17,8 @@ const quietRoom='30000000-0000-4000-8000-000000000242';
 const seat={id:'conversation-chair',x:-2,z:1,yaw:0,seatHeight:.53,approach:{x:-2,z:0}};
 const copy=<T,>(value:T):T=>JSON.parse(JSON.stringify(value));
 const json=(route:Route,data:unknown,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)});
-type Write={companyId:string;kind:string;identity:string|undefined;body:Record<string,any>};
-type HeldSend={route:Route;write:Write;author:User};
+type Write={companyId:string;kind:string;channel?:string;identity:string|undefined;body:Record<string,any>};
+type HeldSend={route:Route;write:Write;author:User;publish:()=>any};
 
 function workspace(company:Company,user:User):Workspace{
  const timestamp=new Date().toISOString();
@@ -36,11 +37,14 @@ async function fixture(page:Page){
  let activeUser=firstUser,holdNextSend=false,failNextSend=false;
  const data=new Map(companies.map(company=>[company.id,workspace(company,firstUser)]));
  const writes:Write[]=[],held:HeldSend[]=[],unexpected:string[]=[];
- function publish(send:HeldSend){
-  const message:Message={id:`posted-${writes.indexOf(send.write)}`,roomId:send.write.body.roomId??null,body:send.write.body.body,createdAt:new Date().toISOString(),userId:send.author.id,authorName:send.author.name};
-  data.get(send.write.companyId)!.messages.push(message);return message;
- }
+ function publish(send:HeldSend){return send.publish();}
+ const messaging=conversationFixture(id=>data.get(id),()=>activeUser,async send=>{
+  const write:Write={companyId:send.companyId,kind:'messages',channel:send.channel,identity:send.route.request().headers()['x-coatria-user'],body:send.body};writes.push(write);
+  if(failNextSend){failNextSend=false;await json(send.route,{error:'Local test connection interrupted.'},503);return true;}
+  if(holdNextSend){holdNextSend=false;held.push({...send,write});return true;}return false;
+ });
  await page.route('**/api/**',async route=>{
+  if(await messaging.handle(route))return;
   const request=route.request(),path=new URL(request.url()).pathname;
   if(path==='/api/session')return json(route,{user:activeUser,companies,configured:true});
   const match=path.match(/^\/api\/companies\/([^/]+)\/(workspace|presence|messages)$/);
@@ -57,10 +61,7 @@ async function fixture(page:Page){
    if(write.body.seatId===null)own.seat=null;
    return json(route,{presence:copy(current.presence)});
   }
-  if(failNextSend){failNextSend=false;return json(route,{error:'Local test connection interrupted.'},503);}
-  const send={route,write,author:activeUser};
-  if(holdNextSend){holdNextSend=false;held.push(send);return;}
-  return json(route,{message:publish(send)},201);
+  return json(route,{error:'Legacy messages route is not part of this fixture.'},501);
  });
  return {data,writes,held,unexpected,holdSend(){holdNextSend=true;},failSend(){failNextSend=true;},async release(index=0){const send=held[index];expect(send,'A held message request must exist.').toBeTruthy();try{await json(send.route,{message:publish(send)},201);}catch{/* A provider may abort an obsolete identity's request. */}},async changeAccount(){activeUser=secondUser;for(const company of companies)data.set(company.id,workspace(company,activeUser));await page.evaluate(()=>window.dispatchEvent(new Event('focus')));}};
 }
@@ -164,7 +165,7 @@ test('switching company clears private conversation state and a late send cannot
  await page.getByRole('button',{name:'Switch to South Conversation Studio',exact:true}).click();await expect(dock(page)).toBeHidden();await expect.poll(()=>page.evaluate(()=>(window as any).__conversationScene.current?.latest.companyName)).toBe(companies[1].name);
  await openDock(page);await expect(composer(page)).toHaveValue('');await expect(dock(page).getByRole('combobox',{name:'Choose conversation',exact:true})).toHaveValue('');await composer(page).fill('South-only draft');
  await state.release();await expect(composer(page)).toHaveValue('South-only draft');await expect(dock(page).getByRole('log')).not.toContainText('North-only submitted message');await expect(dock(page).getByRole('log')).not.toContainText('North Conversation Studio message');
- await expect(dock(page).getByRole('button',{name:'Send',exact:true})).toBeEnabled();expect(state.held[0].write).toMatchObject({companyId:companies[0].id,identity:firstUser.id,body:{roomId:greenhouse}});
+ await expect(dock(page).getByRole('button',{name:'Send',exact:true})).toBeEnabled();expect(state.held[0].write).toMatchObject({companyId:companies[0].id,identity:firstUser.id,channel:greenhouse});
  await page.getByRole('button',{name:'Switch to North Conversation Studio',exact:true}).click();await openDock(page);await expect(composer(page)).toHaveValue('');
 });
 

@@ -25,7 +25,7 @@ test.beforeEach(({baseURL})=>{test.skip(!baseURL||!['localhost','127.0.0.1'].inc
 test('agent setup protects its one-time token and revoked activity never looks connected',async({page})=>{
  const state=fixture(workspace({agents:[agent('revoked','Retired analyst',{status:'revoked',lastSeenAt:new Date().toISOString()})]}));
  const token='ca_'+'local-ux-fixture';
- state.handler=async(route,path)=>{if(path===`/api/companies/${company.id}/agents`&&route.request().method()==='POST'){const body=route.request().postDataJSON();expect(body).toEqual({name:'Atlas',harness:'hermes',description:'Prepare reviewable reports'});const added=agent('atlas','Atlas');state.workspace.agents.push(added);await route.fulfill({status:201,json:{agent:added,token}});return true;}return false;};
+ state.handler=async(route,path)=>{if(path===`/api/companies/${company.id}/agents`&&route.request().method()==='POST'){const body=route.request().postDataJSON();expect(body).toEqual({name:'Atlas',harness:'hermes',description:'Prepare reviewable reports',conversationAccess:'none'});const added=agent('atlas','Atlas');state.workspace.agents.push(added);await route.fulfill({status:201,json:{agent:added,token}});return true;}return false;};
  await mock(page,state);await page.goto('/#agents');
  await expect(card(page,'Retired analyst')).toContainText('Revoked');
  await expect(card(page,'Retired analyst')).not.toContainText('Recent API activity');
@@ -39,6 +39,13 @@ test('agent setup protects its one-time token and revoked activity never looks c
  await dialog.getByRole('button',{name:'Close dialog',exact:true}).click();await expect(dialog).toHaveCount(0);
  await card(page,'Atlas').click();await expect(page.getByRole('dialog').getByText('Use the token you saved during creation.',{exact:false})).toBeVisible();await expect(page.getByRole('textbox',{name:'Connection token',exact:true})).toHaveCount(0);
  expect(await page.evaluate(value=>Object.values(localStorage).some(item=>item.includes(value))||location.href.includes(value),token)).toBe(false);
+});
+
+test('agent conversation access starts off and administrators can grant participation',async({page})=>{
+ const state=fixture(workspace({agents:[agent('atlas','Atlas')]}));const changes:unknown[]=[];
+ state.handler=async(route,path)=>{if(path===`/api/companies/${company.id}/agents/atlas`&&route.request().method()==='PATCH'){const change=route.request().postDataJSON();changes.push(change);Object.assign(state.workspace.agents[0],change);await route.fulfill({json:{agent:state.workspace.agents[0]}});return true;}return false;};
+ await mock(page,state);await page.goto('/#agents');await card(page,'Atlas').click();const access=page.getByRole('dialog').getByLabel('Conversation access',{exact:true});await expect(access).toHaveValue('none');await access.selectOption('write');await expect(access).toHaveValue('write');expect(changes).toEqual([{conversationAccess:'write'}]);await expect(page.getByRole('link',{name:'Conversation API guide'})).toHaveAttribute('href','/downloads/CONVERSATIONS.md');
+ await access.selectOption('none');await expect(access).toHaveValue('none');expect(changes).toHaveLength(2);
 });
 
 test('an API contact after initial render is immediately recent and later expires',async({page})=>{

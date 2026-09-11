@@ -156,7 +156,7 @@ export async function companyRoute(request: Request, parts: string[], method: st
       query(`SELECT u.id,u.id AS "userId",u.name,u.email,m.role,u.role_title AS "roleTitle",u.avatar_color AS "avatarColor",u.avatar_id AS "avatarId" FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.company_id=$1 AND m.role<>'removed' ORDER BY m.joined_at`,[companyId]),
       query(`SELECT ${agentColumns} FROM agents WHERE company_id=$1 ORDER BY created_at`,[companyId]),
       query(`SELECT ${taskColumns} FROM tasks WHERE company_id=$1 ORDER BY updated_at DESC LIMIT 500`,[companyId]),
-      query(`SELECT m.id,m.room_id AS "roomId",m.body,m.created_at AS "createdAt",m.user_id AS "userId",u.name AS "authorName" FROM messages m JOIN users u ON u.id=m.user_id WHERE m.company_id=$1 ORDER BY m.created_at DESC LIMIT 100`,[companyId]),
+      query(`SELECT m.id,m.room_id AS "roomId",m.body,m.created_at AS "createdAt",m.user_id AS "userId",m.agent_id AS "agentId",m.deleted_at AS "deletedAt",COALESCE(u.name,a.name,'Former teammate') AS "authorName" FROM messages m LEFT JOIN users u ON u.id=m.user_id LEFT JOIN agents a ON a.id=m.agent_id AND a.company_id=m.company_id WHERE m.company_id=$1 ORDER BY m.created_at DESC,m.id DESC LIMIT 100`,[companyId]),
       readPresence(companyId),
       query(`SELECT a.id,a.kind,a.description,a.actor_id AS "actorId",u.name AS "actorName",a.created_at AS "createdAt" FROM activity a LEFT JOIN users u ON u.id=a.actor_id WHERE a.company_id=$1 ORDER BY a.created_at DESC LIMIT 50`,[companyId]),
       query(`SELECT ${driveColumns} FROM drives WHERE company_id=$1 ORDER BY created_at`,[companyId]),

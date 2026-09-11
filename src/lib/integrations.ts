@@ -5,11 +5,15 @@ import { bearer, body, fail, hashToken, id, json, rateLimit, secret, uuid } from
 import { memberMutation, recordActivity } from './company';
 import { agentColumns, driveColumns, submissionUrl, taskColumns, text } from './model';
 
-async function authenticateAgent(request: Request) {
+export async function authenticateAgent(request: Request) {
   const token=bearer(request);if(!token.startsWith('ca_'))fail(401,'Invalid agent token.');
   const agent=(await query(`SELECT a.* FROM agents a JOIN memberships m ON m.company_id=a.company_id AND m.user_id=a.created_by WHERE a.token_hash=$1 AND a.status='active' AND m.role IN ('owner','admin')`,[hashToken(token)])).rows[0];
   if(!agent)fail(401,'This agent token is invalid, paused, revoked, or its sponsor lost access.');
-  await rateLimit(`agent:${agent.id}`,120,60);return agent;
+  await rateLimit(`agent:${agent.id}`,120,60);
+  // Contact metadata is updated before any authority locks, never by upgrading
+  // a conversation reader's FOR SHARE lock. Chat-only harnesses appear active too.
+  await query(`UPDATE agents a SET last_seen_at=clock_timestamp() WHERE a.id=$1 AND a.company_id=$2 AND a.token_hash=$3 AND a.status='active' AND (a.last_seen_at IS NULL OR a.last_seen_at<now()-interval '60 seconds') AND EXISTS(SELECT 1 FROM memberships m WHERE m.company_id=a.company_id AND m.user_id=a.created_by AND m.role IN ('owner','admin'))`,[agent.id,agent.company_id,agent.token_hash]);
+  return agent;
 }
 async function authenticateConnector(request: Request) {
   const token=bearer(request);if(!token.startsWith('cd_'))fail(401,'Invalid connector token.');
@@ -22,6 +26,7 @@ export async function integrationRoute(request: Request, parts: string[], method
   if(path==='agent/work'&&method==='GET') {
     const agent=await authenticateAgent(request);
     const data=await transaction(async client=>{
+      if(!(await client.query('SELECT id FROM companies WHERE id=$1 FOR KEY SHARE',[agent.company_id])).rowCount)fail(401,'Agent company access ended.');
       const sponsor=(await client.query("SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2 AND role IN ('owner','admin') FOR SHARE",[agent.company_id,agent.created_by])).rows[0];if(!sponsor)fail(401,'Agent sponsor access ended.');
       const active=(await client.query("SELECT id FROM agents WHERE id=$1 AND status='active' FOR UPDATE",[agent.id])).rows[0];if(!active)fail(401,'Agent access ended.');
       await client.query('UPDATE agents SET last_seen_at=now() WHERE id=$1',[agent.id]);
@@ -34,6 +39,7 @@ export async function integrationRoute(request: Request, parts: string[], method
     const agent=await authenticateAgent(request);
     const data=await body(request,z.object({taskId:uuid,summary:text(12000),submissionUrl:submissionUrl.optional(),tokensUsed:z.number().int().min(0).max(1000000000).optional()}).strict());
     await transaction(async client=>{
+      if(!(await client.query('SELECT id FROM companies WHERE id=$1 FOR KEY SHARE',[agent.company_id])).rowCount)fail(401,'Agent company access ended.');
       const sponsor=(await client.query("SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2 AND role IN ('owner','admin') FOR SHARE",[agent.company_id,agent.created_by])).rows[0];if(!sponsor)fail(401,'Agent sponsor access ended.');
       const active=(await client.query("SELECT id FROM agents WHERE id=$1 AND status='active' FOR UPDATE",[agent.id])).rows[0];if(!active)fail(401,'Agent access ended.');
       const task=(await client.query('SELECT * FROM tasks WHERE id=$1 AND company_id=$2 FOR UPDATE',[data.taskId,agent.company_id])).rows[0];
@@ -53,6 +59,7 @@ export async function integrationRoute(request: Request, parts: string[], method
     const safePath=z.string().min(1).max(1024).refine(value=>!value.startsWith('/')&&!value.startsWith('\\')&&!/^[a-zA-Z]:/.test(value)&&!value.split(/[\\/]/).includes('..')&&!/[\x00-\x1f]/.test(value),'Use a relative path without parent traversal.');
     const data=await body(request,z.object({files:z.array(z.object({path:safePath,size:z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),modifiedAt:z.iso.datetime({offset:true})}).strict()).max(10000).refine(files=>new Set(files.map(f=>f.path)).size===files.length,'File paths must be unique.'),status:z.literal('online')}).strict(),3*1024*1024);
     await transaction(async client=>{
+      if(!(await client.query('SELECT id FROM companies WHERE id=$1 FOR KEY SHARE',[drive.company_id])).rowCount)fail(401,'Connector company access ended.');
       const sponsor=(await client.query("SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2 AND role IN ('owner','admin') FOR SHARE",[drive.company_id,drive.created_by])).rows[0];if(!sponsor)fail(401,'Connector sponsor access ended.');
       const active=(await client.query("SELECT id FROM drives WHERE id=$1 AND status<>'revoked' FOR UPDATE",[drive.id])).rows[0];if(!active)fail(401,'Connector access ended.');
       await client.query('DELETE FROM drive_files WHERE drive_id=$1',[drive.id]);
@@ -65,17 +72,17 @@ export async function integrationRoute(request: Request, parts: string[], method
     const member=await requireMembership(request,companyId,true);
     if(parts.length===3&&method==='POST') {
       await rateLimit(`agent-create:${member.userId}`,20,3600);
-      const data=await body(request,z.object({name:text(80),harness:z.enum(['hermes','custom','claude-code','codex']),description:z.string().trim().max(4000).default('')}).strict());const token=secret('ca_');
+      const data=await body(request,z.object({name:text(80),harness:z.enum(['hermes','custom','claude-code','codex']),description:z.string().trim().max(4000).default(''),conversationAccess:z.enum(['none','read','write']).default('none')}).strict());const token=secret('ca_');
       const agent=await memberMutation(member,true,async client=>{
         await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${companyId}:agent-quota`]);if(Number((await client.query("SELECT count(*) FROM agents WHERE company_id=$1 AND status<>'revoked'",[companyId])).rows[0].count)>=100)fail(409,'This company has reached the limit of 100 active or paused agents.');
-        const row=(await client.query(`INSERT INTO agents(company_id,name,harness,description,token_hash,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING ${agentColumns}`,[companyId,data.name,data.harness,data.description,hashToken(token),member.userId])).rows[0];await recordActivity(client,member,'agent.created',`${member.user.name} registered ${data.name}.`);return row;
+        const row=(await client.query(`INSERT INTO agents(company_id,name,harness,description,token_hash,created_by,conversation_access) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING ${agentColumns}`,[companyId,data.name,data.harness,data.description,hashToken(token),member.userId,data.conversationAccess])).rows[0];await recordActivity(client,member,'agent.created',`${member.user.name} registered ${data.name} with ${data.conversationAccess} conversation access.`);return row;
       });return json({agent,token},201);
     }
     if(parts.length===4&&method==='PATCH') {
-      const agentId=id(parts[3]);const data=await body(request,z.object({status:z.enum(['active','paused','revoked'])}).strict());
+      const agentId=id(parts[3]);const data=await body(request,z.object({status:z.enum(['active','paused','revoked']).optional(),conversationAccess:z.enum(['none','read','write']).optional()}).strict().refine(value=>Object.keys(value).length>0,'Provide an access change.'));
       const agent=await memberMutation(member,true,async client=>{
-        const current=(await client.query('SELECT status FROM agents WHERE id=$1 AND company_id=$2 FOR UPDATE',[agentId,companyId])).rows[0];if(!current)fail(404,'Agent not found.');if(current.status==='revoked'&&data.status!=='revoked')fail(409,'Revoked credentials cannot be reactivated. Register a new agent.');
-        const row=(await client.query(`UPDATE agents SET status=$3 WHERE id=$1 AND company_id=$2 RETURNING ${agentColumns}`,[agentId,companyId,data.status])).rows[0];await recordActivity(client,member,'agent.status_changed',`${member.user.name} set ${row.name} to ${data.status}.`);return row;
+        const current=(await client.query('SELECT status,conversation_access FROM agents WHERE id=$1 AND company_id=$2 FOR UPDATE',[agentId,companyId])).rows[0];if(!current)fail(404,'Agent not found.');if(current.status==='revoked'&&(data.status!=='revoked'||data.conversationAccess!==undefined))fail(409,'Revoked credentials cannot be reactivated. Register a new agent.');
+        const row=(await client.query(`UPDATE agents SET status=$3,conversation_access=$4 WHERE id=$1 AND company_id=$2 RETURNING ${agentColumns}`,[agentId,companyId,data.status??current.status,data.conversationAccess??current.conversation_access])).rows[0];await recordActivity(client,member,'agent.access_changed',`${member.user.name} set ${row.name} to ${row.status} with ${row.conversationAccess} conversation access.`);return row;
       });return json({agent});
     }
   }

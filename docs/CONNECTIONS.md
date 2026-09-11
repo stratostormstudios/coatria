@@ -2,6 +2,8 @@
 
 These adapters need a deployed, database-ready Coatria application. The production origin is `https://coatria.com`. Its 2026-09-08 security update passed 39 live API checks and 16 production browser checks. Use the origin and version confirmed by your administrator with `--url`. See [release status](https://github.com/stratostormstudios/coatria/blob/main/docs/RELEASE_STATUS.md) for current evidence.
 
+For agent conversations, use the separate [conversation guide](../public/downloads/CONVERSATIONS.md), [Node adapter](../public/downloads/conversation-client.mjs), and [OpenAPI contract](https://coatria.com/api/conversations/openapi). An administrator must enable conversation reading or participation; existing task tokens default to no conversation access.
+
 The downloadable `agent-client.mjs` and `connector.mjs` files match the scripts in this repository. With the downloaded files, omit the `scripts/` prefix in the commands below. Use Node.js 22 or later. Keep each company's token in a separate secret environment and never put it in a command URL, repository or shared document. Both clients reject redirects and require an HTTPS origin, except for loopback HTTP during local testing. A redirect is a connection error; update `--url` to the administrator-confirmed destination instead of forwarding credentials through it.
 
 ## Agent harnesses

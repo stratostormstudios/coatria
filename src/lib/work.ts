@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import { query } from './db';
 import { requireMembership } from './auth';
-import { body, fail, id, json, rateLimit, uuid } from './security';
-import { existingAssignee, existingRoom, memberMutation, recordActivity } from './company';
-import { taskColumns, taskInput, taskPatch, text } from './model';
+import { body, fail, id, json, rateLimit } from './security';
+import { existingAssignee, memberMutation, recordActivity } from './company';
+import { taskColumns, taskInput, taskPatch } from './model';
+import { legacyConversationSend } from './conversation-api';
 
 export function canApproveTask(task: {status:string;created_by:string;assignee_id?:string|null;submitted_by?:string|null;agent_sponsor?:string|null;author_ids?:string[]}, userId: string, role: string) {
   return ['owner','admin'].includes(role) && task.status === 'review' && ![task.assignee_id,task.submitted_by,task.agent_sponsor,...(task.author_ids||[])].includes(userId);
@@ -21,16 +22,11 @@ export async function workRoute(request: Request, parts: string[], method: strin
       const values:unknown[]=[companyId];let filter='';
       if(room){values.push(room==='null'?null:room);filter+=` AND m.room_id IS NOT DISTINCT FROM $${values.length}::uuid`;}
       if(after){values.push(after);filter+=` AND m.created_at>$${values.length}::timestamptz`;}
-      const messages=(await query(`SELECT m.id,m.room_id AS "roomId",m.body,m.created_at AS "createdAt",m.user_id AS "userId",u.name AS "authorName" FROM messages m JOIN users u ON u.id=m.user_id WHERE m.company_id=$1${filter} ORDER BY m.created_at DESC LIMIT 100`,values)).rows.reverse();
+      const messages=(await query(`SELECT m.id,m.room_id AS "roomId",m.body,m.created_at AS "createdAt",m.user_id AS "userId",m.agent_id AS "agentId",m.deleted_at AS "deletedAt",COALESCE(u.name,a.name,'Former teammate') AS "authorName" FROM messages m LEFT JOIN users u ON u.id=m.user_id LEFT JOIN agents a ON a.id=m.agent_id AND a.company_id=m.company_id WHERE m.company_id=$1${filter} ORDER BY m.created_at DESC,m.id DESC LIMIT 100`,values)).rows.reverse();
       return json({messages});
     }
     if(method==='POST') {
-      await rateLimit(`chat:${companyId}:${member.userId}`,60,60);
-      const data=await body(request,z.object({roomId:uuid.nullable().optional(),body:text(4000)}).strict());
-      const message=await memberMutation(member,false,async client=>{
-        await existingRoom(client,companyId,data.roomId);
-        return {...(await client.query(`INSERT INTO messages(company_id,room_id,user_id,body) VALUES($1,$2,$3,$4) RETURNING id,room_id AS "roomId",body,created_at AS "createdAt",user_id AS "userId"`,[companyId,data.roomId||null,member.userId,data.body])).rows[0],authorName:member.user.name};
-      });return json({message},201);
+      return legacyConversationSend(request,companyId);
     }
   }
   if(parts[2]==='tasks') {

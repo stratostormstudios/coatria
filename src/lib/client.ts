@@ -9,7 +9,7 @@ export type Room = { id:string; name:string; kind:string; capacity:number };
 export type Presence = { userId:string; name:string; avatarColor:string; avatarId:string|null; roomId:string|null; x:number; z:number; status:string; updatedAt:string; motionMode?:MotionMode;seatId?:string|null;seat?:OfficeSeat|null;interaction?:PresenceInteraction|null };
 export type Task = { id:string; title:string; description:string; status:string; assigneeId:string|null; createdBy:string; submissionUrl:string|null; submissionSummary?:string; reviewNote:string|null; submittedBy?:string|null; submittedAgentId?:string|null; approvedBy?:string|null; authorIds?:string[]; createdAt:string; updatedAt:string };
 export type Message = { id:string; roomId:string|null; body:string; createdAt:string; userId:string; authorName:string };
-export type Agent = { id:string; name:string; harness:string; description:string; status:string; createdBy:string; lastSeenAt:string|null };
+export type Agent = { id:string; name:string; harness:string; description:string; status:string; conversationAccess?:'none'|'read'|'write'; createdBy:string; lastSeenAt:string|null };
 export type Drive = { id:string; name:string; kind:string; description:string; status:string; lastSeenAt:string|null; fileCount:number };
 export type Opening = { id:string; companyId:string; companyName?:string; title:string; description:string; type:string; compensation:string; budget?:string; status:string; createdAt:string };
 export type Application = { id:string; openingId:string; userId:string; message:string; status:string; name?:string; applicantName?:string; applicantEmail?:string; openingTitle?:string; companyName?:string; agentId?:string; createdAt:string };
@@ -38,7 +38,8 @@ export async function api<T>(path:string, method='GET', body?:unknown, options?:
   if(!identityIndependent&&requestIdentityVersion!==identityVersion)throw Object.assign(new Error('Your account changed before this request finished. Please try again.'),{status:409,code:'SESSION_CHANGED'});
   if (!response.ok){
     if(!identityIndependent&&(response.status===401||data.code==='SESSION_CHANGED')&&typeof window!=='undefined')window.dispatchEvent(new Event('coatria:session-changed'));
-    throw Object.assign(new Error(data.error || `Request failed (${response.status}).`),{status:response.status,code:data.code});
+    const retryAfter=Number(response.headers.get('retry-after'));
+    throw Object.assign(new Error(data.error || `Request failed (${response.status}).`),{status:response.status,code:data.code,retryAfter:Number.isFinite(retryAfter)&&retryAfter>0?retryAfter:undefined});
   }
   if(!readable)throw Object.assign(new Error(unreadable),{status:502,code:'INVALID_RESPONSE'});
   return data as T;

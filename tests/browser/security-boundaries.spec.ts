@@ -8,6 +8,16 @@ function workspace(company:typeof a,extra:Record<string,unknown>={}){
   return {company,members:[{...user,userId:user.id,role:'owner'},peer(company.id===a.id?'Only company A':'Only company B','30000000-0000-4000-8000-'+(company.id===a.id?'000000000001':'000000000002'))],rooms:[],agents:[],tasks:[],messages:[],presence:[],activity:[],drives:[],openings:[],applications:[],layout:[],...extra};
 }
 const fulfill=(route:Route,data:unknown,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)});
+async function conversationFixture(route:Route,data:ReturnType<typeof workspace>){
+  const url=new URL(route.request().url()),match=url.pathname.match(/\/conversations(?:\/(commons)\/(messages|events|read))?$/);if(!match)return false;
+  const conversationId=data.company.id.replace(/^20000000/,'60000000'),messages=(data.messages as any[]).map((message,index)=>({...message,conversationId,parentId:null,clientId:null,sequence:String(index+1),lastEventSequence:String(index+1),revision:1,editedAt:null,deletedAt:null,agentId:null,actor:{kind:'human',id:message.userId,name:message.authorName,avatarColor:null},reactions:[],replyCount:0}));
+  const conversation={id:conversationId,channel:'commons',roomId:null,name:'Company commons',lastSequence:String(messages.length),readSequence:String(messages.length),unreadCount:0};
+  if(!match[2])await fulfill(route,{conversations:[conversation]});
+  else if(match[2]==='messages')await fulfill(route,{conversation,messages,nextBefore:null,hasMore:false});
+  else if(match[2]==='read')await fulfill(route,{conversation});
+  else{const after=BigInt(url.searchParams.get('after')||'0'),events=messages.filter(message=>BigInt(message.sequence)>after).map(message=>({sequence:message.sequence,type:'message.created',messageId:message.id,message,createdAt:message.createdAt}));await fulfill(route,{events,cursor:events.at(-1)?.sequence||String(after),lastSequence:conversation.lastSequence,hasMore:false,resetRequired:false});}
+  return true;
+}
 async function stubGeometry(page:Page){
   await page.addInitScript(()=>{
     (window as any).CoatriaOfficeRuntime={mount:(host:HTMLElement)=>{const canvas=document.createElement('canvas');host.append(canvas);return{dispose:()=>canvas.remove(),updateSnapshot:()=>{},diagnostics:{position:{x:0,z:0}},setCharacterModel:()=>false};},loadCharacter:()=>Promise.reject(new Error('Test uses procedural geometry')),disposeCharacter:()=>{}};
@@ -21,6 +31,7 @@ test('a completed old-company mutation cannot replace the newly selected workspa
   await page.route('**/api/**',async route=>{
     const url=new URL(route.request().url());
     if(url.pathname==='/api/session')return fulfill(route,{user,companies:[a,b],configured:true});
+    if(await conversationFixture(route,workspace(url.pathname.includes(b.id)?b:a)))return;
     if(url.pathname===`/api/companies/${a.id}/workspace`){aReads++;return fulfill(route,workspace(a));}
     if(url.pathname===`/api/companies/${b.id}/workspace`)return fulfill(route,workspace(b));
     if(url.pathname===`/api/companies/${a.id}/presence`&&!release){held.push(route);return;}
@@ -44,7 +55,7 @@ test('untrusted company, teammate and message strings render as text in React an
   const attack='<img src=x onerror="window.__coatriaXss=1">';
   const evilCompany={...a,name:attack,template:'studio'},teammate=peer(attack,'30000000-0000-4000-8000-000000000005');
   const data=workspace(evilCompany,{members:[{...user,userId:user.id,role:'owner'},teammate],presence:[{userId:teammate.userId,name:attack,avatarColor:'#c9d6b5',roomId:null,x:1,z:1,status:'available',updatedAt:new Date().toISOString()}],messages:[{id:'40000000-0000-4000-8000-000000000001',roomId:null,body:attack,userId:teammate.userId,authorName:attack,createdAt:new Date().toISOString()}]});
-  await page.route('**/api/**',route=>fulfill(route,new URL(route.request().url()).pathname==='/api/session'?{user,companies:[evilCompany],configured:true}:new URL(route.request().url()).pathname.endsWith('/workspace')?data:{presence:data.presence}));
+  await page.route('**/api/**',async route=>{if(await conversationFixture(route,data))return;return fulfill(route,new URL(route.request().url()).pathname==='/api/session'?{user,companies:[evilCompany],configured:true}:new URL(route.request().url()).pathname.endsWith('/workspace')?data:{presence:data.presence});});
   await page.goto('/#office');
   await expect(page.locator('.cs-scene-floor')).toContainText(attack);
   await page.getByRole('button',{name:'Select '+attack,exact:true}).click();

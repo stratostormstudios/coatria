@@ -91,11 +91,11 @@ export async function runOfficeLoad(options){
  if(process.env.VERCEL||process.env.NODE_ENV==='production')throw new Error('Run this isolated local harness from a development checkout, never a production process.');
  await assertUnusedPort(options.port);
  const fixture=await createLoadDatabase(),{db}=fixture,companyId=randomUUID(),otherCompanyId=randomUUID(),run=randomUUID();
- const clients=Array.from({length:options.clients},(_,index)=>({id:randomUUID(),token:randomBytes(32).toString('base64url'),taskId:randomUUID(),index}));
+ const clients=Array.from({length:options.clients},(_,index)=>({id:randomUUID(),token:randomBytes(32).toString('base64url'),taskId:randomUUID(),messageClientId:randomUUID(),index}));
  const outsider={id:randomUUID(),token:randomBytes(32).toString('base64url'),index:-1},expired={id:randomUUID(),token:randomBytes(32).toString('base64url'),index:-2};
  const identities=[...clients,outsider,expired],companyIds=[companyId,otherCompanyId],userIds=identities.map(client=>client.id);
- const origin=`http://127.0.0.1:${options.port}`,policy={...OFFICE_LOAD_POLICY};
- const records=[],checks=[],positions=new Map();let socket,child,checkout,serverFailure=false,phase='check',warm=false,start=0,loadDuration=0;
+ const origin=`http://127.0.0.1:${options.port}`,policy={...OFFICE_LOAD_POLICY,conversationPollMs:2000,conversationPageLimit:100,conversationPagesPerCycle:8};
+ const records=[],checks=[],positions=new Map(),conversations=new Map(clients.map(client=>[client.id,{cursor:'0',messages:new Map(),events:0}])),conversationErrors=[];let socket,child,checkout,serverFailure=false,phase='check',warm=false,start=0,loadDuration=0;
  const cleanup={verified:false,remainingUsers:identities.length,remainingCompanies:2};
  let fatal='';
  const check=(id,label,passed,detail)=>{checks.push({id,label,passed:Boolean(passed),detail});if(!passed)console.log(`Check failed: ${label}`);};
@@ -109,6 +109,34 @@ export async function runOfficeLoad(options){
   return {status,value,ok:record.ok};
  }
  const path=resource=>`/api/companies/${companyId}/${resource}`;
+ const conversationPath=resource=>path('conversations/commons/'+resource);
+ const sequence=value=>typeof value==='string'&&/^(0|[1-9]\d{0,18})$/.test(value)&&BigInt(value)<=9223372036854775807n;
+ function mergeMessage(state,message){
+  if(!message||typeof message.id!=='string'||!sequence(message.sequence)||!sequence(message.lastEventSequence)||BigInt(message.lastEventSequence)<BigInt(message.sequence))return false;
+  const current=state.messages.get(message.id);if(!current||BigInt(message.lastEventSequence)>=BigInt(current.lastEventSequence))state.messages.set(message.id,message);return true;
+ }
+ async function bootstrapConversation(client){
+  const result=await request(client,conversationPath('messages?limit=100'),'GET',undefined,'conversation-history'),state=conversations.get(client.id);
+  if(!result.ok||!sequence(result.value?.conversation?.lastSequence)||!Array.isArray(result.value.messages)||result.value.hasMore){conversationErrors.push('Initial history was not a complete valid fixture snapshot.');return false;}
+  state.cursor=result.value.conversation.lastSequence;for(const message of result.value.messages)if(!mergeMessage(state,message)){conversationErrors.push('Initial history contained an invalid message projection.');return false;}return true;
+ }
+ async function pollConversation(client){
+  const state=conversations.get(client.id);
+  for(let pageIndex=0;pageIndex<policy.conversationPagesPerCycle;pageIndex++){
+   const result=await request(client,conversationPath(`events?after=${state.cursor}&limit=${policy.conversationPageLimit}`),'GET',undefined,'conversation-events'),page=result.value;
+   if(!result.ok)return false;
+   if(!page||page.resetRequired!==false||!Array.isArray(page.events)||page.events.length>policy.conversationPageLimit||!sequence(page.cursor)||!sequence(page.lastSequence)||typeof page.hasMore!=='boolean'){conversationErrors.push('An event page violated the durable stream contract.');return false;}
+   let next=BigInt(state.cursor);
+   for(const event of page.events){
+    if(!sequence(event.sequence)||BigInt(event.sequence)!==next+1n||!['message.created','message.edited','message.deleted','reaction.changed','read.updated'].includes(event.type)||event.message&&!mergeMessage(state,event.message)||event.parentMessage&&!mergeMessage(state,event.parentMessage)){conversationErrors.push('An event page had a sequence gap or invalid projection.');return false;}
+    next=BigInt(event.sequence);state.events++;
+   }
+   if(BigInt(page.cursor)!==next||next>BigInt(page.lastSequence)||page.hasMore&&(!page.events.length||next>=BigInt(page.lastSequence))||!page.hasMore&&next!==BigInt(page.lastSequence)){conversationErrors.push('An event page advanced an invalid cursor.');return false;}
+   state.cursor=page.cursor;if(!page.hasMore)return true;
+  }
+  // The next cadence resumes at this exact cursor; bounded work never skips events.
+  return true;
+ }
  const move=async(client,step=0)=>{
   const {x,z}=loadPosition(client.index,options.clients,step);
   const data={roomId:null,x,z,status:'available'},result=await request(client,path('presence'),'POST',data,'presence-write');
@@ -143,35 +171,54 @@ export async function runOfficeLoad(options){
    if(attempt===89)throw new Error('The isolated Next server did not become ready.');await delay(500);
   }
   // Warm route compilation before measuring request latency.
-  await request(clients[0],'/api/session');await request(clients[0],path('workspace'));await move(clients[0]);
+  await request(clients[0],'/api/session');await request(clients[0],path('workspace'));await move(clients[0]);await request(clients[0],conversationPath('messages?limit=100'));await request(clients[0],conversationPath('events?after=0&limit=100'));
   warm=true;start=performance.now();
   const initial=await Promise.all(clients.map(client=>move(client)));
   check('independent-sessions','Independent authenticated clients connected',initial.every(result=>result.ok)&&new Set(clients.map(client=>client.token)).size===options.clients,`${options.clients} distinct users and opaque sessions made real HTTP presence writes.`);
   const roster=await request(clients[0],path('presence'));check('initial-roster','Every connected client appears exactly once',roster.ok&&roster.value?.presence?.length===options.clients&&new Set(roster.value.presence.map(person=>person.userId)).size===options.clients,`Expected ${options.clients} presence entries.`);
-  console.log(`Measuring ${options.clients} sessions for ${options.duration} seconds; movement every 1 s, presence poll every 2 s, workspace every 5 s…`);
+  const bootstrapped=await Promise.all(clients.map(bootstrapConversation));check('conversation-bootstrap','Every session starts from a consistent history cursor',bootstrapped.every(Boolean),`${options.clients} independent history snapshots and event cursors were initialized before concurrent sends.`);
+  console.log(`Measuring ${options.clients} sessions for ${options.duration} seconds; movement every 1 s, presence and conversation events every 2 s, workspace every 5 s…`);
   phase='load';const began=performance.now(),until=began+options.duration*1000;
   async function cadence(client,period,operation){
    await delay(period*client.index/options.clients);let count=0;
    while(performance.now()<until){const tick=performance.now();await operation(client,++count);await delay(Math.max(0,Math.min(until-performance.now(),period-(performance.now()-tick))));}
   }
-  let posted=[];
+  let posted=[],retried=[];
+  const payload=client=>({body:`Load visibility ${run} ${client.index}`,clientId:client.messageClientId});
   const collaboration=(async()=>{
-   posted=await Promise.all(clients.map(client=>request(client,path('messages'),'POST',{body:`Load visibility ${run} ${client.index}`,roomId:null},'chat-write',201)));
+   posted=await Promise.all(clients.map(client=>request(client,conversationPath('messages'),'POST',payload(client),'chat-write',201)));
+   retried=await Promise.all(clients.map(client=>request(client,conversationPath('messages'),'POST',payload(client),'chat-retry',200)));
    await Promise.all(clients.map(client=>request(client,path('tasks/'+client.taskId),'PATCH',{title:`Updated load task ${client.index}`,status:'doing'},'task-write')));
   })();
   await Promise.all([collaboration,...clients.flatMap(client=>[
    cadence(client,policy.movementMs,move),
    cadence(client,policy.presencePollMs,client=>request(client,path('presence'),'GET',undefined,'presence-read')),
+   cadence(client,policy.conversationPollMs,pollConversation),
    cadence(client,policy.workspaceMs,client=>request(client,path('workspace'),'GET',undefined,'workspace-read')),
    cadence(client,policy.sessionMs,client=>request(client,'/api/session','GET',undefined,'session-read'))
   ])]);loadDuration=(performance.now()-began)/1000;phase='check';
   const observations=await Promise.all([clients[0],clients[Math.floor(clients.length/2)],clients.at(-1)].map(client=>request(client,path('workspace'))));
   const messageIds=new Set(posted.flatMap(result=>result.value?.message?.id?[result.value.message.id]:[]));
-  check('chat-visibility','Concurrent messages are visible across sessions',messageIds.size===options.clients&&observations.every(result=>result.ok&&[...messageIds].every(id=>result.value.messages.some(message=>message.id===id))),`${options.clients} simultaneous message submissions checked from three sessions.`);
+  const drained=await Promise.all(clients.map(pollConversation)),histories=await Promise.all([clients[0],clients[Math.floor(clients.length/2)],clients.at(-1)].map(client=>request(client,conversationPath('messages?limit=100'),'GET',undefined,'conversation-history')));
+  check('chat-idempotency','Retrying every client send does not create duplicate messages',posted.length===options.clients&&posted.every(result=>result.ok)&&retried.length===options.clients&&retried.every((result,index)=>result.ok&&result.value?.replayed===true&&result.value.message?.id===posted[index].value?.message?.id)&&histories.every(result=>result.ok&&result.value.messages?.length===options.clients),`${options.clients} original UUIDs were retried through real HTTP; each returned its original message ID.`);
+  check('chat-visibility','Concurrent messages are visible through history and every event stream',messageIds.size===options.clients&&drained.every(Boolean)&&histories.every(result=>result.ok&&[...messageIds].every(id=>result.value.messages.some(message=>message.id===id)))&&clients.every(client=>[...messageIds].every(id=>conversations.get(client.id).messages.has(id)))&&observations.every(result=>result.ok&&[...messageIds].every(id=>result.value.messages.some(message=>message.id===id))),`${options.clients} concurrent submissions reached all ${options.clients} event projections, three history snapshots and three compatible workspace snapshots.`);
+  check('conversation-order','Independent cursors delivered contiguous committed event sequences',conversationErrors.length===0&&clients.every(client=>conversations.get(client.id).events===options.clients),`${options.clients} independent streams each received ${options.clients} creation events without gaps, duplicates or invalid cursor advancement.`);
   check('task-visibility','Concurrent task updates are visible across sessions',observations.every(result=>result.ok&&clients.every(client=>result.value.tasks.some(task=>task.id===client.taskId&&task.status==='doing'&&task.title===`Updated load task ${client.index}`))),`${options.clients} independently assigned task updates checked from three sessions.`);
   check('movement-visibility','Latest movement coordinates reach other sessions',observations.every(result=>result.ok&&[...positions].every(([id,point])=>{const person=result.value.presence.find(person=>person.userId===id);return person&&Math.abs(person.x-point.x)<.0001&&Math.abs(person.z-point.z)<.0001;})),'Observers agree with the last acknowledged position for every client.');
-  const isolation=await Promise.all([request(outsider,path('workspace'),'GET',undefined,'isolation',404),request(outsider,path('presence'),'POST',{roomId:null,x:0,z:0,status:'available'},'isolation',404),request(outsider,path('messages'),'POST',{body:'must not enter'},'isolation',404),request(clients[0],`/api/companies/${otherCompanyId}/workspace`,'GET',undefined,'isolation',404)]);
-  check('tenant-isolation','Other-company sessions cannot read or write the office',isolation.every(result=>result.ok),'Four cross-tenant HTTP requests were denied.');
+  const editedId=posted[0]?.value?.message?.id;
+  if(editedId){
+   const edited=await request(clients[0],conversationPath('messages/'+editedId),'PATCH',{body:'Edited load contribution',revision:1},'conversation-edit');
+   const conflict=await request(clients[0],conversationPath('messages/'+editedId),'PATCH',{body:'Stale content must not win',revision:1},'conversation-conflict',409);
+   const reactor=clients.at(-1),reaction=await request(reactor,conversationPath('messages/'+editedId+'/reactions'),'PUT',{emoji:'thumbsup',active:true},'conversation-reaction');
+   const propagated=await Promise.all(clients.map(pollConversation));
+   check('conversation-mutations','Edits and reactions reach every session and stale edits are rejected',edited.ok&&conflict.ok&&conflict.value?.code==='MESSAGE_CONFLICT'&&reaction.ok&&propagated.every(Boolean)&&clients.every(client=>{const message=conversations.get(client.id).messages.get(editedId);return message?.body==='Edited load contribution'&&message.revision===2&&message.reactions?.some(value=>value.emoji==='thumbsup'&&value.count===1&&value.mine===(client.id===reactor.id));}),`One real edit, a stale revision rejection and one reaction were observed consistently by ${options.clients} clients.`);
+   const displayed=histories.at(-1)?.value?.messages||[],readSequence=displayed.reduce((current,message)=>sequence(message.sequence)&&BigInt(message.sequence)>BigInt(current)?message.sequence:current,'0'),beforeRead=conversations.get(clients[0].id).cursor;
+   const marked=await request(reactor,conversationPath('read'),'PUT',{sequence:readSequence},'conversation-read-marker'),older=await request(reactor,conversationPath('read'),'PUT',{sequence:'0'},'conversation-read-marker');
+   const privateEvent=await request(clients[0],conversationPath(`events?after=${beforeRead}&limit=100`),'GET',undefined,'conversation-events');
+   check('conversation-read-marker','Read position is monotonic and peer reading details remain private',marked.ok&&older.ok&&marked.value.conversation?.readSequence===readSequence&&older.value.conversation?.readSequence===readSequence&&marked.value.conversation?.lastSequence===older.value.conversation?.lastSequence&&marked.value.conversation?.unreadCount===0&&privateEvent.ok&&privateEvent.value.events?.some(event=>event.type==='read.updated')&&privateEvent.value.events.every(event=>event.type!=='read.updated'||!event.read), 'A displayed-history read marker advanced once, ignored an older marker, and exposed no reader identity or position to another session.');
+  }else check('conversation-mutations','Edits, reactions and read positions were exercised',false,'No accepted message was available for mutation verification.');
+  const isolation=await Promise.all([request(outsider,path('workspace'),'GET',undefined,'isolation',404),request(outsider,path('presence'),'POST',{roomId:null,x:0,z:0,status:'available'},'isolation',404),request(outsider,path('messages'),'POST',{body:'must not enter'},'isolation',404),request(clients[0],`/api/companies/${otherCompanyId}/workspace`,'GET',undefined,'isolation',404),request(outsider,conversationPath('messages'),'GET',undefined,'isolation',404),request(outsider,conversationPath('events?after=0'),'GET',undefined,'isolation',404),request(outsider,conversationPath('messages'),'POST',{clientId:randomUUID(),body:'must not enter'},'isolation',404)]);
+  check('tenant-isolation','Other-company sessions cannot read or write the office',isolation.every(result=>result.ok),'Seven cross-tenant HTTP requests, including conversation history, events and sends, were denied.');
   const stale=await request(clients[0],path('presence'),'POST',{roomId:null,x:0,z:0,status:'available'},'identity',409,{'X-Coatria-User':outsider.id});check('identity-binding','Stale browser identity cannot overwrite presence',stale.ok,'A mismatched identity assertion was rejected.');
   await db.query('UPDATE sessions SET expires_at=now()-interval \'1 second\' WHERE token_hash=$1 AND user_id=$2',[hash(expired.token),expired.id]);
   const expiry=await request(expired,path('workspace'),'GET',undefined,'session-expiry',401);check('session-expiry','Expired authentication cannot read a workspace',expiry.ok,'The deliberately expired sentinel session received HTTP 401.');
@@ -182,13 +229,15 @@ export async function runOfficeLoad(options){
   check('presence-expiry','Disconnected clients disappear after the real presence TTL',expiredPresence.ok&&expiredPresence.value.presence.length===active.length&&absent.every(client=>!expiredPresence.value.presence.some(person=>person.userId===client.id)),`${disconnect} clients stopped sending heartbeats for at least 47 seconds; ${active.length} remained active.`);
   const reconnect=await Promise.all(absent.map(client=>move(client,99))),rejoined=await request(active[0],path('presence'));
   check('reconnect','Reconnected clients return without duplicate occupants',reconnect.every(result=>result.ok)&&rejoined.value?.presence?.length===options.clients&&new Set(rejoined.value.presence.map(person=>person.userId)).size===options.clients,'The same valid sessions rejoined through real HTTP presence writes.');
+  const afterReconnect=await request(clients[0],conversationPath('messages'),'POST',{clientId:randomUUID(),body:'Conversation continued after reconnect'},'chat-write',201),caughtUp=await Promise.all(clients.map(pollConversation));
+  check('conversation-reconnect','Event cursors resume after disconnected clients return',afterReconnect.ok&&caughtUp.every(Boolean)&&conversationErrors.length===0&&clients.every(client=>conversations.get(client.id).messages.get(afterReconnect.value.message?.id)?.body==='Conversation continued after reconnect'),'All sessions resumed their saved event cursor after the real presence-expiry interval and received the new message.');
  }catch(error){fatal=error instanceof Error?error.message:'The isolated test failed.';check('completed','The bounded test completed',false,fatal.replace(/postgres(?:ql)?:\/\/\S+/g,'[redacted]'));}
  finally{
   await stopChild(child);
   try{
    await db.query('DELETE FROM companies WHERE id=ANY($1::uuid[])',[companyIds]);
    await db.query('DELETE FROM users WHERE id=ANY($1::uuid[])',[userIds]);
-   const rateKeys=identities.flatMap(client=>[hash(`write:${client.id}`),hash(`chat:${companyId}:${client.id}`)]);await db.query('DELETE FROM rate_limits WHERE key=ANY($1::text[])',[rateKeys]);
+   const rateKeys=identities.flatMap(client=>[hash(`write:${client.id}`),hash(`chat:${companyId}:${client.id}`),hash(`conversation-read:${companyId}:${client.id}`),hash(`conversation-send:${companyId}:human:${client.id}`)]);await db.query('DELETE FROM rate_limits WHERE key=ANY($1::text[])',[rateKeys]);
    cleanup.remainingUsers=Number((await db.query('SELECT count(*) FROM users WHERE id=ANY($1::uuid[])',[userIds])).rows[0].count);
    cleanup.remainingCompanies=Number((await db.query('SELECT count(*) FROM companies WHERE id=ANY($1::uuid[])',[companyIds])).rows[0].count);cleanup.verified=cleanup.remainingUsers===0&&cleanup.remainingCompanies===0;
   }catch{cleanup.verified=false;}

@@ -1,5 +1,6 @@
 import {test,expect,type Page,type Route} from '@playwright/test';
 import {AVATAR_CATALOG} from '../../src/lib/avatar-catalog';
+import type {ConversationMessage,ConversationSummary} from '../../src/lib/conversation-protocol';
 
 const user={id:'10000000-0000-4000-8000-000000000091',name:'Mara Chen',email:'mara@example.invalid',roleTitle:'Creative director',avatarColor:'#c9d6b5',avatarId:null as string|null};
 const company={id:'20000000-0000-4000-8000-000000000091',name:'Northlight Studio',slug:'northlight-fixture',template:'blank',role:'owner'};
@@ -9,26 +10,42 @@ const json=(route:Route,data:unknown,status=200)=>route.fulfill({status,contentT
 function snapshot(){return {company,members:[{...user,userId:user.id,role:'owner'},peer],rooms:[room,{...room,id:'30000000-0000-4000-8000-000000000092',name:'Quiet corner',kind:'focus'}],agents:[],tasks:[],messages:[] as any[],presence:[{...peer,status:'focus',roomId:room.id,x:0,z:0,updatedAt:new Date().toISOString()}],activity:[{id:'a1',kind:'task.created',description:'Mara Chen created the launch review.',actorName:'Mara Chen',createdAt:new Date().toISOString()},{id:'a2',kind:'member.joined',description:'Ari Santos joined the company.',actorName:'Ari Santos',createdAt:new Date(Date.now()-86400000).toISOString()}],drives:[],openings:[],applications:[],layout:[] as any[]};}
 async function fixture(page:Page,data:ReturnType<typeof snapshot>,special?:(route:Route)=>Promise<boolean>){
   await page.addInitScript(()=>{(window as any).CoatriaOfficeRuntime={mount:(host:HTMLElement)=>{const canvas=document.createElement('canvas');host.append(canvas);return {dispose:()=>canvas.remove(),updateSnapshot:()=>{},diagnostics:{position:{x:0,z:0}},setCharacterModel:()=>false};},loadCharacter:()=>Promise.reject(new Error('Fixture')),disposeCharacter:()=>{}};});
-  let identity={...user};const profileWrites:any[]=[];
+  let identity={...user};const profileWrites:any[]=[],readMarkers=new Map<string,string>();
+  const conversationId=(channel:string)=>channel==='commons'?'50000000-0000-4000-8000-000000000091':channel.replace(/^30000000/,'50000000');
+  function messages(channel:string):ConversationMessage[]{return data.messages.filter(message=>(message.roomId||'commons')===channel).map((message,index)=>({...message,conversationId:conversationId(channel),parentId:message.parentId||null,clientId:message.clientId||null,sequence:String(index+1),lastEventSequence:String(index+1),revision:1,editedAt:null,deletedAt:null,agentId:null,actor:{kind:'human',id:message.userId,name:message.authorName,avatarColor:null},reactions:[],replyCount:0}));}
+  function summary(channel:string):ConversationSummary{return{id:conversationId(channel),channel,roomId:channel==='commons'?null:channel,name:channel==='commons'?'Company commons':data.rooms.find(room=>room.id===channel)!.name,lastSequence:String(messages(channel).length),readSequence:readMarkers.get(channel)||'0',unreadCount:0};}
   await page.route('**/api/**',async route=>{
     if(special&&await special(route))return;
     const path=new URL(route.request().url()).pathname;
     if(path==='/api/session')return json(route,{user:identity,companies:[company],configured:true});
     if(path.endsWith('/workspace'))return json(route,data);
+    const conversation=path.match(/\/conversations(?:\/([^/]+)\/(messages|events|read))?$/);
+    if(conversation){
+      const channel=conversation[1]||'commons',kind=conversation[2],url=new URL(route.request().url());
+      if(!kind)return json(route,{conversations:['commons',...data.rooms.map(room=>room.id)].map(summary)});
+      if(kind==='messages'&&route.request().method()==='GET'){
+        const before=BigInt(url.searchParams.get('before')||'9223372036854775807'),limit=Number(url.searchParams.get('limit')||50),rows=messages(channel).filter(message=>BigInt(message.sequence)<before),page=rows.slice(-limit);
+        return json(route,{conversation:summary(channel),messages:page,nextBefore:rows.length>limit?page[0].sequence:null,hasMore:rows.length>limit});
+      }
+      if(kind==='events'){const after=BigInt(url.searchParams.get('after')||'0'),limit=Number(url.searchParams.get('limit')||100),rows=messages(channel).filter(message=>BigInt(message.sequence)>after),page=rows.slice(0,limit);return json(route,{events:page.map(message=>({sequence:message.sequence,type:'message.created',messageId:message.id,message,createdAt:message.createdAt})),cursor:page.at(-1)?.sequence||String(after),lastSequence:summary(channel).lastSequence,hasMore:rows.length>limit,resetRequired:false});}
+      if(kind==='read'){readMarkers.set(channel,route.request().postDataJSON().sequence);return json(route,{conversation:summary(channel)});}
+      return json(route,{error:'Unexpected conversation fixture mutation.'},501);
+    }
     if(path==='/api/avatars')return json(route,{avatars:AVATAR_CATALOG});
     if(path.endsWith('/preview'))return json(route,{error:'Preview deliberately unavailable in public fixture'},503);
     if(path==='/api/profile'&&route.request().method()==='PATCH'){const payload=route.request().postDataJSON();profileWrites.push(payload);identity={...identity,...payload};return json(route,{user:identity});}
     return json(route,{presence:data.presence});
   });
-  return {profileWrites};
+  return {profileWrites,messages};
 }
 test.beforeEach(async({baseURL})=>{test.skip(!baseURL||!['localhost','127.0.0.1'].includes(new URL(baseURL).hostname),'Local API-intercepted fixtures only.');});
 
 test('chat keeps reading position and per-room drafts through a delayed send and failure',async({page})=>{
   const data=snapshot();data.messages=Array.from({length:60},(_,index)=>({id:'message-'+index,roomId:null,body:'Production update '+index+' — A longer update gives the conversation a realistic scroll height.',createdAt:new Date(Date.now()-(60-index)*60000).toISOString(),userId:peer.userId,authorName:peer.name}));
   let held:Route|undefined,fail=false;const writes:any[]=[];
-  await fixture(page,data,async route=>{if(new URL(route.request().url()).pathname.endsWith('/messages')&&route.request().method()==='POST'){writes.push(route.request().postDataJSON());if(fail)await json(route,{error:'Connection interrupted'},503);else held=route;return true;}return false;});
+  const state=await fixture(page,data,async route=>{if(new URL(route.request().url()).pathname.endsWith('/messages')&&route.request().method()==='POST'){writes.push(route.request().postDataJSON());if(fail)await json(route,{error:'Connection interrupted'},503);else held=route;return true;}return false;});
   await page.goto('/#chat');const log=page.getByRole('log',{name:'Conversation messages'});
+  await expect(page.locator('.message')).toHaveCount(50);await page.getByRole('button',{name:'Load older messages',exact:true}).click();
   await expect(page.locator('.message')).toHaveCount(60);
   await log.evaluate(element=>{element.scrollTop=0;element.dispatchEvent(new Event('scroll'));});
   data.messages.push({...data.messages[0],id:'new-incoming',body:'A new update arrived',createdAt:new Date().toISOString()});
@@ -46,13 +63,13 @@ test('chat keeps reading position and per-room drafts through a delayed send and
   await page.getByLabel('Your message',{exact:true}).fill('Next commons draft');
   await page.getByRole('button',{name:'# '+room.name,exact:true}).click();
   await expect(page.getByLabel('Your message',{exact:true})).toHaveValue('Room draft');
-  const posted={...data.messages[0],id:'posted-message',body:'Commons draft',userId:user.id,authorName:user.name,createdAt:new Date().toISOString()};data.messages.push(posted);await json(held!,{message:posted},201);
+  const posted={...data.messages[0],id:'posted-message',body:'Commons draft',clientId:writes[0].clientId,userId:user.id,authorName:user.name,createdAt:new Date().toISOString()};data.messages.push(posted);await json(held!,{message:state.messages('commons').at(-1),replayed:false},201);
   await page.getByRole('button',{name:'Company commons',exact:true}).click();
   await expect(page.getByLabel('Your message',{exact:true})).toHaveValue('Next commons draft');
   await expect(page.getByText('Message posted',{exact:true})).toBeVisible();
-  expect(writes).toEqual([{body:'Commons draft',roomId:null}]);
+  expect(writes).toHaveLength(1);expect(writes[0]).toMatchObject({body:'Commons draft'});expect(writes[0].clientId).toMatch(/^[0-9a-f-]{36}$/);expect(writes[0]).not.toHaveProperty('roomId');
   fail=true;await page.getByRole('button',{name:'Send',exact:true}).click();
-  await expect(page.locator('#main').getByRole('alert').filter({hasText:'Your draft is kept.'})).toContainText('Not sent. Your draft is kept.');
+  await expect(page.locator('#main').getByRole('alert').filter({hasText:'Your draft is kept.'})).toContainText('Delivery is unconfirmed. Your draft is kept.');await expect(page.getByRole('button',{name:'Retry original message',exact:true})).toBeVisible();
   await expect(page.getByLabel('Your message',{exact:true})).toHaveValue('Next commons draft');
   await page.setViewportSize({width:390,height:844});
   const selector=page.getByRole('combobox',{name:'Choose conversation',exact:true});await expect(selector).toBeVisible();await expect(page.getByLabel('Search conversations',{exact:true})).toBeHidden();
