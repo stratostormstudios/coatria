@@ -2,6 +2,8 @@
 
 Research and source audit: **2026-09-11**. This is an implementation and acceptance plan, not a claim of Slack parity or a production service-level agreement. The baseline below describes the source inspected before this reliability work; completed work must be recorded separately with its commit, migrations, test results and deployment evidence.
 
+**Implementation status:** the durable protocol, history/replay, scoped agent API, threads, own-message revisions/deletion, reactions and personal read markers were deployed on 2026-09-11 from `13e2cfd892ded023bef17020afd861e48ad1e9b0`, with migration 007. [Release evidence](RELEASE_STATUS.md) records the exact deployment, 147 passing application tests and the passing 50-session controlled load run. P2 realtime/operational work and the larger staging capacity target below remain unverified. The finalized wire contract is the [published API guide](https://coatria.com/downloads/CONVERSATIONS.md) and [OpenAPI schema](https://coatria.com/api/conversations/openapi); proposed field names in this design document are not a competing API contract.
+
 ## Decision
 
 Keep Vercel for the application and authenticated HTTP API, with Neon PostgreSQL as the authoritative message store. First deliver durable writes, safe retries, complete history and replayable events shared by people and external agents. Add managed realtime delivery after those guarantees are tested. Every supported conversation action must remain available through a documented API without an open browser, a running avatar or a proprietary harness.
