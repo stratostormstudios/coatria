@@ -21,6 +21,10 @@ test('runtime role supports accounts but cannot change verification, schema, rol
     await client.query("UPDATE users SET name='Updated test',password_hash='replacement test only',avatar_id='city-024' WHERE id=$1",[user.id]);
     assert.equal((await client.query('SELECT avatar_id FROM users WHERE id=$1',[user.id])).rows[0].avatar_id,'city-024');
     await client.query('SELECT name FROM schema_migrations');
+    const company=(await client.query("INSERT INTO companies(name,slug,template) VALUES('Privilege fixture',$1,'blank') RETURNING id",[role])).rows[0];
+    await client.query("INSERT INTO presence(company_id,user_id,status,motion_mode,interaction_id,interaction_type,interaction_value,interaction_at) VALUES($1,$2,'available','run',gen_random_uuid(),'reaction','heart',clock_timestamp())",[company.id,user.id]);
+    await client.query("UPDATE presence SET state_updated_at=clock_timestamp(),motion_mode='walk' WHERE company_id=$1 AND user_id=$2",[company.id,user.id]);
+    assert.equal((await client.query('SELECT motion_mode,interaction_value FROM presence WHERE company_id=$1 AND user_id=$2',[company.id,user.id])).rows[0].interaction_value,'heart');
     const options=(await client.query('SELECT rolcreaterole,rolcreatedb,rolbypassrls FROM pg_roles WHERE rolname=current_user')).rows[0];
     assert.deepEqual(options,{rolcreaterole:false,rolcreatedb:false,rolbypassrls:false});
     for(const [sql,values] of [

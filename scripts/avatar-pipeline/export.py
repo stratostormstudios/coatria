@@ -53,9 +53,9 @@ for number,rig in zip(ids,rigs):
  for m in meshes:m.select_set(True)
  bpy.context.view_layer.objects.active=meshes[0];bpy.ops.object.join()
  mesh=meshes[0];mesh.name=ident+'-mesh';rig.name=ident+'-rig'
- metrics={'id':ident,'source':source,'family':family,'actions':[],'walkSpeed':None,'forwardRotation':0}
- for public,suffix in [('Idle','IdleLookAround'),('Walk','Walk'),('Sit','SitTableIdle'),('Wave','WaveHello')]:
-  authored=('Adult' if public=='Walk' else family)+'_'+suffix;action=bpy.data.actions[authored]
+ metrics={'id':ident,'source':source,'family':family,'actions':[],'walkSpeed':None,'runSpeed':None,'forwardRotation':0}
+ for public,suffix in [('Idle','IdleLookAround'),('Walk','Walk'),('Run','Run'),('Sit','SitTableIdle'),('Wave','WaveHello'),('Dance','DanceIdle')]:
+  authored=('Adult' if public in ['Walk','Run'] else family)+'_'+suffix;action=bpy.data.actions[authored]
   rig.animation_data.action=action;rig.animation_data.action_slot=action.slots[0]
   first,last=map(int,action.frame_range);samples=[]
   for f in range(first,last+1):
@@ -64,7 +64,7 @@ for number,rig in zip(ids,rigs):
   start,end=samples[0],samples[-1]
   loop=max((Vector(start[n]['head'])-Vector(end[n]['head'])).length for n in start)
   metrics['actions'].append({'name':public,'source':authored,'frames':[first,last],'duration':(last-first)/30,'sampleCount':len(samples),'loopEndpointPositionError':loop,'rootMaxOffset':max(Vector(s['Root']['head']).length for s in samples),'hipsRange':[[min(s['Hips']['head'][axis] for s in samples),max(s['Hips']['head'][axis] for s in samples)] for axis in range(3)]})
-  if public=='Walk':
+  if public in ['Walk','Run']:
    speeds=[]
    for foot in ['LeftFoot','RightFoot']:
     heights=[s[foot]['head'][2] for s in samples]; threshold=min(heights)+(max(heights)-min(heights))*.3
@@ -72,7 +72,7 @@ for number,rig in zip(ids,rigs):
      if heights[i]<=threshold:
       speed=(samples[i+1][foot]['head'][1]-samples[i-1][foot]['head'][1])*15
       if speed>.1:speeds.append(speed)
-   metrics['walkSpeed']=round(statistics.median(speeds),4)
+   metrics['walkSpeed' if public=='Walk' else 'runSpeed']=round(statistics.median(speeds),4)
    metrics['walkSpeedMethod']='Median backward foot speed during lowest30%of ankle height, original30fps; calibrated estimate for authored in-place motion.'
   rig.animation_data.action=None
   track=rig.animation_data.nla_tracks.new();track.name=public
@@ -88,5 +88,5 @@ for number,rig in zip(ids,rigs):
  assert metrics['bytes']<4*1024*1024,'Over runtime asset budget'
  report=[x for x in report if x['id']!=ident]+[metrics]
  (out/'runtime-export-audit.json').write_text(json.dumps(report,indent=2))
- print('EXPORTED '+ident+' '+str(metrics['bytes'])+' '+str(metrics['walkSpeed']),flush=True)
+ print('EXPORTED '+ident+' '+str(metrics['bytes'])+' '+str(metrics['walkSpeed'])+' run='+str(metrics['runSpeed']),flush=True)
 print('EXPORTS_COMPLETE')

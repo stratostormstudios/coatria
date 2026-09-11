@@ -17,26 +17,26 @@ The application serves curated GLBs and portraits through authenticated, exact-I
 
 ## Exported collection
 
-Measured on 2026-09-08 after export, mesh merging and animation-channel pruning:
+Measured on 2026-09-11 after the six-clip export, mesh merging and animation-channel pruning:
 
 | Property | Actual exported bundle |
 | --- | --- |
 | Characters | 12 |
 | Triangles per character | 7,730–11,576 |
-| GLB size per character | 721,320–913,016 bytes |
-| Combined GLBs | 9,630,252 bytes |
-| GLBs and portraits combined | 9,797,449 bytes |
+| GLB size per character | 838,924–1,030,636 bytes |
+| Combined GLBs | 10,932,112 bytes |
+| GLBs and portraits combined | 11,099,309 bytes |
 | Skin | 44 joints per character |
 | Geometry | One merged mesh, 1–4 material primitives |
 | Texture | Embedded 256 × 256 palette; Sand blazer also uses a 512 × 512 fabric texture; no external asset URLs |
-| Clips | Idle, Walk, Sit, Wave |
+| Clips | Idle, Walk, Run, Sit, Wave, Dance |
 | Portraits | 160 × 200 PNG |
 
 These are asset measurements, not a simultaneous-user or mobile frame-rate benchmark. Large crowds still need visibility budgets, distance-based animation updates and device profiling.
 
-The supplied GLBs had rigs but no animation clips. Clips were exported locally from the purchased Blender source. The three senior variants use the standard supplied Adult_Walk on their matching rest skeleton; their family-specific idle, sitting and waving remain. The original senior shuffle was unsuitable at the office's normal movement speed. Terminal hand/finger seams are closed over six frames; hip sway is preserved. Exported Walk lasts approximately 1.333 seconds, faces +Z, has no root displacement and has a measured authored gait speed of 0.9505 model units per second.
+The supplied GLBs had rigs but no animation clips. Clips were exported locally from the purchased Blender source. The three senior variants use the standard supplied Adult_Walk on their matching rest skeleton; their family-specific idle, sitting, waving and dancing remain. The original senior shuffle was unsuitable at the office's normal movement speed. Terminal hand/finger seams are closed over six frames; hip sway is preserved. Exported Walk lasts approximately 1.333 seconds, faces +Z, has no root displacement and has a measured authored gait speed of 0.9505 model units per second.
 
-Only idle and walking are connected to current office behavior. Sitting and waving are prepared in the files; desk seating and gesture controls remain future features.
+Run uses the supplied Adult_Run on every compatible rig, with measured authored pace 3.6093 model units per second. Wave is a one-shot emote; Dance uses the supplied family DanceIdle. These six clips drive office locomotion, the Character menu and calibrated task-chair seating. See [character interactions](CHARACTER_INTERACTIONS.md) for controls, shared-state behavior and supported chairs.
 
 ## Movement and resource lifetime
 
@@ -46,7 +46,7 @@ One office instance downloads each required appearance once. Geometry and textur
 
 ## Building and verification
 
-Supply the licensed files privately before any Vercel upload. `npm run build` runs a character-bundle guard whenever `VERCEL` is set; locally use `COATRIA_REQUIRE_AVATAR_ASSETS=1`. The guard requires all catalog models, skins, Idle/Walk clips, portraits, bounded file sizes and embedded resources. A Vercel deployment from a Git checkout without the licensed bundle fails deliberately. Public-source CI may build without it and does not pretend to verify licensed models.
+Supply the licensed files privately before any Vercel upload. `npm run build` runs a character-bundle guard whenever `VERCEL` is set; locally use `COATRIA_REQUIRE_AVATAR_ASSETS=1`. The guard requires all catalog models, skins, every declared Idle/Walk/Run/Sit/Wave/Dance clip, portraits, bounded file sizes and embedded resources. A Vercel deployment from a Git checkout without the licensed bundle fails deliberately. Public-source CI may build without it and does not pretend to verify licensed models.
 
 Next.js explicitly traces GLBs into the model function and PNGs into the preview function. Verify the corresponding `.next/server/app/api/avatars/[avatarId]/*/route.js.nft.json` files contain every catalog asset before deployment. `.vercelignore` intentionally permits `.runtime-assets` while excluding credentials, local databases and test output. Use the licensed operator's private local upload workflow until a private artifact store is introduced.
 

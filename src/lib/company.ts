@@ -1,10 +1,13 @@
 import { z } from 'zod';
+import {randomUUID} from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { query, transaction } from './db';
 import { lockMembership, requireMembership, requireUser, type Membership } from './auth';
 import { body, fail, hashToken, id, json, publicUrl, rateLimit, secret, uuid } from './security';
 import { agentColumns, driveColumns, email, layoutInput, openingColumns, presenceInput, roomInput, STUDIO_LAYOUT, taskColumns, text } from './model';
 import { DEFAULT_FLOOR, readFloorPlan, type FloorPlanDocument } from './floor-plan';
+import {resolveOfficeSeat,type OfficeSeat} from './office-seating';
+import {INTERACTION_TTL_SECONDS} from './presence-protocol';
 
 export async function recordActivity(client: PoolClient, member: Membership, kind: string, description: string) {
   await client.query('INSERT INTO activity(company_id,actor_id,kind,description) VALUES($1,$2,$3,$4)', [member.companyId, member.userId, kind, description]);
@@ -23,9 +26,63 @@ export async function existingAssignee(client: PoolClient, companyId: string, us
   if (userId && !(await client.query("SELECT user_id FROM memberships WHERE user_id=$1 AND company_id=$2 AND role<>'removed' FOR SHARE", [userId, companyId])).rowCount) fail(400, 'Assignee is not an active member of this company.');
 }
 export async function readPresence(companyId: string) {
-  return (await query(`SELECT p.user_id AS "userId",u.name,u.avatar_color AS "avatarColor",u.avatar_id AS "avatarId",p.room_id AS "roomId",p.x,p.z,p.status,p.updated_at AS "updatedAt"
+  return (await query(`SELECT p.user_id AS "userId",u.name,u.avatar_color AS "avatarColor",u.avatar_id AS "avatarId",p.room_id AS "roomId",p.x,p.z,p.status,p.state_updated_at AS "updatedAt",
+    p.motion_mode AS "motionMode",p.seat_id AS "seatId",p.seat_transform AS seat,
+    CASE WHEN p.interaction_at>clock_timestamp()-$2*interval '1 second' THEN json_build_object('id',p.interaction_id,'type',p.interaction_type,'value',p.interaction_value,'createdAt',p.interaction_at,'expiresAt',p.interaction_at+$2*interval '1 second') ELSE NULL END AS interaction
     FROM presence p JOIN users u ON u.id=p.user_id JOIN memberships m ON m.user_id=p.user_id AND m.company_id=p.company_id
-    WHERE p.company_id=$1 AND p.updated_at>now()-interval '45 seconds' AND m.role<>'removed' ORDER BY u.name`, [companyId])).rows;
+    WHERE p.company_id=$1 AND p.updated_at>clock_timestamp()-interval '45 seconds' AND m.role<>'removed' ORDER BY u.name`, [companyId,INTERACTION_TTL_SECONDS])).rows;
+}
+async function writePresence(client:PoolClient,member:Membership,data:z.infer<typeof presenceInput>){
+ const companyId=member.companyId;
+ await existingRoom(client,companyId,data.roomId);
+ // Serialize one person's initial INSERT as well as later writes. No other person's
+ // presence row is locked, so opposite seat requests cannot form a row-lock cycle.
+ await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`presence-user:${companyId}:${member.userId}`]);
+ const previous=(await client.query("SELECT *,updated_at>clock_timestamp()-interval '45 seconds' AS active FROM presence WHERE company_id=$1 AND user_id=$2 FOR UPDATE",[companyId,member.userId])).rows[0];
+ const moved=Boolean(previous&&(Math.abs(previous.x-data.x)>.0001||Math.abs(previous.z-data.z)>.0001));
+ const roomChanged=Boolean(previous&&previous.room_id!==data.roomId),explicitSeat=typeof data.seatId==='string';
+ let seatId=explicitSeat?data.seatId!:data.seatId===null||moved||roomChanged||!previous?.active?null:previous?.seat_id??null;
+ let seat:OfficeSeat|null=null,x=data.x,z=data.z;
+ if(seatId){
+  const plan=readFloorPlan((await client.query('SELECT layout FROM companies WHERE id=$1',[companyId])).rows[0].layout);
+  const item=plan.items.find(item=>item.id===seatId);seat=item?resolveOfficeSeat(item,plan.floor):null;
+  if(!seat){if(explicitSeat)fail(404,'This chair is no longer available for sitting.','SEAT_UNAVAILABLE');seatId=null;}
+  else{
+   await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`presence-seat:${companyId}:${seatId}`]);
+   const occupied=(await client.query("SELECT 1 FROM presence p JOIN memberships m ON m.company_id=p.company_id AND m.user_id=p.user_id WHERE p.company_id=$1 AND p.seat_id=$2 AND p.user_id<>$3 AND p.updated_at>clock_timestamp()-interval '45 seconds' AND m.role<>'removed' LIMIT 1",[companyId,seatId,member.userId])).rowCount;
+   if(occupied){if(explicitSeat)fail(409,'Someone else is using this chair. Choose another seat.','SEAT_OCCUPIED');x=seat.approach.x;z=seat.approach.z;seatId=null;seat=null;}
+   else{x=seat.x;z=seat.z;}
+  }
+ }
+ if(!seat&&previous?.seat_transform&&!moved&&(data.seatId===null||roomChanged||!previous.active)){
+  x=previous.seat_transform.approach.x;z=previous.seat_transform.approach.z;
+ }
+ const clearEmote=previous?.interaction_type==='emote'&&(moved||roomChanged||data.seatId===null||data.motionMode==='teleport'||explicitSeat);
+ const interaction=data.interaction;
+ const eventId=interaction?randomUUID():clearEmote?null:previous?.interaction_id??null;
+ const eventType=interaction?.type??(clearEmote?null:previous?.interaction_type??null);
+ const eventValue=interaction?.value??(clearEmote?null:previous?.interaction_value??null);
+ const eventAt=interaction?null:clearEmote?null:previous?.interaction_at??null;
+ await client.query(`INSERT INTO presence(company_id,user_id,room_id,x,z,status,motion_mode,seat_id,seat_transform,interaction_id,interaction_type,interaction_value,interaction_at,state_updated_at)
+  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,CASE WHEN $14::boolean THEN clock_timestamp() ELSE $13::timestamptz END,clock_timestamp())
+  ON CONFLICT(company_id,user_id) DO UPDATE SET room_id=EXCLUDED.room_id,x=EXCLUDED.x,z=EXCLUDED.z,status=EXCLUDED.status,motion_mode=EXCLUDED.motion_mode,
+  seat_id=EXCLUDED.seat_id,seat_transform=EXCLUDED.seat_transform,interaction_id=EXCLUDED.interaction_id,interaction_type=EXCLUDED.interaction_type,interaction_value=EXCLUDED.interaction_value,interaction_at=EXCLUDED.interaction_at,
+  updated_at=clock_timestamp(),state_updated_at=GREATEST(clock_timestamp(),presence.state_updated_at+interval '1 millisecond')`,
+  [companyId,member.userId,data.roomId,x,z,data.status,data.motionMode??previous?.motion_mode??'walk',seatId,seat?JSON.stringify(seat):null,eventId,eventType,eventValue,eventAt,Boolean(interaction)]);
+}
+async function releaseChangedSeats(client:PoolClient,companyId:string,plan:FloorPlanDocument){
+ const occupants=(await client.query('SELECT user_id,seat_id,seat_transform FROM presence WHERE company_id=$1 AND seat_id IS NOT NULL',[companyId])).rows;
+ for(const occupant of occupants){
+  const item=plan.items.find(item=>item.id===occupant.seat_id),current=item?resolveOfficeSeat(item,plan.floor):null;
+  const same=current&&['x','z','yaw','seatHeight'].every(key=>Math.abs(current[key as 'x'|'z'|'yaw'|'seatHeight']-occupant.seat_transform[key])<.000001)&&Math.abs(current.approach.x-occupant.seat_transform.approach.x)<.000001&&Math.abs(current.approach.z-occupant.seat_transform.approach.z)<.000001;
+  if(same)continue;
+  const previous=occupant.seat_transform as OfficeSeat;
+  const x=Math.max(-plan.floor.width/2+.45,Math.min(plan.floor.width/2-.45,previous.approach.x)),z=Math.max(-plan.floor.depth/2+.45,Math.min(plan.floor.depth/2-.45,previous.approach.z));
+  await client.query(`UPDATE presence SET seat_id=NULL,seat_transform=NULL,x=$3,z=$4,motion_mode='walk',
+   interaction_id=CASE WHEN interaction_type='emote' THEN NULL ELSE interaction_id END,interaction_value=CASE WHEN interaction_type='emote' THEN NULL ELSE interaction_value END,
+   interaction_at=CASE WHEN interaction_type='emote' THEN NULL ELSE interaction_at END,interaction_type=CASE WHEN interaction_type='emote' THEN NULL ELSE interaction_type END,
+   state_updated_at=GREATEST(clock_timestamp(),state_updated_at+interval '1 millisecond') WHERE company_id=$1 AND user_id=$2`,[companyId,occupant.user_id,x,z]);
+ }
 }
 export async function createInvitation(client: PoolClient, member: Membership, role: 'admin' | 'member', emailAddress: string | null, request: Request, recipientUserId: string | null = null) {
   if (emailAddress) {
@@ -110,14 +167,12 @@ export async function companyRoute(request: Request, parts: string[], method: st
   }
   if (resource === 'presence' && parts.length === 3) {
     const member = await requireMembership(request,companyId);
-    if (method === 'GET') return json({presence:await readPresence(companyId)});
+    if (method === 'GET') {const presence=await readPresence(companyId);await requireMembership(request,companyId);return json({presence});}
     if (method === 'POST') {
       const data=await body(request,presenceInput);
-      await memberMutation(member,false,async client => {
-        await existingRoom(client,companyId,data.roomId);
-        await client.query('INSERT INTO presence(company_id,user_id,room_id,x,z,status) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(company_id,user_id) DO UPDATE SET room_id=EXCLUDED.room_id,x=EXCLUDED.x,z=EXCLUDED.z,status=EXCLUDED.status,updated_at=now()',[companyId,member.userId,data.roomId,data.x,data.z,data.status]);
-      });
-      return json({presence:await readPresence(companyId)});
+      if(data.interaction)await rateLimit(`interaction:${companyId}:${member.userId}`,8,10);
+      await memberMutation(member,false,client=>writePresence(client,member,data));
+      const presence=await readPresence(companyId);await requireMembership(request,companyId);return json({presence});
     }
   }
   if (resource === 'invitations' && parts.length === 3 && method === 'POST') {
@@ -147,6 +202,7 @@ export async function companyRoute(request: Request, parts: string[], method: st
       if(data.revision!==current.revision)fail(409,'The floor plan changed since you opened it. Reload the latest floor before saving your changes.','LAYOUT_CONFLICT');
       const plan:FloorPlanDocument={version:1,items:data.layout,floor:data.floor,revision:current.revision+1};
       await client.query('UPDATE companies SET layout=$2 WHERE id=$1',[companyId,JSON.stringify(plan)]);
+      await releaseChangedSeats(client,companyId,plan);
       await recordActivity(client,member,'office.updated',`${member.user.name} updated the office layout.`);
       return {layout:plan.items,floor:plan.floor,layoutRevision:plan.revision};
     });return json(saved);

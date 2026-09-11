@@ -43,7 +43,7 @@ test('slow movement writes coalesce intermediate positions and never overlap',as
 });
 
 test('slow workspace and presence polls stay single-flight, including an explicit visibility refresh',async({page})=>{
- await clock(page);const state=await fixture(page);await open(page);state.hold('workspace');state.hold('presence');await page.clock.runFor(5100);await expect.poll(()=>state.held.length).toBe(2);const workspaceRequests=count(state.requests,'workspace'),presenceRequests=count(state.requests,'presence');await page.clock.runFor(20000);await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));expect(count(state.requests,'workspace')).toBe(workspaceRequests);expect(count(state.requests,'presence')).toBe(presenceRequests);expect(state.maximum.get(state.key(companies[0].id,'workspace'))).toBe(1);expect(state.maximum.get(state.key(companies[0].id,'presence'))).toBe(1);for(let index=0;index<state.held.length;index++)await state.release(index);await page.clock.runFor(1200);await expect.poll(()=>count(state.requests,'workspace')).toBeGreaterThan(workspaceRequests);
+ await clock(page);const state=await fixture(page);await open(page);state.hold('workspace');state.hold('presence');await page.clock.runFor(5100);await expect.poll(()=>state.held.length).toBe(2);const workspaceRequests=count(state.requests,'workspace'),presenceRequests=count(state.requests,'presence');await page.clock.runFor(20000);await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));expect(count(state.requests,'workspace')).toBe(workspaceRequests);expect(count(state.requests,'presence')).toBe(presenceRequests);expect(state.maximum.get(state.key(companies[0].id,'workspace'))).toBe(1);expect(state.maximum.get(state.key(companies[0].id,'presence'))).toBe(1);for(let index=0;index<state.held.length;index++)await state.release(index);await expect.poll(async()=>{await page.clock.runFor(1200);return count(state.requests,'workspace');}).toBeGreaterThan(workspaceRequests);
 });
 
 test('an older workspace response cannot replace the roster received from a newer movement write',async({page})=>{
@@ -68,4 +68,36 @@ test('switching companies discards a delayed old snapshot and stops the old comp
 
 test('revoked company access clears its scene, reloads membership and stops stale polling',async({page})=>{
  await clock(page);const state=await fixture(page);await open(page);state.revoke();await page.clock.runFor(2100);await expect(page.getByRole('button',{name:'Switch to North Studio',exact:true})).toHaveCount(0);await expect.poll(()=>page.evaluate(()=>(window as any).__presenceScene.current?.latest.companyName)).toBe('South Studio');const oldRequests=state.requests.filter(request=>request.companyId===companies[0].id).length;await page.clock.runFor(16000);expect(state.requests.filter(request=>request.companyId===companies[0].id)).toHaveLength(oldRequests);expect(await page.evaluate(()=>(window as any).__presenceScene.mounts.filter((mount:any)=>mount.options.companyName==='North Studio').every((mount:any)=>mount.disposed))).toBe(true);
+});
+
+const savedSeat={id:'saved-chair',x:-2,z:0,yaw:0,seatHeight:.53,approach:{x:-2,z:-1}};
+const ownSeat=(page:Page)=>page.evaluate(id=>(window as any).__presenceScene.current.latest.presence.find((row:Presence)=>row.userId===id)?.seatId??null,user.id);
+async function beginSeat(page:Page){await page.evaluate(seat=>{(window as any).__seatResult=null;void(window as any).__presenceScene.current.options.onInteraction({seatId:seat.id,x:seat.approach.x,z:seat.approach.z,motionMode:'walk'}).then((ack:Presence)=>{(window as any).__seatResult=ack;}).catch((error:Error)=>{(window as any).__seatResult={error:error.message};});},savedSeat);}
+
+test('an existing seated session hydrates before its first heartbeat without replaying a seat or interaction command',async({page})=>{
+ await clock(page);const state=await fixture(page),seated=presence();seated[0]={...seated[0],x:savedSeat.x,z:savedSeat.z,seatId:savedSeat.id,seat:savedSeat,motionMode:'walk'};state.data.get(companies[0].id)!.presence=seated;state.rosters.set(companies[0].id,seated);
+ await open(page);await expect.poll(()=>count(state.requests,'presence','POST')).toBeGreaterThan(0);await expect.poll(()=>ownSeat(page)).toBe(savedSeat.id);
+ const first=state.requests.find(request=>request.kind==='presence'&&request.method==='POST')!;expect(first.body).toMatchObject({x:savedSeat.x,z:savedSeat.z});expect(first.body).not.toHaveProperty('seatId');expect(first.body).not.toHaveProperty('interaction');
+ await page.clock.runFor(16000);for(const request of state.requests.filter(request=>request.kind==='presence'&&request.method==='POST')){expect(request.body).not.toHaveProperty('seatId');expect(request.body).not.toHaveProperty('interaction');expect(request.body.x).toBe(savedSeat.x);}
+});
+
+test('a delayed seat command stays ahead of the newest movement and cannot reseat its pending local intent',async({page})=>{
+ await clock(page);const state=await fixture(page);await open(page);await expect.poll(()=>count(state.requests,'presence','POST')).toBeGreaterThan(0);state.hold('presence','POST');await beginSeat(page);await expect.poll(()=>state.held.length).toBe(1);
+ await move(page,7,4);await move(page,8,4);await page.clock.runFor(1100);expect(state.held[0].record.body.seatId).toBe(savedSeat.id);const sentBeforeRelease=count(state.requests,'presence','POST');
+ const seated=presence();seated[0]={...seated[0],x:savedSeat.x,z:savedSeat.z,seatId:savedSeat.id,seat:savedSeat,updatedAt:'2026-09-10T12:00:03Z'};state.rosters.set(companies[0].id,seated);state.hold('presence','POST');await state.release(0,{presence:seated});await page.clock.runFor(1100);await expect.poll(()=>state.held.length).toBe(2);await expect.poll(()=>ownSeat(page)).toBeNull();
+ expect(count(state.requests,'presence','POST')).toBe(sentBeforeRelease+1);expect(state.held[1].record.body).toMatchObject({x:8,z:4,seatId:null});expect(state.maximum.get(state.key(companies[0].id,'presence','POST'))).toBe(1);
+ const moved=presence();moved[0]={...moved[0],x:8,z:4,seatId:null,updatedAt:'2026-09-10T12:00:04Z'};state.rosters.set(companies[0].id,moved);await state.release(1,{presence:moved});await expect.poll(()=>ownSeat(page)).toBeNull();await expect.poll(()=>page.evaluate(()=>(window as any).__seatResult?.seatId)).toBe(savedSeat.id);
+});
+
+test('leaving Office while a seat claim is in flight queues a stand after the claim',async({page})=>{
+ await clock(page);const state=await fixture(page);await open(page);await expect.poll(()=>count(state.requests,'presence','POST')).toBeGreaterThan(0);state.hold('presence','POST');await beginSeat(page);await expect.poll(()=>state.held.length).toBe(1);
+ await page.getByRole('button',{name:'Work board',exact:true}).click();await expect.poll(()=>page.evaluate(()=>(window as any).__presenceScene.current.disposed)).toBe(true);
+ const seated=presence();seated[0]={...seated[0],x:savedSeat.x,z:savedSeat.z,seatId:savedSeat.id,seat:savedSeat,updatedAt:'2026-09-10T12:00:02Z'};await state.release(0,{presence:seated});await page.clock.runFor(1100);
+ await expect.poll(()=>state.requests.filter(request=>request.kind==='presence'&&request.method==='POST').at(-1)?.body.seatId).toBeNull();const last=state.requests.filter(request=>request.kind==='presence'&&request.method==='POST').at(-1)!;expect(last.body).not.toHaveProperty('interaction');expect(state.maximum.get(state.key(companies[0].id,'presence','POST'))).toBe(1);
+});
+
+test('an older movement acknowledgement cannot overwrite a newer queued availability change',async({page})=>{
+ await clock(page);const state=await fixture(page);await open(page);await expect.poll(()=>count(state.requests,'presence','POST')).toBeGreaterThan(0);state.hold('presence','POST');await move(page,4,2);await page.clock.runFor(1100);await expect.poll(()=>state.held.length).toBe(1);
+ await page.getByRole('combobox',{name:'Your availability',exact:true}).selectOption('focus');const old=presence();old[0]={...old[0],x:4,z:2,status:'available',updatedAt:'2026-09-10T12:00:03Z'};state.hold('presence','POST');await state.release(0,{presence:old});await page.clock.runFor(1100);await expect.poll(()=>state.held.length).toBe(2);
+ await expect(page.getByRole('combobox',{name:'Your availability',exact:true})).toHaveValue('focus');expect(state.held[1].record.body.status).toBe('focus');const focused=copy(old);focused[0]={...focused[0],status:'focus',updatedAt:'2026-09-10T12:00:04Z'};state.rosters.set(companies[0].id,focused);await state.release(1,{presence:focused});await expect(page.getByRole('combobox',{name:'Your availability',exact:true})).toHaveValue('focus');
 });

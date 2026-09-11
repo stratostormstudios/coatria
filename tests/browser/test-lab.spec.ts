@@ -50,6 +50,19 @@ test('members cannot find or open the administrator test lab',async({page})=>{
  await fixture(page,'member');await page.goto('/#tester');await expect(page.getByRole('heading',{name:'The test lab is for administrators',exact:true})).toBeVisible();await expect(button(page,'Test lab')).toHaveCount(0);await expect(button(page,'Start visual test')).toHaveCount(0);await button(page,'Search navigation').click();await page.getByRole('combobox',{name:'Search navigation'}).fill('test lab');await expect(page.getByRole('option',{name:/Test lab/})).toHaveCount(0);expect(await page.evaluate(()=>(window as any).__labScene.mounts.length)).toBe(0);
 });
 
+test('test-lab seating and reactions stay local through heartbeats, movement and reset',async({page})=>{
+ await clock(page);const state=await fixture(page);await page.goto('/#tester');await expect.poll(async()=>(await scene(page))?.members.length).toBe(50);
+ const seated=await page.evaluate(async()=>{const options=(window as any).__labScene.current.options;return options.onInteraction({seatId:options.seats[0].id});});
+ expect(seated.seatId).toBeTruthy();await expect.poll(async()=>(await scene(page)).presence.find((row:any)=>row.userId===user.id).seatId).toBe(seated.seatId);
+ await page.clock.runFor(16000);expect((await scene(page)).presence.find((row:any)=>row.userId===user.id).seatId).toBe(seated.seatId);
+ await page.evaluate(()=>{const options=(window as any).__labScene.current.options;options.onMove({x:8,z:7,motionMode:'run',seatId:null});});
+ await expect.poll(async()=>(await scene(page)).presence.find((row:any)=>row.userId===user.id).seatId).toBe(null);
+ await page.evaluate(()=>(window as any).__labScene.current.options.onInteraction({interaction:{type:'reaction',value:'heart'}}));
+ expect((await scene(page)).presence.find((row:any)=>row.userId===user.id).interaction.value).toBe('heart');
+ await button(page,'Reset visual test').click();await expect.poll(async()=>(await scene(page)).presence.find((row:any)=>row.userId===user.id).interaction).toBeUndefined();
+ expect(state.requests.some(request=>request.body?.interaction||request.body?.seatId||request.path.includes('coatria-test-lab')||JSON.stringify(request.body).includes('lab-person-'))).toBe(false);
+});
+
 test('visual controls start, pause, resume and reset without writing simulated identities',async({page})=>{
  await clock(page);const state=await fixture(page);await page.goto('/#tester');await expect.poll(async()=>(await scene(page))?.members.length).toBe(50);await button(page,'Start visual test').click();for(const name of ['Test people','Scenario','Run length'])await expect(field(page,name)).toBeDisabled();await page.clock.runFor(12500);await expect(progress(page)).toHaveAttribute('value',/1[2-3](\.\d+)?/);await button(page,'Pause test').click();const paused=await progress(page).getAttribute('value');await page.clock.runFor(5000);await expect(progress(page)).toHaveAttribute('value',paused!);await button(page,'Resume test').click();await page.clock.runFor(3000);expect(Number(await progress(page).getAttribute('value'))).toBeGreaterThan(Number(paused)+2);await button(page,'Reset visual test').click();await expect(progress(page)).toHaveAttribute('value','0');await expect(button(page,'Start visual test')).toBeVisible();await expect(button(page,'Export visual report')).toBeDisabled();await field(page,'Test people').selectOption('25');await expect.poll(async()=>(await scene(page))?.members.length).toBe(25);
  expect(state.requests.filter(request=>request.method!=='GET').every(request=>request.path===`/api/companies/${company.id}/presence`)).toBe(true);expect(state.requests.some(request=>JSON.stringify(request).includes('lab-person-'))).toBe(false);

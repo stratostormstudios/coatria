@@ -64,7 +64,7 @@ This command requires a dedicated **local** test `DATABASE_URL`. Alternatively, 
 
 ## Deploy on Vercel
 
-1. Preserve the existing Neon production resource and keep preview/development data separate. Apply all four numbered migrations using a direct owner connection obtained from the Neon dashboard and supplied only to the migration process as `DATABASE_URL`. `npm run db:migrate` uses that process environment; the app runtime must not receive the owner connection.
+1. Preserve the existing Neon production resource and keep preview/development data separate. Apply all numbered migrations using a direct owner connection obtained from the Neon dashboard and supplied only to the migration process as `DATABASE_URL`. `npm run db:migrate` uses that process environment; the app runtime must not receive the owner connection.
 2. **First-time setup only:** after migrations, an operator creates `coatria_runtime_v1` with [the provisioning helper](scripts/provision-runtime-role.mjs) and verifies its effective grants. Production already has this role. The helper accepts owner credentials and a new random password through JSON stdin and refuses an existing role. Do not repeat provisioning on routine releases; apply any updated explicit [runtime grants](database/runtime-permissions.sql) with the owner after future migrations, then recheck allowed/denied privileges. Builds never invoke provisioning.
 3. Detach integration environment injection from the Vercel project while preserving the Neon resource. Remove owner-credential aliases, then manually configure the runtime connection as a production-only Secret `DATABASE_URL`, with canonical `APP_URL=https://coatria.com`. Future migrations use a separate owner process, not a deployed owner alias.
 4. Require a passing CI result for the intended source and deploy it. Automatic Git deployments require the Vercel GitHub connection; direct deployment must record its exact source and deployment ID. Main-branch protection is an open administrator action in the security review.
@@ -75,3 +75,11 @@ Keep API credentials in approved local secret storage or scoped Vercel Secret se
 Tenant and vault isolation are enforced by application authorization, not per-tenant database RLS. Email verification delivery, forgotten-password recovery, MFA and SSO remain unimplemented. Review the [open security gates](docs/SECURITY_REVIEW.md#open-release-gates-and-operational-work) before admitting sensitive company data or expanding beyond the initial release.
 
 The [implementation plan](docs/IMPLEMENTATION_PLAN.md) covers the remaining ownership, infrastructure, commercial and scaling phases. Production capability should be claimed only after the corresponding implementation and deployment checks pass.
+
+## Studio generator and character interactions
+
+The space editor includes four curated studios plus a seeded generator for 1–60 workstations and 0–8 open meeting nooks, with balanced or airy spacing and an undoable preview/apply/save flow. See [generator geometry and verification](docs/OFFICE_GENERATOR.md).
+
+The office supports faster walking, double-click running, double-right-click teleport, Wave/Dance, six emoji reactions and exclusive seating on four calibrated chair models. Keyboard and touch equivalents live in Character actions. See [interaction controls and animation calibration](docs/CHARACTER_INTERACTIONS.md). The test lab keeps its interactions local.
+
+Migration `006_presence_interactions.sql` is additive and must be applied before this release. It adds shared movement, transient events and expiring seat claims to presence; existing table grants cover the new columns. Record the migration through the normal owner migration process, then verify the runtime role can read/write presence while remaining unable to alter schemas. Rollback the application and private runtime bundle together if needed; the additive columns may remain in place. Do not drop live presence data to roll back.

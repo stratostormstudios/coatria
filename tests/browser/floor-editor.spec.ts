@@ -131,7 +131,7 @@ test('blurring an untouched numeric field cannot revert a newer shared position'
 });
 
 test('Escape cancels a palette drag even when keyboard focus started outside the editor',async({page})=>{
- await fixture(page);await page.goto('/#layout');await floor(page).waitFor();await page.locator('#main').focus();const from=await center(button(page,'Workstation')),board=await bounds(floor(page)),to={x:board.x+board.width*.65,y:board.y+board.height*.55};await page.mouse.move(from.x,from.y);await page.mouse.down();await page.mouse.move(to.x,to.y,{steps:12});await expect(page.getByText('Drop here',{exact:true})).toBeVisible();await page.keyboard.press('Escape');await page.mouse.up();await expect(objects(page)).toHaveCount(0);await expect(page.getByText('Drop here',{exact:true})).toHaveCount(0);await expect(button(page,'Save shared floor plan')).toBeDisabled();
+ await fixture(page);await page.goto('/#layout');await floor(page).waitFor();await page.locator('#main').focus();await button(page,'Workstation').scrollIntoViewIfNeeded();const from=await center(button(page,'Workstation')),board=await bounds(floor(page)),to={x:board.x+board.width*.65,y:board.y+board.height*.55};await page.mouse.move(from.x,from.y);await page.mouse.down();await page.mouse.move(to.x,to.y,{steps:12});await expect(page.getByText('Drop here',{exact:true})).toBeVisible();await page.keyboard.press('Escape');await page.mouse.up();await expect(objects(page)).toHaveCount(0);await expect(page.getByText('Drop here',{exact:true})).toHaveCount(0);await expect(button(page,'Save shared floor plan')).toBeDisabled();
 });
 
 test('a browser pointer-cancel event rolls a move back without adding a history entry',async({page})=>{

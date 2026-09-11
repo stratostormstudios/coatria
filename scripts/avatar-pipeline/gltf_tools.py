@@ -138,7 +138,7 @@ def inspect_glb(raw, require_runtime=False):
     if require_runtime:
         assert len(raw) <= 4 * 1024 * 1024, 'Model exceeds 4 MiB budget'
         assert joints == [44], 'Unexpected character skeleton'
-        assert {a['name'] for a in animations} == {'Idle', 'Walk', 'Sit', 'Wave'}, 'Missing runtime clips'
+        assert {a['name'] for a in animations} == {'Idle', 'Walk', 'Run', 'Sit', 'Wave', 'Dance'}, 'Missing runtime clips'
         assert all(a['hipsTranslationChannels'] == 1 and a['rootTranslationRange'] < .001 for a in animations)
         assert all(a['endpointRotationErrorRad'] < .03 and a['endpointTranslationError'] < .005 for a in animations)
     return {'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest(), 'triangles': triangles,

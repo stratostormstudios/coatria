@@ -12,15 +12,31 @@ export function startPolling(task:(signal:AbortSignal)=>Promise<void>,options:{i
   return()=>{stopped=true;clearTimeout(timer);controller.abort();};
 }
 
-/** Coalesce movement while a write is in flight; intermediate positions can be discarded. */
-export function latestWriter<T>(send:(value:T,signal:AbortSignal)=>Promise<void>,onError:(error:unknown)=>void,intervalMs=1000){
-  const controller=new AbortController();let pending:{value:T}|undefined,running=false,closed=false,timer:ReturnType<typeof setTimeout>|undefined,lastStarted=0;
+/** Commands are ordered barriers; only movement between them may be coalesced. */
+export function latestWriter<T,R=void>(send:(value:T,signal:AbortSignal)=>Promise<R>,onError:(error:unknown,kind:'write'|'heartbeat'|'command')=>void,intervalMs=1000){
+  type Entry={kind:'write'|'heartbeat'|'command';value:T;resolve?:(value:R)=>void;reject?:(error:unknown)=>void};
+  const controller=new AbortController(),queue:Entry[]=[];let active:Entry|undefined,closed=false,timer:ReturnType<typeof setTimeout>|undefined,lastStarted=0;
+  const cancelled=()=>new DOMException('The workplace connection changed.','AbortError');
   const flush=async()=>{
-    if(closed||running||!pending)return;
-    const delay=intervalMs-(Date.now()-lastStarted);
+    if(closed||active||!queue.length)return;
+    // An explicit command also flushes movement ahead of it; sustained movement
+    // alone remains rate-limited, and no HTTP requests overlap.
+    const delay=queue.some(entry=>entry.kind==='command')?0:intervalMs-(Date.now()-lastStarted);
     if(delay>0){clearTimeout(timer);timer=setTimeout(flush,delay);return;}
-    const value=pending.value;pending=undefined;running=true;lastStarted=Date.now();
-    try{await send(value,controller.signal);}catch(error){if(!closed)onError(error);}finally{running=false;if(!closed&&pending)void flush();}
+    clearTimeout(timer);const entry=queue.shift()!;active=entry;lastStarted=Date.now();
+    try{const result=await send(entry.value,controller.signal);if(!closed)entry.resolve?.(result);}
+    catch(error){if(!closed){entry.reject?.(error);onError(error,entry.kind);}}
+    finally{active=undefined;if(!closed&&queue.length)void flush();}
   };
-  return {write(value:T){if(!closed){pending={value};void flush();}},close(){closed=true;pending=undefined;clearTimeout(timer);controller.abort();}};
+  return {
+    write(value:T){if(closed)return;const tail=queue.at(-1);if(tail&&tail.kind!=='command')queue[queue.length-1]={kind:'write',value};else queue.push({kind:'write',value});void flush();},
+    heartbeat(value:T){if(closed||active||queue.length)return;queue.push({kind:'heartbeat',value});void flush();},
+    command(value:T):Promise<R>{
+      if(closed)return Promise.reject(cancelled());
+      if(queue.filter(entry=>entry.kind==='command').length+(active?.kind==='command'?1:0)>=8)return Promise.reject(new Error('Please wait for your current actions to finish.'));
+      if(queue.at(-1)?.kind==='heartbeat')queue.pop();
+      return new Promise<R>((resolve,reject)=>{queue.push({kind:'command',value,resolve,reject});void flush();});
+    },
+    close(){if(closed)return;closed=true;clearTimeout(timer);controller.abort();const error=cancelled();active?.reject?.(error);for(const entry of queue)entry.reject?.(error);queue.length=0;}
+  };
 }

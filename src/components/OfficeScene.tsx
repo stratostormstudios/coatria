@@ -2,11 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import { selectAvatarForUser, type AvatarDefinition } from "@/lib/avatar-catalog";
-import { DEFAULT_FLOOR, type FloorSize } from "@/lib/floor-plan";
+import { DEFAULT_FLOOR, type FloorSize, type LayoutItem } from "@/lib/floor-plan";
 import { OFFICE_CATALOG, type OfficeAssetDefinition } from "@/lib/office-catalog";
+import { getOfficeSeats } from "@/lib/office-seating";
+import type { Presence } from "@/lib/client";
+import type { MotionMode, PresenceActionCommand } from "@/lib/presence-protocol";
 
 type Entity = Record<string, any>;
-type Position = { x: number; z: number };
+export type OfficePosition = { x: number; z: number; motionMode?: MotionMode; seatId?: null };
+type Position = OfficePosition;
 export type OfficeDiagnostics = {
   performance?:{state?:'active'|'idle'|'suspended'|'disposed';renderedSampleCount?:number;sampleCount:number;windowSeconds:number;fps:number;frameMs:{p50:number;p95:number};workMs:{p50:number;p95:number};animationMs:{p50:number;p95:number};renderMs:{p50:number;p95:number};labelsMs:{p50:number;p95:number};drawCalls:number;triangles:number};
   animation?:{visibleHumans:number;fullRateHumans:number;reducedRateHumans:number;culledHumans:number;mixerUpdatesLastFrame:number;fullRateBudget:number};
@@ -49,6 +53,7 @@ export type OfficeSceneProps = {
   layout: Entity[];
   floor?: FloorSize;
   onMove: (position: Position) => void;
+  onInteraction: (command: PresenceActionCommand) => Promise<Presence>;
   onOpenRoom: (roomId: string) => void;
   onOpenAgent: (agentId: string) => void;
   onOpenPerson: (userId: string) => void;
@@ -106,6 +111,7 @@ export default function OfficeScene(props: OfficeSceneProps) {
         customLayout: true,
         layout: latest.layout.map(item => ({ ...item, kind: item.type, name: item.label })),
         floor: latest.floor,
+        seats: getOfficeSeats(latest.layout as LayoutItem[], latest.floor ?? DEFAULT_FLOOR),
         rooms: latest.rooms,
         members: latest.members,
         agents: latest.agents,
@@ -115,6 +121,7 @@ export default function OfficeScene(props: OfficeSceneProps) {
         loadOfficeAsset: furnitureLibrary.loadAsset,
         quality: savedQuality === "low" ? "low" : "balanced",
         onMove: (position: Position) => current.current.onMove(position),
+        onInteraction: (command: PresenceActionCommand) => current.current.onInteraction(command),
         onOpenRoom: (id: string) => current.current.onOpenRoom(id),
         onOpenAgent: (id: string) => current.current.onOpenAgent(id),
         onOpenPerson: (id: string) => current.current.onOpenPerson(id),
@@ -123,7 +130,8 @@ export default function OfficeScene(props: OfficeSceneProps) {
       if (!mounted || mounted.error) { mounted?.dispose(); mounted = null; library?.dispose(); library = null; furnitureLibrary?.dispose(); furnitureLibrary = null; setState("unavailable"); return; }
       instance.current = mounted;
       setState("ready");
-      current.current.onMove(mounted.diagnostics.position);
+      // A saved seated presence must survive a scene remount without a movement write.
+      if (!ownPresence) current.current.onMove(mounted.diagnostics.position);
     }).catch(() => { mounted?.dispose(); library?.dispose(); furnitureLibrary?.dispose(); if (!cancelled) setState("unavailable"); });
     return () => { cancelled = true; mounted?.dispose(); library?.dispose(); furnitureLibrary?.dispose(); if (instance.current === mounted) instance.current = null; };
   }, [geometryKey, retry]);

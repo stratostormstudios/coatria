@@ -1,10 +1,12 @@
 import type {FloorSize,LayoutItem} from './floor-plan';
+import type {MotionMode,PresenceInteraction} from './presence-protocol';
+import type {OfficeSeat} from './office-seating';
 export type {FloorSize,LayoutItem} from './floor-plan';
 export type User = { id:string; name:string; email:string; roleTitle:string; avatarColor:string; avatarId:string|null };
 export type Company = { id:string; name:string; slug:string; template:string; role:string };
 export type Member = { id:string; userId:string; name:string; email:string; role:string; roleTitle:string; avatarColor:string; avatarId:string|null };
 export type Room = { id:string; name:string; kind:string; capacity:number };
-export type Presence = { userId:string; name:string; avatarColor:string; avatarId:string|null; roomId:string|null; x:number; z:number; status:string; updatedAt:string };
+export type Presence = { userId:string; name:string; avatarColor:string; avatarId:string|null; roomId:string|null; x:number; z:number; status:string; updatedAt:string; motionMode?:MotionMode;seatId?:string|null;seat?:OfficeSeat|null;interaction?:PresenceInteraction|null };
 export type Task = { id:string; title:string; description:string; status:string; assigneeId:string|null; createdBy:string; submissionUrl:string|null; submissionSummary?:string; reviewNote:string|null; submittedBy?:string|null; submittedAgentId?:string|null; approvedBy?:string|null; authorIds?:string[]; createdAt:string; updatedAt:string };
 export type Message = { id:string; roomId:string|null; body:string; createdAt:string; userId:string; authorName:string };
 export type Agent = { id:string; name:string; harness:string; description:string; status:string; createdBy:string; lastSeenAt:string|null };

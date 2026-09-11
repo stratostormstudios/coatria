@@ -13,3 +13,7 @@ coverage
 *.log
 *.secret
 *.tsbuildinfo
+
+.runtime-assets/city-characters-before-interactions
+.runtime-assets/city-characters-interactions
+.runtime-assets/interaction-audit
