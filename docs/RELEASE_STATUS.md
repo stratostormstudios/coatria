@@ -1,4 +1,10 @@
-# Coatria 0.1 — fifty-person office and test lab
+# Coatria 0.1 — studio generator and character interactions
+
+The studio generator and shared character interactions are live at [coatria.com](https://coatria.com/#layout), released on 2026-09-11 UTC from source `c2f256792fe0c97c29d637d73318d8158be7f231`, deployment `dpl_82KcRDweSBTSu2aYZfZ14AX8Dnkj`. Four new studio presets and a seeded generator support 1–60 workstations, 0–8 furnished meeting nooks, three arrangements and wider aisles. Faster walking, double-click running, double-right-click teleporting, authored Wave/Dance, six emoji reactions and shared exclusive seating are available in the office. Audio rooms remain separately configured. See the [generator guide](OFFICE_GENERATOR.md), [interaction controls](CHARACTER_INTERACTIONS.md) and [release evidence](RELEASE_STUDIO_INTERACTIONS.md).
+
+Exact-source PostgreSQL CI passed both jobs: 125 application tests passed with one private-file skip, and 50 independent sessions completed 5,415 measured requests with zero unexpected errors and p95 16.99 ms. All concurrency, isolation, expiry, reconnect and cleanup checks passed. The full 60-second React renderer run with 50 moving people averaged 59.53 FPS on the measured local device. These isolated tests do not establish public-site or worldwide capacity. The licensed Vercel build and live health, CSP and anonymous private-asset boundary checks passed. Additive migration 006 is applied; runtime credentials and grants are unchanged. Existing floors are preserved until a new draft is saved.
+
+## Earlier fifty-person office and test lab release
 
 The 50-person studio and Test lab are live at [coatria.com](https://coatria.com/#tester). The office has 50 independent workstations and 148 furnishings on a 30 × 20 metre floor. Administrators can apply it as an editable draft and run browser simulations with 10, 25 or 50 people. The isolated HTTP harness tests 50 authenticated sessions against a production Next build and fresh PostgreSQL service. See the [scale testing guide](SCALE_TESTING.md) for controls, evidence and capacity limits.
 

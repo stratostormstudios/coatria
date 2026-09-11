@@ -36,7 +36,7 @@ IDs include a deterministic option hash and a local object or station suffix. Th
 
 Work bays hold up to six people in two opposing rows. Counts are distributed across bays so a final bay does not hold a single worker while every other bay is full. Each station has its own desk and calibrated task chair, a standing approach behind that chair, and a facing direction toward the desk. Workstation chairs are restricted to `office-chair-001`, `office-chair-009` and `office-chair-012`.
 
-Furniture keeps its catalog width and depth. Quarter-turn rotations swap those physical dimensions. Only assets explicitly marked `resize: 'footprint'`—floor finishes and divider panels—receive independent footprint dimensions; their catalog height remains intact. All objects reference public catalog metadata. The generator contains no purchased mesh, texture or preview bytes.
+Furniture keeps its catalog width and depth. Quarter-turn rotations swap those physical dimensions. Only assets explicitly marked `resize: 'footprint'`—floor finishes and divider panels—receive independent footprint dimensions; their authored source height remains intact. Floor finishes use a nominal 0.001 m catalog height, while the purchased surfaces can be effectively planar. All objects reference public catalog metadata. The generator contains no purchased mesh, texture or preview bytes.
 
 Each meeting nook uses seven objects: three low divider panels, two calibrated `office-chair-006` visitor chairs, a coffee table and a non-collidable floor finish. The 5.4 m wide nooks leave a passage behind both visitor chairs for their runtime seating approaches, including collision padding. The panels form a U, with an entry at least 5.1 m wide. Openings face an adjacent circulation lane. These are spatial furniture arrangements, with neither acoustic isolation nor private access controls. `spatialRooms` records the zone ID, external entry point, entry width and the three divider IDs so previews and tests can inspect the opening explicitly.
 
@@ -72,7 +72,7 @@ At 60 desks and eight nooks, the required furniture consumes 176 objects. A basi
 
 The courtyard reserves its central bay for a planted social area. Neighborhoods group adjacent work bays and place meeting nooks around the perimeter. The gallery separates work bays and meeting areas along an elongated promenade. The smaller studio contains a work bay and an open meeting nook; it does not claim a separate lounge.
 
-The generator is intentionally an assisted first layout. Users can move, resize, rotate or remove furniture in the editor after applying it. Circulation checks apply to the generated result, not arbitrary subsequent edits. Workstation metadata is descriptive until a caller explicitly integrates it with seating or assignment APIs; the normal generated floor payload is still `{layout, floor, revision}`.
+The generator is intentionally an assisted first layout. Users can move, resize, rotate or remove furniture in the editor after applying it. Circulation checks apply to the generated result, not arbitrary subsequent edits. Supported chairs in generated layouts already participate in shared seating through `getOfficeSeats(layout, floor)`. Workstation assignment metadata remains descriptive; generating a layout does not assign a desk to an employee. The normal generated floor payload is still `{layout, floor, revision}`.
 
 ## Verification
 

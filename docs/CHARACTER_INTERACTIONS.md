@@ -21,7 +21,7 @@ The renderer gates every authored action on the clip actually present in the loa
 
 | Input | Result |
 | --- | --- |
-| Single left-click on open floor | Walk to that position using the collision grid |
+| Single left-click on open floor | Move using the selected mode; Walk is the default and uses the collision grid |
 | Single left-click on a person or furniture | Preserve the existing selection and context actions |
 | Double left-click on open floor | Run to the floor target; two clicks within 500 ms and 14 screen pixels |
 | Double right-click | Teleport to a valid floor destination |
@@ -126,4 +126,4 @@ Public renderer methods now include `walkTo(x, z, mode?)`, `teleportTo(x, z)`, `
 - A chair-height screen projection resolving to the ground below it, plus preserved single-click selection.
 - Initially seated model loading, avatar replacement, omitted legacy seat fields, unsupported action-key rejection, and releasing a pending claim.
 
-The focused character (4), floor (6), and private furniture (6) regression suites also passed, alongside TypeScript and JavaScript syntax checks. Seat screenshots are written outside the repository in the test output directories; paid model files remain private. These renderer fixtures do not substitute for the separate API concurrency/authorization tests or the wrapper's serialized transport tests.
+The focused character (4), floor (6), and private furniture (6) regression suites also passed, alongside TypeScript and JavaScript syntax checks. Seat screenshots are written to gitignored test output directories; paid model files remain private. These renderer fixtures do not substitute for the separate API concurrency/authorization tests or the wrapper's serialized transport tests.
