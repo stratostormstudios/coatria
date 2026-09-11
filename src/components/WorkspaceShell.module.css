@@ -1,0 +1,25 @@
+.workArea{display:flex;align-items:stretch;flex:1;min-width:0;min-height:0}
+.workArea>main{min-width:0}
+.fullChat :global(.main-shell){height:100dvh;min-height:0;overflow:hidden;margin-left:326px}
+.fullChat :global(.topbar){flex:none}
+.fullChat :global(.app-footer){display:none}
+.fullChat :global(.main-content){padding:0;margin:0;max-width:none;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.fullChat :global(.connection-error){flex:none;margin:0;border-radius:0}
+.fullChat :global(.sidebar){width:260px;padding-inline:12px;padding-bottom:0;overflow:hidden}
+.fullChat :global(.sidebar) :global(.company-switch){flex:none}
+.fullChat :global(.sidebar) :global(.sidebar-bottom){display:none}
+.conversationNavigation{flex:1;min-height:0;display:flex;flex-direction:column;animation:sidebarEnter .2s ease-out}
+.dock{position:sticky;top:70px;height:calc(100dvh - 70px);width:390px;flex:0 0 390px;min-width:0;min-height:0;align-self:flex-start;overflow:hidden;background:var(--white);border-left:1px solid var(--line);z-index:31;animation:dockEnter .2s ease-out}
+.dock:focus{outline:none}
+.dockScrim{position:fixed;inset:0;background:#152b2440;z-index:55;cursor:default}
+.chatToggle{position:relative}
+.chatToggle[aria-expanded=true]{background:var(--soft);color:var(--forest);box-shadow:inset 0 0 0 1px #b9c8ac}
+.fullChat :global(.topbar-right) :global(.live-label){display:none}
+@keyframes sidebarEnter{from{opacity:.5;transform:translateX(12px)}to{opacity:1;transform:translateX(0)}}
+@keyframes dockEnter{from{opacity:.5;transform:translateX(24px)}to{opacity:1;transform:translateX(0)}}
+@media(min-width:1200px){.docked :global(.main-content){padding:24px}.docked :global(.office-grid){grid-template-columns:minmax(0,1fr)}.docked :global(.office-aside){display:grid;grid-template-columns:1fr 1fr}.docked :global(.office-aside)>div:last-child{grid-column:1/-1}.docked :global(.office-bottom-grid){grid-template-columns:1fr}.docked :global(.page-head){flex-wrap:wrap;gap:16px}.docked :global(.head-action){max-width:none}}
+@media(min-width:1700px){.dock{width:420px;flex-basis:420px}}
+@media(max-width:1199px){.dock{position:fixed;top:70px;right:0;bottom:0;height:calc(100dvh - 70px);width:min(440px,100%);z-index:60;box-shadow:-10px 0 40px #18301f18}}
+@media(max-width:820px){.dock{top:65px;height:calc(100dvh - 65px)}.fullChat :global(.main-shell){margin-left:57px}.fullChat :global(.sidebar.mobile-open){overflow:hidden}}
+@media(max-width:600px){.dock{top:60px;height:calc(100dvh - 60px);width:100%;border-left:0;box-shadow:none}.fullChat :global(.main-shell){margin-left:0}.fullChat :global(.topbar-right){gap:6px}}
+@media(prefers-reduced-motion:reduce){.conversationNavigation,.dock{animation:none}}

@@ -24,10 +24,14 @@ export function Form({onSubmit,children,submit='Save changes',pendingLabel='Savi
  async function handle(e:FormEvent<HTMLFormElement>){e.preventDefault();if(submitting.current||disabled||submitDisabled)return;const form=e.currentTarget;submitting.current=true;setError('');setBusy(true);try{await onSubmit(form);}catch(err){setError(err instanceof Error?err.message:'Something went wrong. Please try again.');}finally{submitting.current=false;setBusy(false);}}
  return <form onSubmit={handle} className={'form '+className} aria-busy={busy}><fieldset disabled={busy||disabled}>{children}</fieldset>{error&&<p ref={errorRef} tabIndex={-1} role="alert" className="error-message">{error}</p>}<button className="button primary" disabled={busy||disabled||submitDisabled} type="submit">{busy?<LoaderCircle size={16} className="spin"/>:<ArrowRight size={16}/>} {busy?pendingLabel:submit}</button></form>;
 }
-let openModalCount=0,previousBodyOverflow='';
+let pageScrollLocks=0,previousBodyOverflow='';
+export function usePageScrollLock(active:boolean){
+ useEffect(()=>{if(!active)return;if(pageScrollLocks++===0){previousBodyOverflow=document.body.style.overflow;document.body.style.overflow='hidden';}return()=>{if(--pageScrollLocks===0)document.body.style.overflow=previousBodyOverflow;};},[active]);
+}
 export function Modal({title,description,onClose,children,wide=false}:{title:string;description?:string;onClose:()=>void;children:ReactNode;wide?:boolean}) {
  const ref=useRef<HTMLDialogElement>(null),id=useId();
- useEffect(()=>{const d=ref.current,active=document.activeElement as HTMLElement|null;d?.showModal();d?.querySelector<HTMLElement>('input:not([type=hidden]):not(:disabled),textarea:not(:disabled),select:not(:disabled)')?.focus();if(openModalCount++===0){previousBodyOverflow=document.body.style.overflow;document.body.style.overflow='hidden';}return()=>{d?.close();if(--openModalCount===0)document.body.style.overflow=previousBodyOverflow;if(active?.isConnected)active.focus();};},[]);
+ usePageScrollLock(true);
+ useEffect(()=>{const d=ref.current,active=document.activeElement as HTMLElement|null;d?.showModal();d?.querySelector<HTMLElement>('input:not([type=hidden]):not(:disabled),textarea:not(:disabled),select:not(:disabled)')?.focus();return()=>{d?.close();if(active?.isConnected)active.focus();};},[]);
  return <dialog ref={ref} className={'modal '+(wide?'wide':'')} aria-labelledby={id+'-title'} aria-describedby={description?id+'-description':undefined} onCancel={e=>{e.preventDefault();onClose();}} onClick={e=>{if(e.target===e.currentTarget){const r=e.currentTarget.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)onClose();}}}><header><div><h2 id={id+'-title'}>{title}</h2>{description&&<p id={id+'-description'}>{description}</p>}</div><button type="button" className="icon-button" aria-label="Close dialog" onClick={onClose}><X size={20}/></button></header><div className="modal-body">{children}</div></dialog>;
 }
 export function CopyButton({text,label='Copy'}:{text:string;label?:string}) {

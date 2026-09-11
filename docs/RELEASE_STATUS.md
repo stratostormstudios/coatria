@@ -1,4 +1,10 @@
-# Coatria 0.1 — studio generator and character interactions
+# Coatria 0.1 — integrated conversations
+
+Conversations now occupy the full main frame, with the channel list in the existing left sidebar. Office chat opens in a side panel and expands into the full view; selected channels, drafts, delivery status and reading position survive those transitions. The narrow-screen panel contains keyboard focus and supports Escape. See [conversation controls and state boundaries](CONVERSATIONS.md). No message API or database changes are required.
+
+Local validation: 12 new conversation-shell cases and eight existing chat/navigation regressions passed; TypeScript passed. The full Node suite passed 121 of 126 tests, with five real-PostgreSQL-only skips. Four scoped WCAG 2 A/AA and 2.1 AA scans (full and docked, desktop and 390 px) reported zero selected violations. These are sampled checks, not certification. Screenshots and reports are retained in `C:/CODEX/Agent002/output/coatria-conversation-shell/`. Production candidate and exact-source CI checks are pending.
+
+## Earlier studio generator and character interactions release
 
 The studio generator and shared character interactions are live at [coatria.com](https://coatria.com/#layout), released on 2026-09-11 UTC from source `c2f256792fe0c97c29d637d73318d8158be7f231`, deployment `dpl_82KcRDweSBTSu2aYZfZ14AX8Dnkj`. Four new studio presets and a seeded generator support 1–60 workstations, 0–8 furnished meeting nooks, three arrangements and wider aisles. Faster walking, double-click running, double-right-click teleporting, authored Wave/Dance, six emoji reactions and shared exclusive seating are available in the office. Audio rooms remain separately configured. See the [generator guide](OFFICE_GENERATOR.md), [interaction controls](CHARACTER_INTERACTIONS.md) and [release evidence](RELEASE_STUDIO_INTERACTIONS.md).
 
