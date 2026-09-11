@@ -10,15 +10,16 @@ Movement now uses 2.1 m/s walking and 3.8 m/s running with the authored Run clip
 
 ## Local evidence
 
-- Generator: all 3,240 supported settings fit;17 generator/preset tests, including padded route and runtime seat-approach connectivity.
-- Generator UI:11 browser cases pass, desktop and 390 px reviewed.
-- Actual generated 3D:24-person 85-object and 60-person 180-object scenes load all licensed geometry;30/76 usable seats and 117 clear route checks.
-- Renderer:8 new interaction cases plus 16 prior character/floor/furniture regressions pass. Four chair models at four rotations, adult/senior Run and Dance, and initially seated model replacement verified.
-- Presence UI:13 cases pass, including serialized movement/actions, stale chair acknowledgements, seated hydration, leaving the office and an availability-change race.
-- Full local Node suite:126 tests,121 passed,0 failed,5 PostgreSQL-only skips. CI must run the real PostgreSQL lock and privilege checks before promotion.
-- Two real browser sessions:79 successful authenticated HTTP responses; shared seat/reaction/wave/run/teleport and seated reload pass; exact fixture cleanup verified.
+- Generator: all 3,240 supported settings fit; 17 generator/preset tests, including padded route and runtime seat-approach connectivity.
+- Generator UI: 11 browser cases pass, desktop and 390 px reviewed.
+- Actual generated 3D: 24-person 85-object and 60-person 180-object scenes load all licensed geometry; 30/76 usable seats and 117 clear route checks.
+- Renderer: 8 new interaction cases plus 16 prior character/floor/furniture regressions pass. Four chair models at four rotations, adult/senior Run and Dance, and initially seated model replacement verified.
+- Presence UI: 13 cases pass, including serialized movement/actions, stale chair acknowledgements, seated hydration, leaving the office and an availability-change race.
+- Full local Node suite: 126 tests,121 passed,0 failed,5 PostgreSQL-only skips. CI must run the real PostgreSQL lock and privilege checks before promotion.
+- Two real browser sessions: 79 successful authenticated HTTP responses; shared seat/reaction/wave/run/teleport and seated reload pass; exact fixture cleanup verified.
+- Full React test lab: 50 people, 148 furnishings, balanced graphics, 60 seconds; average 59.53 FPS and worst sampled frame p95 17.1 ms across 50 post-warmup samples. All models loaded, zero browser errors. Edge 152 / Radeon 890M / 1536×1100 / DPR 1, Next development server. This measures local rendering, not server capacity.
 - Fifty-character renderer regression: moving sample 59.999 FPS, frame p95 16.8 ms, CPU work p95 4.2 ms, balanced graphics.49 queued routes drained in 1.156 s. Short samples from this local Edge/device, not a production concurrency or global latency claim.
-- Licensed bundle:12 self-contained 44-joint characters, all 6 declared clips,10,932,112 total GLB bytes;78 office models (~5.0 MiB). Paid binaries remain excluded from Git and served through authenticated endpoints.
+- Licensed bundle: 12 self-contained 44-joint characters, all 6 declared clips,10,932,112 total GLB bytes; 78 office models (~5.0 MiB). Paid binaries remain excluded from Git and served through authenticated endpoints.
 
 ## Production database
 

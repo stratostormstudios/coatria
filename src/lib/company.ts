@@ -59,16 +59,19 @@ async function writePresence(client:PoolClient,member:Membership,data:z.infer<ty
  }
  const clearEmote=previous?.interaction_type==='emote'&&(moved||roomChanged||data.seatId===null||data.motionMode==='teleport'||explicitSeat);
  const interaction=data.interaction;
- const eventId=interaction?randomUUID():clearEmote?null:previous?.interaction_id??null;
- const eventType=interaction?.type??(clearEmote?null:previous?.interaction_type??null);
- const eventValue=interaction?.value??(clearEmote?null:previous?.interaction_value??null);
- const eventAt=interaction?null:clearEmote?null:previous?.interaction_at??null;
+ // Keep existing event values inside PostgreSQL. Passing timestamptz through a
+ // JavaScript Date would truncate microseconds and change a heartbeat's event.
+ const eventId=interaction?randomUUID():null;
  await client.query(`INSERT INTO presence(company_id,user_id,room_id,x,z,status,motion_mode,seat_id,seat_transform,interaction_id,interaction_type,interaction_value,interaction_at,state_updated_at)
-  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,CASE WHEN $14::boolean THEN clock_timestamp() ELSE $13::timestamptz END,clock_timestamp())
+  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,CASE WHEN $13::boolean THEN clock_timestamp() ELSE NULL END,clock_timestamp())
   ON CONFLICT(company_id,user_id) DO UPDATE SET room_id=EXCLUDED.room_id,x=EXCLUDED.x,z=EXCLUDED.z,status=EXCLUDED.status,motion_mode=EXCLUDED.motion_mode,
-  seat_id=EXCLUDED.seat_id,seat_transform=EXCLUDED.seat_transform,interaction_id=EXCLUDED.interaction_id,interaction_type=EXCLUDED.interaction_type,interaction_value=EXCLUDED.interaction_value,interaction_at=EXCLUDED.interaction_at,
+  seat_id=EXCLUDED.seat_id,seat_transform=EXCLUDED.seat_transform,
+  interaction_id=CASE WHEN $13::boolean THEN EXCLUDED.interaction_id WHEN $14::boolean THEN NULL ELSE presence.interaction_id END,
+  interaction_type=CASE WHEN $13::boolean THEN EXCLUDED.interaction_type WHEN $14::boolean THEN NULL ELSE presence.interaction_type END,
+  interaction_value=CASE WHEN $13::boolean THEN EXCLUDED.interaction_value WHEN $14::boolean THEN NULL ELSE presence.interaction_value END,
+  interaction_at=CASE WHEN $13::boolean THEN EXCLUDED.interaction_at WHEN $14::boolean THEN NULL ELSE presence.interaction_at END,
   updated_at=clock_timestamp(),state_updated_at=GREATEST(clock_timestamp(),presence.state_updated_at+interval '1 millisecond')`,
-  [companyId,member.userId,data.roomId,x,z,data.status,data.motionMode??previous?.motion_mode??'walk',seatId,seat?JSON.stringify(seat):null,eventId,eventType,eventValue,eventAt,Boolean(interaction)]);
+  [companyId,member.userId,data.roomId,x,z,data.status,data.motionMode??previous?.motion_mode??'walk',seatId,seat?JSON.stringify(seat):null,eventId,interaction?.type??null,interaction?.value??null,Boolean(interaction),Boolean(clearEmote)]);
 }
 async function releaseChangedSeats(client:PoolClient,companyId:string,plan:FloorPlanDocument){
  const occupants=(await client.query('SELECT user_id,seat_id,seat_transform FROM presence WHERE company_id=$1 AND seat_id IS NOT NULL',[companyId])).rows;

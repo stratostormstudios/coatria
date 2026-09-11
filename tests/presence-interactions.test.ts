@@ -46,6 +46,9 @@ test('authenticated presence interactions and exclusive expiring seat claims',{s
    await clearRates();const first=own(await post(owner,{motionMode:'walk',interaction:{type:'emote',value:'wave'}}));
    assert.match(first.interaction.id,/^[a-f0-9-]{36}$/);assert.equal(first.interaction.type,'emote');assert.equal(Date.parse(first.interaction.expiresAt)-Date.parse(first.interaction.createdAt),8000);
    const next=own(await post(owner));assert.deepEqual(next.interaction,first.interaction);assert(Date.parse(next.updatedAt)>Date.parse(first.updatedAt));
+   await query("UPDATE presence SET interaction_at=date_trunc('second',clock_timestamp())+interval '0.123456 seconds' WHERE company_id=$1 AND user_id=$2",[companyId,owner.id]);
+   const precise=own(await call(worker,'presence','GET')).interaction;assert.match(precise.createdAt,/\.123456/);assert.match(precise.expiresAt,/\.123456/);
+   assert.deepEqual(own(await post(owner)).interaction,precise,'A heartbeat must preserve the full PostgreSQL event timestamp, including microseconds.');
    assert.equal((await post(owner,{interaction:{type:'emote',value:'wave',createdAt:'2099-01-01'}})).status,400);
    await query("UPDATE presence SET interaction_at=clock_timestamp()-interval '9 seconds' WHERE company_id=$1 AND user_id=$2",[companyId,owner.id]);
    assert.equal(own(await post(owner)).interaction,null);assert.equal(own(await call(worker,'presence','GET')).interaction,null);
