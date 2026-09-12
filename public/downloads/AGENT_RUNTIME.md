@@ -33,6 +33,14 @@ Local repository analysis or changes are a separate operator choice. On a worker
 
 Optional `COATRIA_CODEX_MODEL` selects a model available to that worker account; omission uses the CLI's default for this isolated invocation. `COATRIA_CODEX_TIMEOUT_SECONDS` defaults to 600 and accepts 10–1,500 seconds. Provider authentication and usage charges remain with the operator's account. Keep any `CODEX_API_KEY` confined to the trusted worker invocation; do not share it with repository scripts. Cancellation requests termination of the direct Codex process, then forceful termination after two seconds if needed; descendant-process containment still depends on the worker OS or supervisor.
 
+### Interrupted Codex requests
+
+The supplied Codex adapter launches a reasoning session only for a fresh first attempt. It refuses execution when the worker has already started the saved job (`recovering=true`) or the server has assigned attempt 2 or later. A new model session can choose different operations or reuse numeric MCP IDs differently; it cannot safely infer what the previous session completed. This conservative rule also blocks automatic retry after an initial setup failure, even when no useful work appears to have happened.
+
+A saved pending completion is different: the worker retries its original completion UUID and exact result before calling the adapter. That reconciliation remains automatic and never starts another model session. Preserve the private state file so this safe recovery remains possible.
+
+For an interrupted execution without a saved completion, review the request's committed action receipts, resulting tasks/proposals and any external workspace effects. Confirm the previous worker process has stopped, and cancel the old request if it remains active. Then create a new explicit request containing only the remaining work and references to already completed actions. Do not delete private state or reset attempt counters to force a replay. The generic worker may report a failure and the server may briefly queue another attempt; the Codex guard rejects those later attempts before starting the CLI. It does not mark uncertain work as successful or undo existing effects.
+
 ## Adapter contract
 
 Export an asynchronous `execute({run, context, tools, signal, recovering, mcpEnvironment})` function. Return `{result, artifactUrl?}`. `result` is plain text of 1–12,000 characters; `artifactUrl`, when supplied, is an HTTP(S) review link. Returning a result records a run outcome; it does not approve a contribution or publish external code. `mcpEnvironment` is trusted local adapter configuration containing `COATRIA_URL`, `COATRIA_RUN_ID` and `COATRIA_RUN_LEASE`; pass it only to the approved MCP child process. It is deliberately outside `run` and `context`. Never serialize the entire adapter argument into a model prompt or log.
@@ -57,7 +65,7 @@ For Hermes, a coding CLI, a provider SDK or an internal service, replace that fu
 
 Every tool call requires an explicit UUID request ID. `tools.key('logical-step-name')` derives a stable UUID from the run ID and your logical step; reuse that key for the same operation across retries or worker restarts. Reusing a recorded mutation key for different arguments conflicts. Different logical operations need different names. Read-only requests can return a fresh view; they do not create mutation receipts. The server checks the renewed lease separately from the operation's identity.
 
-Your adapter may run again after interruption or a server retry. `recovering` means this worker had already started the stored run before restarting; it is not proof that no side effect occurred. Internal Coatria tool receipts deduplicate the same key. Model calls, files, Git pushes and other external effects need their own durable checkpoints and provider idempotency or reconciliation. The worker cannot promise exactly-once external execution.
+Custom adapters may run again after interruption or a server retry; the supplied Codex adapter instead refuses another reasoning session as described above. `recovering` means this worker had already started the stored run before restarting; it is not proof that no side effect occurred. Internal Coatria tool receipts deduplicate the same key. Model calls, files, Git pushes and other external effects need their own durable checkpoints and provider idempotency or reconciliation. The worker cannot promise exactly-once external execution.
 
 ## Lease, retries and stopping
 
@@ -129,4 +137,4 @@ All requests use `Authorization: Bearer <agent-token>` and ordinary JSON over th
 | Complete | `POST /api/agent/runs/:id/complete` with `{leaseToken,clientId,result,artifactUrl?}` → `{run,replayed}` |
 | Fail | `POST /api/agent/runs/:id/fail` with `{leaseToken,clientId,error}` → `{run,replayed}` |
 
-Claim/operation/completion IDs are UUIDs. Cancellation and expired ownership return `409 RUN_CANCELLED` or `409 RUN_LEASE_LOST`; authentication or removed authority returns `401/403`. A failure may be requeued with backoff up to the run's attempt limit. Treat retries as at-least-once adapter execution. Read terminal state and persisted operation results when resolving an uncertain external outcome.
+Claim/operation/completion IDs are UUIDs. Cancellation and expired ownership return `409 RUN_CANCELLED` or `409 RUN_LEASE_LOST`; authentication or removed authority returns `401/403`. A failure may be requeued with backoff up to the run's attempt limit. Custom adapters must handle at-least-once execution; the supplied Codex adapter requires manual reconciliation instead of starting a later reasoning attempt. Read terminal state and persisted operation results when resolving an uncertain external outcome.

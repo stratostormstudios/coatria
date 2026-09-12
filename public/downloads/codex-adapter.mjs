@@ -38,6 +38,9 @@ export async function codexInvocation({run,context,mcpEnvironment},settings=proc
 
 /** The worker owns renewal/cancellation. Codex is terminated when its lease signal ends. */
 export async function execute(options){
+ // A fresh reasoning session cannot infer which earlier logical effects committed.
+ // The worker reconciles a saved completion before it ever calls this adapter.
+ if(options.recovering===true||options.run?.attempts>1)throw new Error('Codex execution requires manual reconciliation of the previous attempt. Review its committed actions and external effects before creating a new request.');
  options.signal?.throwIfAborted();const invocation=await codexInvocation(options);options.signal?.throwIfAborted();
  return new Promise((resolveRun,reject)=>{
   const child=spawn(invocation.command,invocation.args,{cwd:invocation.cwd,env:invocation.env,windowsHide:true,shell:false,stdio:['pipe','pipe','pipe']}),signal=options.signal;
