@@ -537,10 +537,12 @@ export function mount(host, options = {}) {
     }
     (snapshot.agents||[]).forEach((agent,index)=>{
       const id=String(agent.id||'');
-      if(!id||agent.status!=='active'||!fresh(agent.lastSeenAt,now,60000))return;
+      if(!id||agent.status!=='active'||!fresh(agent.lastSeenAt,now,60000)||(agent.expiresAt&&Date.parse(agent.expiresAt)<=now))return;
       wanted.add(`agent:${id}`);
       let c=characters.find(character=>character.robot&&character.id===id);
-      if(!c){const point=nearestOpen(-1.5+(index%4)*1.25,1.2+Math.floor(index/4)*1.25);c=robot(String(agent.name||'AI agent'),id,point.x,point.z,-.4);}
+      const position=agent.presence&&fresh(agent.presence.updatedAt,now,60000)&&Number.isFinite(agent.presence.x)&&Number.isFinite(agent.presence.z)?agent.presence:null;
+      if(!c){const point=position?nearestOpen(position.x,position.z):nearestOpen(-1.5+(index%4)*1.25,1.2+Math.floor(index/4)*1.25);c=robot(String(agent.name||'AI agent'),id,point.x,point.z,-.4);}
+      if(position&&position.updatedAt!==c.lastPresenceAt){const point=nearestOpen(position.x,position.z);c.g.position.set(point.x,0,point.z);c.lastPresenceAt=position.updatedAt;c.data.roomId=position.roomId;c.data.status=position.status;updateCharacter(c);}
       c.expiresAt=Date.parse(agent.lastSeenAt)+60000;c.name=String(agent.name||'AI agent');c.data.name=c.name;c.label.el.textContent=`${c.name} · AI`;
       c.label.el.setAttribute('aria-label',`Select ${c.name}, AI agent`);
       c.data.description=`AI agent · ${String(agent.harness||'Connected harness')}. A recent API heartbeat was received. Company-scoped access remains under its sponsor's control.`;

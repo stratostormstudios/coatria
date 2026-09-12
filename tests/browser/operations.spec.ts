@@ -25,14 +25,14 @@ test.beforeEach(({baseURL})=>{test.skip(!baseURL||!['localhost','127.0.0.1'].inc
 test('agent setup protects its one-time token and revoked activity never looks connected',async({page})=>{
  const state=fixture(workspace({agents:[agent('revoked','Retired analyst',{status:'revoked',lastSeenAt:new Date().toISOString()})]}));
  const token='ca_'+'local-ux-fixture';
- state.handler=async(route,path)=>{if(path===`/api/companies/${company.id}/agents`&&route.request().method()==='POST'){const body=route.request().postDataJSON();expect(body).toEqual({name:'Atlas',harness:'hermes',description:'Prepare reviewable reports',conversationAccess:'none'});const added=agent('atlas','Atlas');state.workspace.agents.push(added);await route.fulfill({status:201,json:{agent:added,token}});return true;}return false;};
+ state.handler=async(route,path)=>{if(path===`/api/companies/${company.id}/agents`&&route.request().method()==='POST'){const body=route.request().postDataJSON();expect(body).toEqual({name:'Atlas',harness:'codex',description:'Prepare reviewable reports',conversationAccess:'none',invocationAccess:'none',capabilities:[]});const added=agent('atlas','Atlas',{harness:'codex'});state.workspace.agents.push(added);await route.fulfill({status:201,json:{agent:added,token}});return true;}return false;};
  await mock(page,state);await page.goto('/#agents');
  await expect(card(page,'Retired analyst')).toContainText('Revoked');
  await expect(card(page,'Retired analyst')).not.toContainText('Recent API activity');
  await page.getByRole('button',{name:'Connect an agent',exact:true}).first().click();
  const dialog=page.getByRole('dialog');await dialog.getByLabel('Agent name',{exact:true}).fill('Atlas');await dialog.getByLabel('What should this agent contribute?',{exact:true}).fill('Prepare reviewable reports');
  await dialog.getByRole('button',{name:'Create agent identity',exact:true}).click();
- await expect(dialog.getByRole('textbox',{name:'Connection token',exact:true})).toHaveValue(token);
+ await expect(dialog.getByRole('textbox',{name:'Connection token',exact:true})).toHaveValue(token);await expect(dialog.getByRole('link',{name:'Download worker',exact:true})).toHaveAttribute('href','/downloads/agent-worker.mjs');await expect(dialog.getByRole('link',{name:'Download MCP bridge',exact:true})).toHaveAttribute('href','/downloads/agent-mcp.mjs');await expect(dialog.getByRole('link',{name:'Download Codex adapter',exact:true})).toHaveAttribute('href','/downloads/codex-adapter.mjs');await expect(dialog.getByRole('link',{name:'Codex setup guide',exact:true})).toHaveAttribute('href','/downloads/AGENT_RUNTIME.md#connect-codex');await expect(dialog).toContainText('--adapter ./codex-adapter.mjs');await expect(dialog).toContainText('COATRIA_CODEX_WORKSPACE');
  await dialog.getByRole('button',{name:'Close dialog',exact:true}).click();
  await expect(dialog.getByRole('alert')).toContainText('This token cannot be shown again');
  await dialog.getByRole('checkbox',{name:'I saved this token in a private location.',exact:true}).check();

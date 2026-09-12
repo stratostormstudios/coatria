@@ -12,7 +12,8 @@ GRANT SELECT,INSERT,UPDATE,DELETE ON
  sessions,companies,memberships,invitations,rooms,presence,messages,agents,tasks,
  contributions,activity,skills,skill_versions,drives,drive_files,openings,
  applications,rate_limits,call_peers,call_signals,task_authors,
- conversations,conversation_events,conversation_reads,message_reactions,conversation_requests
+ conversations,conversation_events,conversation_reads,message_reactions,conversation_requests,
+ agent_runs,agent_run_claims,agent_run_receipts,agent_tool_receipts,agent_proposals,agent_presence
  TO coatria_runtime_v1;
 GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO coatria_runtime_v1;
 ALTER ROLE coatria_runtime_v1 SET statement_timeout='15s';

@@ -51,6 +51,20 @@ test('runtime role supports accounts and durable conversations without verificat
     assert.equal((await client.query('SELECT emoji FROM message_reactions WHERE message_id=$1',[modern.id])).rows[0].emoji,'heart');
     assert.equal((await client.query('DELETE FROM message_reactions WHERE message_id=$1 AND actor_id=$2',[modern.id,user.id])).rowCount,1);
     assert.equal((await client.query('SELECT count(*)::int AS count FROM conversation_events WHERE conversation_id=$1',[legacy.conversation_id])).rows[0].count,2);
+    // A restricted deployment must support all durable worker records while
+    // retaining default-deny invocation grants on existing/new credentials.
+    const agent=(await client.query("INSERT INTO agents(company_id,name,harness,created_by,token_hash) VALUES($1,'Runtime agent','custom',$2,$3) RETURNING id,invocation_access,capabilities,expires_at",[company.id,user.id,randomUUID()])).rows[0];
+    assert.equal(agent.invocation_access,'none');assert.deepEqual(agent.capabilities,[]);assert(agent.expires_at);
+    await client.query("UPDATE agents SET invocation_access='members',capabilities='[\"workspace.read\"]' WHERE id=$1",[agent.id]);
+    const run=(await client.query("INSERT INTO agent_runs(company_id,agent_id,requested_by,conversation_id,client_id,payload_hash,prompt) VALUES($1,$2,$3,$4,$5,$6,'Runtime request') RETURNING id",[company.id,agent.id,user.id,legacy.conversation_id,randomUUID(),'0'.repeat(64)])).rows[0];
+    await client.query('SELECT id FROM agent_runs WHERE id=$1 FOR UPDATE',[run.id]);
+    await client.query("UPDATE agent_runs SET status='running',attempts=1,worker_id='runtime-worker',lease_token_hash=$2,lease_expires_at=clock_timestamp()+interval '60 seconds',started_at=clock_timestamp() WHERE id=$1",[run.id,'0'.repeat(64)]);
+    await client.query("INSERT INTO agent_run_claims(company_id,agent_id,claim_id,worker_id,run_id,attempt) VALUES($1,$2,$3,'runtime-worker',$4,1)",[company.id,agent.id,randomUUID(),run.id]);
+    await client.query("INSERT INTO agent_run_receipts(company_id,run_id,client_id,kind,payload_hash,lease_token_hash,response) VALUES($1,$2,$3,'complete',$4,$4,'{}')",[company.id,run.id,randomUUID(),'0'.repeat(64)]);
+    await client.query("INSERT INTO agent_tool_receipts(company_id,agent_id,run_id,request_id,tool,request_hash,response) VALUES($1,$2,$3,$4,'office_presence',$5,'{}')",[company.id,agent.id,run.id,randomUUID(),'0'.repeat(64)]);
+    await client.query("INSERT INTO agent_proposals(company_id,agent_id,run_id,requested_by,kind,data) VALUES($1,$2,$3,$4,'room','{}')",[company.id,agent.id,run.id,user.id]);
+    await client.query("INSERT INTO agent_presence(company_id,agent_id,x,z,status) VALUES($1,$2,0,0,'available')",[company.id,agent.id]);
+    for(const table of['agent_runs','agent_run_claims','agent_run_receipts','agent_tool_receipts','agent_proposals','agent_presence'])assert.equal((await client.query(`SELECT count(*)::int AS count FROM ${table} WHERE company_id=$1`,[company.id])).rows[0].count,1);
     const options=(await client.query('SELECT rolcreaterole,rolcreatedb,rolbypassrls FROM pg_roles WHERE rolname=current_user')).rows[0];
     assert.deepEqual(options,{rolcreaterole:false,rolcreatedb:false,rolbypassrls:false});
     for(const [sql,values] of [
@@ -59,6 +73,8 @@ test('runtime role supports accounts and durable conversations without verificat
       ['CREATE TABLE public.unauthorized_test(id int)',[]],
       ['TRUNCATE users CASCADE',[]],
       ['TRUNCATE conversation_events',[]],
+      ['TRUNCATE agent_run_receipts',[]],
+      ['ALTER TABLE agent_runs DISABLE TRIGGER ALL',[]],
       ['ALTER FUNCTION public.coatria_legacy_message_insert() SECURITY DEFINER',[]],
       ["UPDATE schema_migrations SET applied_at=now()",[]],
       [`CREATE ROLE ${role}_escalated NOLOGIN`,[]]

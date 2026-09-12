@@ -73,7 +73,7 @@ async function writePresence(client:PoolClient,member:Membership,data:z.infer<ty
   updated_at=clock_timestamp(),state_updated_at=GREATEST(clock_timestamp(),presence.state_updated_at+interval '1 millisecond')`,
   [companyId,member.userId,data.roomId,x,z,data.status,data.motionMode??previous?.motion_mode??'walk',seatId,seat?JSON.stringify(seat):null,eventId,interaction?.type??null,interaction?.value??null,Boolean(interaction),Boolean(clearEmote)]);
 }
-async function releaseChangedSeats(client:PoolClient,companyId:string,plan:FloorPlanDocument){
+export async function releaseChangedSeats(client:PoolClient,companyId:string,plan:FloorPlanDocument){
  const occupants=(await client.query('SELECT user_id,seat_id,seat_transform FROM presence WHERE company_id=$1 AND seat_id IS NOT NULL',[companyId])).rows;
  for(const occupant of occupants){
   const item=plan.items.find(item=>item.id===occupant.seat_id),current=item?resolveOfficeSeat(item,plan.floor):null;

@@ -1,0 +1,82 @@
+'use client';
+import {createContext,useContext,useEffect,useRef,useState,type ReactNode} from 'react';
+import {ArrowRight,Bot,Check,Clock3,ExternalLink,LoaderCircle,RefreshCw,ShieldCheck,Square,XCircle} from 'lucide-react';
+import {api,type Agent,type User,type Workspace,when} from '@/lib/client';
+import {AGENT_CAPABILITIES,AGENT_CAPABILITY_LABELS,type AgentCapability} from '@/lib/agent-policy';
+import type {AgentRun} from '@/lib/agent-run-protocol';
+import {useAgentRunClient,emptyRunDraft,runDraftKey} from './useAgentRuns';
+import {Badge,Field,Form,Modal} from './ui';
+import {AgentRunProposals} from './AgentRunProposals';
+import s from './AgentRuns.module.css';
+
+const RunsContext=createContext<ReturnType<typeof useAgentRunClient>|null>(null);
+export function AgentRunProvider({children}:{children:ReactNode}){const client=useAgentRunClient();return <RunsContext.Provider value={client}>{children}</RunsContext.Provider>;}
+const isAdmin=(role:string)=>role==='owner'||role==='admin';
+function useRuns(){const store=useContext(RunsContext);if(!store)throw new Error('Agent requests require their company-scoped provider.');return store;}
+function eligible(agent:Agent,workspace:Workspace,now=Date.now()){
+ if(agent.status!=='active')return agent.status==='paused'?'Paused':'Revoked';
+ if(!isAdmin(workspace.members.find(member=>member.userId===agent.createdBy)?.role||''))return 'Sponsor access ended';
+ if(agent.expiresAt&&Date.parse(agent.expiresAt)<=now)return 'Expired';
+ if(!agent.invocationAccess||agent.invocationAccess==='none')return 'Requests disabled';
+ if(agent.invocationAccess==='admins'&&!isAdmin(workspace.company.role))return 'Administrators only';
+ return '';
+}
+function useNow(){const [now,setNow]=useState(0);useEffect(()=>{setNow(Date.now());const timer=setInterval(()=>setNow(Date.now()),10000);return()=>clearInterval(timer);},[]);return now;}
+function status(run:AgentRun,now:number){if(run.status==='running'&&now&&run.leaseExpiresAt&&Date.parse(run.leaseExpiresAt)<=now)return{label:'Worker connection overdue',tone:'warning',detail:'The last lease expired. Waiting for the server to retry or end this attempt.'};if(run.status==='queued')return{label:run.attempts?'Waiting to retry':'Queued',tone:'warning',detail:run.attempts?'Waiting for a worker to claim the next attempt.':'Waiting for a connected worker.'};if(run.status==='running')return{label:'Running',tone:'good',detail:'A connected worker has claimed this request.'};if(run.status==='succeeded')return{label:'Response delivered',tone:'good',detail:'Execution finished. Proposed changes still require human approval.'};if(run.status==='cancelled')return{label:'Cancelled',tone:'',detail:'Coatria will reject further results for this request. External work may need to be stopped at its host.'};return{label:'Failed',tone:'danger',detail:run.error||'The worker could not complete this request.'};}
+function safeUrl(value:string|null){try{const parsed=new URL(value||'');return ['http:','https:'].includes(parsed.protocol)&&!parsed.username&&!parsed.password?parsed.href:null;}catch{return null;}}
+export function AgentPermissionFields({agent,disabled=false}:{agent?:Agent;disabled?:boolean}){return <div className={s.permissions}>
+ <Field label="Who can ask this agent" hint="A request runs on your external worker. It can answer its request thread without broad conversation access."><select name="invocationAccess" defaultValue={agent?.invocationAccess||'none'} disabled={disabled}><option value="none">Requests off</option><option value="members">Company members</option><option value="admins">Administrators only</option></select></Field>
+ <fieldset className={s.grants} disabled={disabled}><legend>Allowed capabilities during a request</legend>{AGENT_CAPABILITIES.map(capability=><label key={capability}><input type="checkbox" name="capabilities" value={capability} defaultChecked={agent?.capabilities?.includes(capability)||false}/><span>{AGENT_CAPABILITY_LABELS[capability]}</span></label>)}</fieldset>
+ <p className={s.hint}><ShieldCheck size={15}/> Empty grants allow a response using the request context only. Private skill vaults and credentials stay outside this access. Proposals need an administrator’s approval; agents cannot approve their own work.</p>
+ </div>;}
+export function AgentPermissionEditor({companyId,agent,disabled,onSaved}:{companyId:string;agent:Agent;disabled:boolean;onSaved:()=>Promise<void>}){return <section className={s.accessSection}><h3>Request permissions</h3><Form key={agent.id+':'+agent.invocationAccess+':'+agent.capabilities?.join(',')} submit="Save request permissions" disabled={disabled} onSubmit={async form=>{const fields=new FormData(form);await api('/api/companies/'+companyId+'/agents/'+agent.id,'PATCH',{invocationAccess:fields.get('invocationAccess'),capabilities:fields.getAll('capabilities')});await onSaved();}}><AgentPermissionFields agent={agent}/></Form></section>;}
+
+export function AskAgentDialog({workspace,user,channel,parentId=null,contextText,initialPrompt='',onClose,onCreated}:{workspace:Workspace;user:User;channel:string;parentId?:string|null;contextText?:string;initialPrompt?:string;onClose:()=>void;onCreated?:(run:AgentRun)=>void}){
+ const store=useRuns(),key=runDraftKey(channel,parentId),draft=store.state.drafts.get(key)||emptyRunDraft,now=useNow(),agent=workspace.agents.find(value=>value.id===draft.agentId),reason=agent?eligible(agent,workspace,now||Date.now()):'Choose an agent',mounted=useRef(true);
+ useEffect(()=>{mounted.current=true;const existing=store.state.drafts.get(key);if(!existing){const first=workspace.agents.find(value=>!eligible(value,workspace));store.setDraft(key,{agentId:first?.id||'',prompt:initialPrompt});}else if(!existing.prompt&&!existing.attempt&&initialPrompt)store.setDraft(key,{prompt:initialPrompt});return()=>{mounted.current=false;};},[key]);
+ async function submit(retry=false){const run=await store.create(workspace.company.id,channel,parentId,retry);if(run&&mounted.current){onCreated?.(run);onClose();}}
+ return <Modal title="Ask an agent" description={'A company-visible request in '+(workspace.rooms.find(room=>room.id===channel)?.name||'Company commons')+'.'} onClose={onClose}>
+  <form className={'form '+s.askForm} aria-busy={draft.busy} onSubmit={event=>{event.preventDefault();if(!reason&&!draft.busy)void submit();}}>
+   <Field label="Choose an agent"><select value={draft.agentId} disabled={draft.busy} onChange={event=>store.setDraft(key,{agentId:event.target.value})}><option value="">Select a company agent</option>{workspace.agents.map(value=>{const unavailable=eligible(value,workspace,now||Date.now());return <option key={value.id} value={value.id} disabled={!!unavailable}>{value.name}{unavailable?' · '+unavailable:''}</option>;})}</select></Field>
+   {!workspace.agents.some(value=>!eligible(value,workspace,now||Date.now()))&&<p className={s.notice} role="status">No agents can accept your requests yet. An administrator can connect a worker and enable requests in Your agents.</p>}
+   {agent&&<div className={s.agentSummary}><span className={s.agentIcon}><Bot size={21}/></span><div><strong>{agent.name}</strong><small>Sponsored by {workspace.members.find(member=>member.userId===agent.createdBy)?.name||'Former administrator'} · {agent.lastSeenAt?'Last API contact '+when(agent.lastSeenAt):'No API contact yet'}</small></div></div>}
+   {contextText&&<div className={s.context}><strong>Thread context</strong><p>{contextText}</p><small>The request is linked to this message’s thread.</small></div>}
+   <Field label="What should the agent do?" hint="State the outcome and any constraints. Your regular chat draft stays unchanged."><textarea required maxLength={6000} rows={5} value={draft.prompt} disabled={draft.busy} onChange={event=>store.setDraft(key,{prompt:event.target.value})} placeholder="For example: review this plan and suggest the next three steps."/></Field>
+   {agent&&<details className={s.accessDisclosure}><summary>Access available to this request</summary>{agent.capabilities?.length?<ul>{agent.capabilities.filter(value=>AGENT_CAPABILITIES.includes(value as AgentCapability)).map(value=><li key={value}>{AGENT_CAPABILITY_LABELS[value as AgentCapability]}</li>)}</ul>:<p>Request context only. No company tool permissions are granted.</p>}<p>Execution runs on the connected host. Tool proposals require human approval.</p></details>}
+   {draft.error&&<div className={s.error} role="alert">{draft.attempt?'Request delivery is unconfirmed. ':'Request not queued. '}{draft.error}{draft.attempt&&<button type="button" className="button secondary small" disabled={draft.busy} onClick={()=>void submit(true)}>Retry original request</button>}</div>}
+   <div className={s.actions}><button type="button" className="button secondary" onClick={onClose}>Close</button><button type="submit" className="button primary" disabled={draft.busy||!!reason||!draft.prompt.trim()}>{draft.busy?<LoaderCircle size={16} className="spin"/>:<Bot size={16}/>} {draft.busy?'Queuing request…':'Queue request'}</button></div>
+   <p className={s.hint}>A queued request waits for your worker. A harness label or recent API request does not mean a worker is running.</p>
+  </form>
+ </Modal>;
+}
+
+export function AgentRunDetail({companyId,runId,user,role,onClose}:{companyId:string;runId:string;user:User;role:string;onClose:()=>void}){
+ const store=useRuns(),now=useNow(),run=store.state.runs.get(runId),query=store.state.queries.get('run:'+runId),[confirm,setConfirm]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ useEffect(()=>store.watch(companyId,'run:'+runId),[store.watch,companyId,runId]);
+ const state=run?status(run,now):null,url=run?safeUrl(run.artifactUrl):null;
+ return <Modal title={run?'Request to '+run.agentName:'Agent request'} description={run?'Requested by '+run.requesterName+' · '+when(run.createdAt):undefined} onClose={onClose} wide><div className={s.detail}>
+  {query?.error&&<p role="alert" className={s.error}>{query.error}<button className="text-button" onClick={()=>void store.reload('run:'+runId)}>Retry status</button></p>}
+  {!run?<p role="status">Loading request…</p>:<><div className={s.statusLine}><Badge tone={state!.tone}>{state!.label}</Badge><small>Attempt {run.attempts} of {run.maxAttempts}</small></div><p className={s.hint}>{state!.detail}</p><section><h3>Request</h3><p className={s.prose}>{run.prompt}</p></section><dl className={s.facts}><div><dt>Last server update</dt><dd>{when(run.updatedAt)}</dd></div>{run.leaseExpiresAt&&run.status==='running'&&<div><dt>Worker lease until</dt><dd>{when(run.leaseExpiresAt)}</dd></div>}{run.deadlineAt&&<div><dt>Execution deadline</dt><dd>{when(run.deadlineAt)}</dd></div>}</dl>
+   {run.result&&<section className={s.result}><h3>Agent response</h3><p className={s.prose}>{run.result}</p>{url&&<a className="button secondary small" href={url} target="_blank" rel="noopener noreferrer"><ExternalLink size={14}/> Open result artifact</a>}<p className={s.hint}>An execution result is not an approval of company changes.</p></section>}
+   {run.error&&run.status!=='failed'&&<p className={s.notice}>Previous attempt: {run.error}</p>}
+   <details className={s.committed}><summary>Committed actions{query?.actions?.length?' · '+query.actions.length:''}</summary><p className={s.hint}>Up to 200 recorded changes in this request. Read-only queries are not included.</p>{query?.actions?.length?<ol>{query.actions.map(action=><li key={action.requestId}><code>{action.tool}</code><time dateTime={action.createdAt}>{when(action.createdAt)}</time></li>)}</ol>:<p className={s.hint}>{query?.loaded?'No committed changes recorded.':'Loading action receipts…'}</p>}</details>
+   <AgentRunProposals companyId={companyId} runId={runId} user={user} role={role}/>
+   {error&&<p className={s.error} role="alert">{error}</p>}
+   {['queued','running'].includes(run.status)&&(run.requestedBy===user.id||isAdmin(role))&&(confirm?<div className={s.cancelConfirm}><strong>Cancel this request?</strong><p>Coatria will stop accepting its results. Work already performed on the external host is not undone.</p><div className={s.actions}><button className="button secondary small" disabled={busy} onClick={()=>setConfirm(false)}>Keep request</button><button className="button danger small" disabled={busy} onClick={async()=>{setBusy(true);setError('');try{await store.cancel(companyId,runId);setConfirm(false);}catch(error){setError(error instanceof Error?error.message:'Cancellation could not be confirmed.');}finally{setBusy(false);}}}>{busy?'Cancelling…':'Cancel request'}</button></div></div>:<button className="button secondary small" onClick={()=>setConfirm(true)}><Square size={13}/> Cancel request</button>)}
+  </>}
+ </div></Modal>;
+}
+function RunRow({run,onOpen,now}:{run:AgentRun;onOpen:()=>void;now:number}){const state=status(run,now);return <button className={s.runRow} onClick={onOpen}><span className={s.runIcon}>{run.status==='succeeded'?<Check size={16}/>:run.status==='failed'?<XCircle size={16}/>:run.status==='running'?<LoaderCircle size={16}/>:<Clock3 size={16}/>}</span><span className={s.runText}><strong>{run.agentName}</strong><span>{run.prompt}</span><small>{state.detail}</small></span><span className={s.runEnd}><Badge tone={state.tone}>{state.label}</Badge><ArrowRight size={14}/></span></button>;}
+export function AgentRunHistory({companyId,agentId,channel,user,role,onClose}:{companyId:string;agentId?:string;channel?:string;user:User;role:string;onClose:()=>void}){
+ const store=useRuns(),queryKey=agentId?'agent:'+agentId:'channel:'+(channel||'commons'),query=store.state.queries.get(queryKey),[selected,setSelected]=useState<string|null>(null),now=useNow();useEffect(()=>store.watch(companyId,queryKey),[store.watch,companyId,queryKey]);
+ return <><Modal title="Agent request history" description="Latest 50 requests. Results and status are shared with this company." onClose={onClose} wide><div className={s.history}>
+ {query?.error&&<p role="alert" className={s.error}>{query.error}<button className="text-button" onClick={()=>void store.reload(queryKey)}>Retry requests</button></p>}{!query?.loaded?<p role="status">Loading requests…</p>:query.ids.length?query.ids.map(id=>{const run=store.state.runs.get(id);return run?<RunRow key={id} run={run} now={now} onOpen={()=>setSelected(id)}/>:null;}):<p className={s.notice}>No requests yet. Choose Ask agent in a conversation to queue work for a connected worker.</p>}
+ </div></Modal>{selected&&<AgentRunDetail companyId={companyId} runId={selected} user={user} role={role} onClose={()=>setSelected(null)}/>}</>;
+}
+export function ConversationRuns({workspace,user,channel,parentId=null}:{workspace:Workspace;user:User;channel:string;parentId?:string|null}){
+ const store=useRuns(),queryKey='channel:'+channel,query=store.state.queries.get(queryKey),[history,setHistory]=useState(false),[selected,setSelected]=useState<string|null>(null),now=useNow();const enabled=workspace.agents.some(agent=>agent.invocationAccess&&agent.invocationAccess!=='none');
+ useEffect(()=>enabled?store.watch(workspace.company.id,queryKey):undefined,[store.watch,workspace.company.id,queryKey,enabled]);
+ const runs=(query?.ids||[]).map(id=>store.state.runs.get(id)).filter((run):run is AgentRun=>!!run&&(!parentId||run.parentId===parentId)),active=runs.filter(run=>run.status==='queued'||run.status==='running'),shown=(active.length?active:runs).slice(0,2);
+ if(!enabled&&!runs.length&&!workspace.agents.length)return null;
+ return <><aside className={s.shelf} aria-label="Agent requests"><div className={s.shelfHead}><span><Bot size={14}/> Agent requests {active.length>0&&<b>{active.length} active</b>}</span><button type="button" onClick={()=>setHistory(true)}>View history <ArrowRight size={13}/></button></div>{query?.error&&<div role="alert" className={s.error}>{query.error}<button className="text-button" onClick={()=>void store.reload(queryKey)}>Retry status</button></div>}{shown.length>0&&<div className={s.shelfRows}>{shown.map(run=><RunRow key={run.id} run={run} now={now} onOpen={()=>setSelected(run.id)}/>)}</div>}</aside>{history&&<AgentRunHistory companyId={workspace.company.id} channel={channel} user={user} role={workspace.company.role} onClose={()=>setHistory(false)}/>} {selected&&<AgentRunDetail companyId={workspace.company.id} runId={selected} user={user} role={workspace.company.role} onClose={()=>setSelected(null)}/>}</>;
+}

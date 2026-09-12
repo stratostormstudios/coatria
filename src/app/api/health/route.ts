@@ -3,7 +3,7 @@ import { json } from '@/lib/security';
 
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
-const migrations=['001_initial.sql','002_calls.sql','003_agent_submission_summary.sql','004_identity_and_review_boundaries.sql','005_personal_avatars.sql','006_presence_interactions.sql','007_conversations.sql'];
+const migrations=['001_initial.sql','002_calls.sql','003_agent_submission_summary.sql','004_identity_and_review_boundaries.sql','005_personal_avatars.sql','006_presence_interactions.sql','007_conversations.sql','008_agent_runs.sql','009_agent_tools.sql'];
 export async function GET() {
   if(!process.env.DATABASE_URL)return json({status:'setup_required',configured:false},503);
   try {

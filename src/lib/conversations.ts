@@ -28,7 +28,7 @@ async function authorized<T>(actor:ConversationActor,run:(context:Context)=>Prom
   let view:ConversationActorView;
   if(actor.kind==='agent'){
    if(!['owner','admin'].includes(member.role))fail(401,'Agent sponsor access ended.');
-   const agent=(await client.query("SELECT id,name,conversation_access FROM agents WHERE company_id=$1 AND id=$2 AND created_by=$3 AND token_hash=$4 AND status='active' FOR SHARE",[actor.companyId,actor.agentId,actor.userId,actor.tokenHash])).rows[0];
+   const agent=(await client.query("SELECT id,name,conversation_access FROM agents WHERE company_id=$1 AND id=$2 AND created_by=$3 AND token_hash=$4 AND status='active' AND expires_at>clock_timestamp() FOR SHARE",[actor.companyId,actor.agentId,actor.userId,actor.tokenHash])).rows[0];
    if(!agent)fail(401,'Agent access ended.');
    if(agent.conversation_access==='none'||write&&agent.conversation_access!=='write')fail(403,'This agent does not have the required conversation access.','AGENT_CONVERSATION_ACCESS');
    view={kind:'agent',id:agent.id,name:agent.name,avatarColor:null};
@@ -101,8 +101,18 @@ export async function conversationSync(actor:ConversationActor,selector:string,i
  });
 }
 export async function sendConversationMessage(actor:ConversationActor,selector:string,input:unknown){
- const data=parse(conversationSendInput,input),roomId=roomFor(selector);
- return authorized(actor,async context=>{
+ const data=parse(conversationSendInput,input);
+ return authorized(actor,context=>insertMessage(context,selector,data),true);
+}
+/** Server-only: caller must already hold and validate this run's agent/requester authority and live lease. */
+export async function sendRunConversationMessage(client:PoolClient,actor:Extract<ConversationActor,{kind:'agent'}>,selector:string,input:unknown){
+ const data=parse(conversationSendInput,input);
+ const agent=(await client.query('SELECT name FROM agents WHERE company_id=$1 AND id=$2',[actor.companyId,actor.agentId])).rows[0];
+ if(!agent)fail(401,'Agent access ended.');
+ return insertMessage({client,actor,actorId:actor.agentId,view:{kind:'agent',id:actor.agentId,name:agent.name,avatarColor:null}},selector,data);
+}
+async function insertMessage(context:Context,selector:string,data:z.infer<typeof conversationSendInput>){
+  const {actor}=context,roomId=roomFor(selector);
   const {client,actorId}=context;
   // A retry key spans channels for this actor/company, so lock before the channel.
   await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`conversation-request:${actor.companyId}:${actor.kind}:${actorId}:${data.clientId}`]);
@@ -119,7 +129,6 @@ export async function sendConversationMessage(actor:ConversationActor,selector:s
   await nextEvent(context,channel,'message.created',messageId);
   await client.query('INSERT INTO conversation_requests(company_id,actor_kind,actor_id,client_id,payload_hash,conversation_id,message_id) VALUES($1,$2,$3,$4,$5,$6,$7)',[actor.companyId,actor.kind,actorId,data.clientId,payloadHash,channel.id,messageId]);
   return{message:await oneMessage(context,channel.id,messageId),replayed:false};
- },true);
 }
 function ownMessage(context:Context,message:ConversationMessage,revision:number){
  if(message.actor.kind!==context.actor.kind||message.actor.id!==context.actorId)fail(403,'Only the author can change this message.');

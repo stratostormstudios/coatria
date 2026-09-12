@@ -6,6 +6,8 @@ import { workRoute } from './work';
 import { integrationRoute } from './integrations';
 import { talentRoute } from './talent';
 import { conversationRoute } from './conversation-api';
+import {agentRunRoute} from './agent-run-api';
+import {agentToolsRoute,agentProposalRoute} from './agent-tools';
 import { randomUUID } from 'node:crypto';
 
 export async function handleApi(request: Request, parts: string[]): Promise<Response> {
@@ -34,7 +36,7 @@ export async function handleApi(request: Request, parts: string[]): Promise<Resp
     if(!['GET','HEAD'].includes(method)&&!bearerEndpoint&&!['auth'].includes(parts[0])) {
       const user=await currentUser(request);if(user)await rateLimit(`write:${user.id}`,240,60);
     }
-    for(const handler of [identityRoute,conversationRoute,companyRoute,workRoute,integrationRoute,talentRoute]) {
+    for(const handler of [identityRoute,agentRunRoute,agentToolsRoute,agentProposalRoute,conversationRoute,companyRoute,workRoute,integrationRoute,talentRoute]) {
       const result=await handler(request,parts,method);if(result)return finish(result);
     }
     fail(404,'API endpoint not found.');
