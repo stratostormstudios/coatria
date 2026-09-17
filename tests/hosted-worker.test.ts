@@ -59,3 +59,22 @@ test('SIGTERM follows the cooperative path and removes its process handlers',asy
  const folder=await directory();let started!:()=>void;const ready=new Promise<void>(resolve=>started=resolve),before=process.listenerCount('SIGTERM');
  try{const pending=runHostedWorker({directory:folder,companyId,agentId,deadlineMs:Date.now()+5000,client:client({claim:async()=>{started();return{run:null};}}),execute:async()=>({})});await ready;process.emit('SIGTERM');const result=await pending;assert.equal(result.reason,'signal');assert.equal(result.exitCode,0);assert.equal(process.listenerCount('SIGTERM'),before);}finally{await remove(folder);}
 });
+
+test('two clean starts on the same private volume restore the worker identity and release ownership',async()=>{
+ const folder=await directory(),workerIds:string[]=[],starts:any[][]=[];
+ try{
+  for(let attempt=0;attempt<2;attempt++){
+   const control=new AbortController(),events:any[]=[];let firstClaim!:()=>void;
+   const claimed=new Promise<void>(resolve=>firstClaim=resolve);
+   const operation=runHostedWorker({directory:folder,companyId,agentId,deadlineMs:Date.now()+30000,signal:control.signal,client:client({claim:async()=>{firstClaim();return{run:null};}}),execute:async()=>{throw new Error('Idle fixture must not invoke an adapter.');},log:event=>events.push(event)});
+   await claimed;control.abort();const result=await operation;assert.equal(result.reason,'operator_stop');assert.equal(result.exitCode,0);
+   workerIds.push(JSON.parse(await readFile(join(folder,'worker-private.json'),'utf8')).workerId);starts.push(events);
+   await assert.rejects(()=>lstat(join(folder,'worker-private.json.lock')),error=>(error as NodeJS.ErrnoException).code==='ENOENT');
+  }
+  assert.equal(workerIds[1],workerIds[0]);assert(workerIds[0].startsWith('worker-'));
+  assert.deepEqual(starts[0].filter(entry=>entry.event.startsWith('state-')).map(entry=>entry.event),['state-created']);
+  assert.deepEqual(starts[1].filter(entry=>entry.event.startsWith('state-')).map(entry=>entry.event),['state-restored']);
+  assert(starts.flat().every(entry=>Object.keys(entry).every(key=>['at','event'].includes(key))));
+  assert(!JSON.stringify(starts).includes(workerIds[0]));
+ }finally{await remove(folder);}
+});

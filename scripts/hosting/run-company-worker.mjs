@@ -42,7 +42,9 @@ export async function runHostedWorker({directory,companyId,agentId,deadlineMs,cl
   signal?.addEventListener('abort',externalStop,{once:true});if(signal?.aborted)externalStop();
   deadlineTimer=setTimeout(()=>stop('deadline'),Math.max(0,deadlineMs-Date.now()));
   process.once('SIGTERM',signalStop);process.once('SIGINT',signalStop);
-  control.signal.throwIfAborted();state=await openWorkerState(join(directory,'worker-private.json'),client);ownsState=true;await report('starting');emit('host-started');
+  control.signal.throwIfAborted();const statePath=join(directory,'worker-private.json');let restoring=false;
+  try{const previous=await lstat(statePath);restoring=previous.isFile()&&!previous.isSymbolicLink();}catch(error){if(error.code!=='ENOENT')throw error;}
+  state=await openWorkerState(statePath,client);ownsState=true;emit(restoring?'state-restored':'state-created');await report('starting');emit('host-started');
   const tick=createAutonomyTicker(client);
   const tracked=options=>{
    if(options.run?.companyId!==companyId||options.run?.agentId!==agentId||options.context?.installation?.pluginId!=='runpod'||options.context?.installation?.runtimeConfig?.providerId!=='runpod')throw new Error('Host scope differs from the leased installation.');

@@ -157,6 +157,15 @@ function normalize(data,protocol){
  return {calls,text:texts.join('\n').trim(),continuation};
 }
 
+// A workspace overview should not replay every desk's geometry in every model
+// turn. This projection affects model history only: the HTTP API and layout_get
+// still expose the complete reviewed layout. Never mutate the tool response.
+function modelContextResult(name,value){
+ if(name!=='workspace_get'||!object(value)||!object(value.floor)||!Array.isArray(value.floor.items))return value;
+ const {items,...floor}=value.floor;
+ return {...value,floor:{...floor,itemCount:items.length,itemsOmitted:true,geometryHint:'Use layout_get to read the complete floor items and geometry when needed.'}};
+}
+
 /** Injectable transport only for local fixtures; execute() uses the native HTTPS transport. */
 export function createProviderExecutor({settings=process.env,fetch:transport=globalThis.fetch}={}){
  return async function executeProvider({run,context,tools,signal,recovering}){
@@ -189,7 +198,7 @@ export function createProviderExecutor({settings=process.env,fetch:transport=glo
    for(const call of result.calls){if(typeof call.id!=='string'||!/^[-a-zA-Z0-9_]{1,120}$/.test(call.id)||seenCalls.has(call.id)||!allowed.has(call.name))throw new Error('The model requested an unauthorized or duplicate tool call.');seenCalls.add(call.id);if(typeof call.args==='string'){try{call.args=JSON.parse(call.args);}catch{throw new Error('The model supplied invalid tool arguments.');}}if(!object(call.args))throw new Error('The model supplied invalid tool arguments.');encoded(call.args,128*1024);if(!allowed.get(call.name)(call.args))throw new Error('The model supplied tool arguments outside the approved schema.');}
    if(config.protocol==='responses')history.push(...result.continuation);else history.push(result.continuation);
    const toolResults=[];
-   for(const call of result.calls){active.throwIfAborted();let value;try{value=await untilAborted(()=>tools.call(call.name,call.args,{requestId:tools.key('provider:'+step+':'+call.id),signal:active}),active);}catch{throw new Error('A Coatria tool was denied or failed; review the run actions before retrying.');}active.throwIfAborted();const output=encoded(value,256*1024);callCount++;
+   for(const call of result.calls){active.throwIfAborted();let value;try{value=await untilAborted(()=>tools.call(call.name,call.args,{requestId:tools.key('provider:'+step+':'+call.id),signal:active}),active);}catch{throw new Error('A Coatria tool was denied or failed; review the run actions before retrying.');}active.throwIfAborted();encoded(value,256*1024);const output=encoded(modelContextResult(call.name,value),256*1024);callCount++;
     if(config.protocol==='responses')history.push({type:'function_call_output',call_id:call.id,output});
     else if(config.protocol==='anthropic')toolResults.push({type:'tool_result',tool_use_id:call.id,content:output});
     else history.push({role:'tool',tool_call_id:call.id,content:output});

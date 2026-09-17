@@ -21,6 +21,7 @@ import {mkdir,readFile,writeFile,stat,lstat,chown,chmod} from 'node:fs/promises'
 import {dirname} from 'node:path';
 import {spawn} from 'node:child_process';
 const manifest=${JSON.stringify(manifest)}, commit=${JSON.stringify(commit)};
+const release='/opt/coatria/releases/'+commit;
 try {
   const expires=Date.parse(process.env.COATRIA_HOST_EXPIRES_AT||'');
   if(!Number.isFinite(expires)||expires<=Date.now()||expires-Date.now()>86400000)throw Error('INVALID_EXPIRY');
@@ -36,7 +37,7 @@ try {
   if(!info.isDirectory()||info.isSymbolicLink())throw Error('PRIVATE_STATE_REQUIRED');
   await chown(directory,1000,1000);await chmod(directory,0o700);
   for(const entry of manifest){
-    const target='/opt/coatria/'+entry.path;
+    const target=release+'/'+entry.path;
     // A stopped/restarted Pod may retain its writable container layer. Reuse
     // only the exact reviewed root-owned file; never overwrite an unknown one.
     try {
@@ -59,7 +60,7 @@ try {
   const env={PATH:'/usr/local/bin:/usr/bin:/bin',HOME:'/home/node',COATRIA_HOST_STATE_DIR:'/state/avery'};
   for(const key of allowed)if(process.env[key])env[key]=process.env[key];
   process.setgroups([]);
-  const child=spawn('/usr/local/bin/node',['/opt/coatria/scripts/hosting/run-company-worker.mjs'],{env,uid:1000,gid:1000,stdio:['ignore','inherit','inherit']});
+  const child=spawn('/usr/local/bin/node',[release+'/scripts/hosting/run-company-worker.mjs'],{env,uid:1000,gid:1000,stdio:['ignore','inherit','inherit']});
   for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>child.kill(signal));
   child.on('error',()=>{console.error('COATRIA_HOST_START_FAILED');process.exit(1);});
   child.on('exit',(code)=>process.exit(code??1));

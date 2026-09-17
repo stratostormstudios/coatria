@@ -8,6 +8,7 @@ import {runInNewContext} from 'node:vm';
 import {buildRunpodBootstrap, nodeImage} from '../scripts/hosting/build-runpod-bootstrap.mjs';
 
 const commit='a'.repeat(40);
+const release='/opt/coatria/releases/'+commit;
 const paths=['public/downloads/agent-worker.mjs','public/downloads/provider-adapter.mjs','scripts/hosting/run-company-worker.mjs'];
 const published=new Map(paths.map((path,index)=>[path,Buffer.from(`export const fixture${index}=true;\n`)]));
 type Entry={kind:'file'|'directory'|'symlink';uid:number;mode:number;dev:number;bytes?:Buffer};
@@ -30,7 +31,7 @@ async function artifact() {
   }
 }
 
-async function boot(options:{existing?:Partial<Entry>;hashMismatch?:boolean;oversize?:boolean;mount?:Entry;expiry?:string;reuse?:boolean}={}) {
+async function boot(options:{existing?:Partial<Entry>;hashMismatch?:boolean;oversize?:boolean;mount?:Entry;expiry?:string;reuse?:boolean;previousRelease?:boolean}={}) {
   const result=await artifact();
   const encoded=/data:text\/javascript;base64,([^']+)/.exec(result.args)?.[1];
   assert.ok(encoded);
@@ -38,8 +39,9 @@ async function boot(options:{existing?:Partial<Entry>;hashMismatch?:boolean;over
   const fs=new Map<string,Entry>([['/',directory()],['/state',options.mount??directory(2)]]);
   if(options.reuse||options.existing){
     fs.set('/state/avery',{...directory(2),uid:1000,mode:0o700});
-    for(const [path,bytes] of published)fs.set('/opt/coatria/'+path,{...file(bytes),...options.existing});
+    for(const [path,bytes] of published)fs.set(release+'/'+path,{...file(bytes),...options.existing});
   }
+  if(options.previousRelease)for(const path of paths)fs.set('/opt/coatria/releases/'+'b'.repeat(40)+'/'+path,file(Buffer.from('old reviewed release')));
   const fetches:Array<{url:string;init:any}>=[],writes:string[]=[],logs:string[]=[],groups:number[][]=[];
   const spawns:Array<{command:string;args:string[];options:any}>=[];
   const handlers=new Map<string,(...args:any[])=>void>();
@@ -99,7 +101,7 @@ test('verified bootstrap launches only the fixed unprivileged worker with a priv
   assert.equal(actual.spawns.length,1);
   const spawn=actual.spawns[0];
   assert.equal(spawn.command,'/usr/local/bin/node');
-  assert.equal(spawn.args.join(','),'/opt/coatria/scripts/hosting/run-company-worker.mjs');
+  assert.equal(spawn.args.join(','),release+'/scripts/hosting/run-company-worker.mjs');
   assert.equal(spawn.options.uid,1000);assert.equal(spawn.options.gid,1000);
   assert.equal(spawn.options.env.COATRIA_HOST_COMPANY_ID,actual.companyId);
   assert.equal(spawn.options.env.COATRIA_HOST_AGENT_ID,actual.agentId);
@@ -115,6 +117,16 @@ test('a restarted Pod reuses only unchanged reviewed root-owned source',async()=
   const actual=await boot({reuse:true});
   assert.equal(actual.exitCode,undefined);
   assert.equal(actual.fetches.length,0);assert.equal(actual.writes.length,0);assert.equal(actual.spawns.length,1);
+});
+
+test('a new reviewed commit starts beside retained release files without overwriting them',async()=>{
+  const actual=await boot({previousRelease:true});
+  assert.equal(actual.exitCode,undefined);assert.equal(actual.fetches.length,3);assert.equal(actual.spawns.length,1);
+  for(const path of paths){
+    assert.equal(actual.fs.get('/opt/coatria/releases/'+'b'.repeat(40)+'/'+path)?.bytes?.toString(),'old reviewed release');
+    assert.ok(actual.writes.includes(release+'/'+path));
+  }
+  assert.equal(actual.spawns[0].args[0],release+'/scripts/hosting/run-company-worker.mjs');
 });
 
 test('existing writable, non-root, linked or modified source is never executed or overwritten',async(t)=>{

@@ -35,6 +35,45 @@ test('each provider completes its documented tool-call and final-answer wire pro
  });
 });
 
+test('workspace geometry stays API-accessible while all provider histories receive a compact non-mutating overview',async t=>{
+ const workspace={company:{id:'company-fixture',name:'Fixture Company',slug:'fixture'},floor:{version:1,revision:27,floor:{width:40,depth:36},items:Array.from({length:180},(_,index)=>({id:'item-'+index,type:'desk',x:index%10,y:Math.floor(index/10),w:2,h:2,label:'Desk '+index,geometryFixture:'g'.repeat(400)}))}};
+ const original=JSON.stringify(workspace);assert.ok(Buffer.byteLength(original)>80_000);
+ for(const provider of Object.keys(models))await t.test(provider,async()=>{
+  const options=input(provider);options.tools.call=async()=>workspace as any;
+  let inspected=false;
+  const execute=createProviderExecutor({settings,fetch:wire(provider,[response(provider),response(provider,false)],(_url,init,index)=>{
+   if(!index)return;
+   const envelope=JSON.parse(init.body),body=provider==='runpod'?envelope.input.openai_input:envelope;
+   const text=['openai','xai'].includes(provider)?body.input.at(-1).output:provider==='anthropic'?body.messages.at(-1).content[0].content:body.messages.at(-1).content;
+   const projected=JSON.parse(text);
+   assert.deepEqual(projected.company,workspace.company);
+   assert.deepEqual(projected.floor.floor,workspace.floor.floor);
+   assert.equal(projected.floor.version,1);assert.equal(projected.floor.revision,27);
+   assert.equal(projected.floor.itemCount,180);assert.equal(projected.floor.itemsOmitted,true);
+   assert.match(projected.floor.geometryHint,/layout_get/);
+   assert.equal(projected.floor.items,undefined);
+   assert.ok(Buffer.byteLength(text)<1024);assert.ok(Buffer.byteLength(init.body)<10_000);
+   inspected=true;
+  }) as typeof fetch});
+  assert.deepEqual(await execute(options),{result:'Fixture Company is ready.'});
+  assert.equal(inspected,true);assert.equal(JSON.stringify(workspace),original);
+ });
+});
+
+test('layout_get and other tool results retain their complete model-visible data',async t=>{
+ const full={company:{name:'Fixture Company'},floor:{version:1,revision:8,floor:{width:20,depth:16},items:[{id:'desk-one',type:'desk',x:1,y:2,w:3,h:4} ]},items:[{id:'task-one',revision:3}],hasMore:false};
+ for(const name of ['layout_get','tasks_list','workspace_get'])await t.test(name,async()=>{
+  const value=name==='workspace_get'?{name:'Legacy result without a floor'}:full;
+  const options=input('runpod');options.tools.list=async()=>({tools:[{...tool,name}]});options.tools.call=async()=>value as any;
+  const first=response('runpod');first.choices[0].message.tool_calls[0].function.name=name;
+  let inspected=false;
+  const execute=createProviderExecutor({settings,fetch:wire('runpod',[first,response('runpod',false)],(_url,init,index)=>{
+   if(index){assert.deepEqual(JSON.parse(JSON.parse(init.body).input.openai_input.messages.at(-1).content),value);inspected=true;}
+  }) as typeof fetch});
+  await execute(options);assert.equal(inspected,true);
+ });
+});
+
 test('provider settings deny arbitrary hosts, missing credentials and invalid limits',()=>{
  const context=input().context;
  for(const bad of[{providerId:'https://attacker.invalid'},{providerId:'constructor'},{modelId:'../../private'},{modelId:'model --shell'},{maxSteps:21},{maxOutputTokens:8193},{maxTotalTokens:100001},{timeoutSeconds:601},{maxSteps:0}])assert.throws(()=>providerConfiguration({...context,installation:{...context.installation,runtimeConfig:{...context.installation.runtimeConfig,...bad}}},settings));
