@@ -55,6 +55,7 @@ export function createRuntimeClient({token=process.env.COATRIA_AGENT_TOKEN,url=p
  const runPath=runId=>{if(!UUID.test(runId))throw new Error('A run UUID is required.');return '/api/agent/runs/'+runId;};
  const post=(path,body,signal)=>request(path,{method:'POST',body,signal});
  return {origin,identity:fingerprint(token),
+  autonomyTick:signal=>post('/api/agent/autonomy/tick',{},signal),
   claim:(workerId,claimId,signal)=>post('/api/agent/runs/claim',{workerId,claimId},signal),
   heartbeat:(runId,leaseToken,signal)=>post(runPath(runId)+'/heartbeat',{leaseToken},signal),
   context:(runId,leaseToken,signal)=>request(runPath(runId)+'/context',{headers:{'X-Coatria-Run-Lease':leaseToken},signal}),
@@ -84,6 +85,20 @@ export async function openWorkerState(path,client){
 }
 
 function ended(error){return error instanceof RuntimeError&&(terminalCodes.has(error.code)||[401,403].includes(error.status));}
+/** Only the owning worker queues due, explicitly enabled missions for its agent.
+ * Scheduling is skipped until an uncertain claim or completion is reconciled.
+ * The server atomically deduplicates due cycles; a transport retry is safe.
+ */
+export function createAutonomyTicker(client,{now=()=>performance.now(),intervalMs=60000}={}){
+ if(!Number.isFinite(intervalMs)||intervalMs<60000)throw new Error('Autonomy polling must be at least one minute apart.');
+ let lastTick=-Infinity,inFlight=false;
+ return async(state,signal)=>{
+  signal?.throwIfAborted();if(state.data.job||state.data.claimId||inFlight)return false;
+  const current=now();if(!Number.isFinite(current)||current-lastTick<intervalMs)return false;
+  lastTick=current;inFlight=true;
+  try{await client.autonomyTick(signal);return true;}catch(error){if(error instanceof RuntimeError&&error.status===404)return false;throw error;}finally{inFlight=false;}
+ };
+}
 /** Execute one durable claim. Adapter work is cooperative and may be retried by the server.
  * @param {{client:any,state:any,execute:(options:any)=>any,signal?:AbortSignal,heartbeatMs?:number,log?:(entry:Record<string,unknown>)=>void}} options
  */
@@ -135,8 +150,8 @@ async function main(){
  const client=createRuntimeClient({url:values.url});
  const path=values.state||join(homedir(),'.coatria','workers',fingerprint(client.origin+client.identity).slice(0,24)+'.json'),state=await openWorkerState(path,client),controller=new AbortController();
  const stop=()=>controller.abort(new Error('Worker stopped.'));process.once('SIGINT',stop);process.once('SIGTERM',stop);
- const log=entry=>console.error(JSON.stringify(entry));
- try{const adapter=await import(pathToFileURL(resolve(values.adapter)).href);if(typeof adapter.execute!=='function')throw new Error('The adapter must export an execute function.');do{try{const worked=await workOnce({client,state,execute:adapter.execute,signal:controller.signal,log});if(values.once)return;if(!worked)await pause(3000,controller.signal);}catch(error){if(controller.signal.aborted)return;log({event:'worker-paused',code:error instanceof RuntimeError?error.code:'WORKER_ERROR',status:error instanceof RuntimeError?error.status:0});if(!(error instanceof RuntimeError)||[401,403].includes(error.status)||values.once)throw error;await pause(Math.max(3000,Math.min(300000,(error.retryAfter||0)*1000)),controller.signal);}}while(!controller.signal.aborted);}
+ const log=entry=>console.error(JSON.stringify(entry)),tick=createAutonomyTicker(client);
+ try{const adapter=await import(pathToFileURL(resolve(values.adapter)).href);if(typeof adapter.execute!=='function')throw new Error('The adapter must export an execute function.');do{try{await tick(state,controller.signal);const worked=await workOnce({client,state,execute:adapter.execute,signal:controller.signal,log});if(values.once)return;if(!worked)await pause(3000,controller.signal);}catch(error){if(controller.signal.aborted)return;log({event:'worker-paused',code:error instanceof RuntimeError?error.code:'WORKER_ERROR',status:error instanceof RuntimeError?error.status:0});if(!(error instanceof RuntimeError)||[401,403].includes(error.status)||values.once)throw error;await pause(Math.max(3000,Math.min(300000,(error.retryAfter||0)*1000)),controller.signal);}}while(!controller.signal.aborted);}
  finally{process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop);await state.close();}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)main().catch(()=>{console.error('Worker stopped. Check configuration and private state; credentials and server response bodies are not printed.');process.exitCode=1;});

@@ -64,7 +64,12 @@ test('runtime role supports accounts and durable conversations without verificat
     await client.query("INSERT INTO agent_tool_receipts(company_id,agent_id,run_id,request_id,tool,request_hash,response) VALUES($1,$2,$3,$4,'office_presence',$5,'{}')",[company.id,agent.id,run.id,randomUUID(),'0'.repeat(64)]);
     await client.query("INSERT INTO agent_proposals(company_id,agent_id,run_id,requested_by,kind,data) VALUES($1,$2,$3,$4,'room','{}')",[company.id,agent.id,run.id,user.id]);
     await client.query("INSERT INTO agent_presence(company_id,agent_id,x,z,status) VALUES($1,$2,0,0,'available')",[company.id,agent.id]);
-    for(const table of['agent_runs','agent_run_claims','agent_run_receipts','agent_tool_receipts','agent_proposals','agent_presence'])assert.equal((await client.query(`SELECT count(*)::int AS count FROM ${table} WHERE company_id=$1`,[company.id])).rows[0].count,1);
+    await client.query("INSERT INTO plugin_installations(company_id,agent_id,installed_by,client_id,request_hash,plugin_id,manifest_version,runtime_config,character) VALUES($1,$2,$3,$4,$5,'fixture','1.0.0','{}','{}')",[company.id,agent.id,user.id,randomUUID(),'0'.repeat(64)]);
+    await client.query('UPDATE plugin_installations SET revision=revision+1 WHERE company_id=$1',[company.id]);
+    const mission=(await client.query("INSERT INTO agent_missions(company_id,agent_id,created_by,client_id,request_hash,name,objective,interval_minutes,max_cycles) VALUES($1,$2,$3,$4,$5,'Runtime mission','Review company tasks',60,5) RETURNING id",[company.id,agent.id,user.id,randomUUID(),'0'.repeat(64)])).rows[0];
+    await client.query("INSERT INTO agent_mission_cycles(company_id,mission_id,ordinal,run_id,client_id,trigger) VALUES($1,$2,1,$3,$4,'scheduled')",[company.id,mission.id,run.id,randomUUID()]);
+    await client.query('UPDATE agent_missions SET revision=revision+1 WHERE id=$1',[mission.id]);
+    for(const table of['agent_runs','agent_run_claims','agent_run_receipts','agent_tool_receipts','agent_proposals','agent_presence','plugin_installations','agent_missions','agent_mission_cycles'])assert.equal((await client.query(`SELECT count(*)::int AS count FROM ${table} WHERE company_id=$1`,[company.id])).rows[0].count,1);
     const options=(await client.query('SELECT rolcreaterole,rolcreatedb,rolbypassrls FROM pg_roles WHERE rolname=current_user')).rows[0];
     assert.deepEqual(options,{rolcreaterole:false,rolcreatedb:false,rolbypassrls:false});
     for(const [sql,values] of [
@@ -74,6 +79,10 @@ test('runtime role supports accounts and durable conversations without verificat
       ['TRUNCATE users CASCADE',[]],
       ['TRUNCATE conversation_events',[]],
       ['TRUNCATE agent_run_receipts',[]],
+      ['TRUNCATE plugin_installations',[]],
+      ['TRUNCATE agent_missions CASCADE',[]],
+      ['TRUNCATE agent_mission_cycles',[]],
+      ['ALTER TABLE plugin_installations DISABLE TRIGGER ALL',[]],
       ['ALTER TABLE agent_runs DISABLE TRIGGER ALL',[]],
       ['ALTER FUNCTION public.coatria_legacy_message_insert() SECURITY DEFINER',[]],
       ["UPDATE schema_migrations SET applied_at=now()",[]],

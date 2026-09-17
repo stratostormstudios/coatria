@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join,relative,isAbsolute,resolve} from 'node:path';
 import {createServer,type Server} from 'node:http';
 import {spawn} from 'node:child_process';
-import {createRuntimeClient,runtimeOrigin,stableRequestId,RuntimeError,openWorkerState,workOnce} from '../public/downloads/agent-worker.mjs';
+import {createRuntimeClient,runtimeOrigin,stableRequestId,RuntimeError,openWorkerState,workOnce,createAutonomyTicker} from '../public/downloads/agent-worker.mjs';
 import {createMcpBridge} from '../public/downloads/agent-mcp.mjs';
 
 const runId='10000000-0000-4000-8000-000000000881',otherRun='10000000-0000-4000-8000-000000000882';
@@ -16,6 +16,26 @@ function memoryState(initial?:any){let saved:any;const state={data:initial||{wor
 function fakeClient(overrides:any={}){return {origin:'https://coatria.com',claim:async()=>claim(),context:async()=>({run:claim().run,messages:[],capabilities:['workspace:read']}),heartbeat:async()=>({run:claim().run,leaseExpiresAt:new Date(Date.now()+60000).toISOString()}),complete:async()=>({run:{id:runId,status:'succeeded'},replayed:false}),fail:async()=>({run:{id:runId,status:'queued'},replayed:false}),listTools:async()=>({tools:[]}),callTool:async()=>({result:{ok:true},replayed:false}),...overrides};}
 async function listen(server:Server){await new Promise<void>(done=>server.listen(0,'127.0.0.1',done));const address=server.address();assert(address&&typeof address!=='string');return 'http://127.0.0.1:'+address.port;}
 const close=(server:Server)=>new Promise<void>((done,reject)=>server.close(error=>error?reject(error):done()));
+
+test('autonomy tick is agent-authenticated and safely retries a lost atomic scheduling response',async()=>{
+ const calls:any[]=[];const client=createRuntimeClient({token,retryBaseMs:0,fetch:(async(url:any,options:any)=>{calls.push({url:String(url),...options});if(calls.length===1)throw new Error('Committed scheduling response lost');return Response.json({queued:1});}) as typeof fetch});
+ assert.deepEqual(await client.autonomyTick(undefined),{queued:1});assert.equal(calls.length,2);assert(calls.every(call=>call.url==='https://coatria.com/api/agent/autonomy/tick'&&call.method==='POST'&&call.headers.Authorization==='Bearer '+token&&call.redirect==='error'));assert.equal(calls[0].body,'{}');assert.equal(calls[1].body,calls[0].body);
+});
+
+test('autonomy scheduling ticks only idle reconciled state and uses a monotonic one-minute bound',async()=>{
+ let clock=0,count=0;const state=memoryState(),tick=createAutonomyTicker({autonomyTick:async()=>{count++;return{queued:1};}},{now:()=>clock});
+ assert.equal(await tick(state,undefined),true);assert.equal(count,1);assert.equal(await tick(state,undefined),false);clock=59999;assert.equal(await tick(state,undefined),false);clock=60000;assert.equal(await tick(state,undefined),true);
+ clock=120000;state.data.claimId='uncertain-claim';assert.equal(await tick(state,undefined),false);state.data.claimId=null;state.data.job={outcome:{kind:'complete'}};assert.equal(await tick(state,undefined),false);state.data.job=null;assert.equal(await tick(state,undefined),true);assert.equal(count,3);
+ clock=119999;assert.equal(await tick(state,undefined),false);assert.throws(()=>createAutonomyTicker({},{intervalMs:59999}));
+});
+
+test('autonomy tick suppresses overlap, tolerates only rollout404 and never bypasses cancellation or auth failures',async()=>{
+ const state=memoryState();let release!:()=>void,count=0;const tick=createAutonomyTicker({autonomyTick:async()=>{count++;await new Promise<void>(resolve=>release=resolve);}},{now:()=>0});
+ const pending=tick(state,undefined);assert.equal(await tick(state,undefined),false);release();assert.equal(await pending,true);assert.equal(count,1);
+ assert.equal(await createAutonomyTicker({autonomyTick:async()=>{throw new RuntimeError(404,'NOT_FOUND');}})(state,undefined),false);
+ for(const status of[401,403,429,503])await assert.rejects(()=>createAutonomyTicker({autonomyTick:async()=>{throw new RuntimeError(status,'DENIED');}})(state,undefined),{status});
+ const control=controller();control.abort();await assert.rejects(()=>tick(state,control.signal));assert.equal(count,1);
+});
 type RpcResponse=Awaited<ReturnType<ReturnType<typeof createMcpBridge>['handle']>>;
 function rpcResult(value:RpcResponse){assert(value&&'result' in value);return value.result;}
 function rpcError(value:RpcResponse){assert(value&&'error' in value);return value.error;}
