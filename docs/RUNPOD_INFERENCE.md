@@ -1,6 +1,10 @@
 # Runpod inference for Coatria workplace agents
 
-Verified September 17, 2026. **The isolated live pilot passed; the inference endpoint is paused.** Qwen completed a two-cycle company mission through the real Coatria worker, provider adapter and API handlers. This establishes a working integration, not production capacity or an unattended business. No production company was connected, and no always-on Coatria worker was installed.
+Historical isolated evaluation, September 17, 2026: **the two-cycle live pilot passed and was shut down afterwards.** Its synthetic company used the real Coatria worker, provider adapter and API handlers; that evaluation did not connect a production company or install a persistent company worker. These measurements establish a bounded integration, not production capacity or an unattended business.
+
+The endpoint was subsequently enabled for a dedicated hosted company worker on Runpod CPU with a new state volume. Current hosted configuration, expiry and operational limits are documented in [Runpod CPU hosting](RUNPOD_CPU_HOSTING.md) and [release status](RELEASE_STATUS.md). Its connection test and two saved-state restarts passed, the latest at 16:43:02.795 UTC. Company work exposed two distinct failures: oversized floor geometry exhausted context, then a recovery cycle exhausted its initial 2,048-token completion allowance on reasoning without a final answer. The overview correction is deployed, and installation plus cloud ceilings now allow 8,192 output tokens per step while keeping 80,000 total tokens, 600 seconds and eight steps. The third cycle manually dispatched at 16:44 UTC succeeded at 16:53:13.544 UTC, leaving one task and one contribution for independent review. The mission completed at its unchanged lifetime limit of three; no automatic fourth cycle is authorized. Do not apply the historical endpoint-shutdown state below to the hosted pilot.
+
+The successful hosted workflow does not validate its research quality. The submitted brief was explicitly provisional and had no external research connector; review identified factual errors. Its contribution remains unaccepted and requires independent fact-checking.
 
 ## Selected deployment configuration
 
@@ -18,7 +22,7 @@ Pin both model and serving image:
 
 The digest was checked against Docker Hub's public tag metadata. The September 11 worker release upgrades vLLM to 0.29.0. Pin by digest in the actual template; a version label alone can be republished. [Release](https://github.com/runpod-workers/worker-vllm/releases/tag/v2.27.0), [tag metadata](https://hub.docker.com/v2/repositories/runpod/worker-v1-vllm/tags/v2.27.0)
 
-The machine-readable reference is [runpod-qwen38.example.json](../public/downloads/runpod-qwen38.example.json). It is a bundle of separate examples, not one API request. It contains no credentials or account identifiers. Send its `endpointCreate` body to `POST https://api.runpod.io/v2/serverless`; this embeds the pinned container configuration and creates the endpoint disabled. Activation is a separate patch. The actual pilot used this REST API v2 configuration. [Endpoint API](https://docs.runpod.io/api-reference-v2/serverless/create-a-serverless-endpoint)
+The machine-readable reference is [runpod-qwen38.example.json](../public/downloads/runpod-qwen38.example.json). It preserves the historical isolated-pilot settings as separate examples, not one API request or a current deployment snapshot. It contains no credentials or account identifiers. Send its `endpointCreate` body to `POST https://api.runpod.io/v2/serverless`; this embeds the pinned container configuration and creates a new endpoint disabled. Activation is a separate patch. The isolated pilot used this REST API v2 configuration. [Endpoint API](https://docs.runpod.io/api-reference-v2/serverless/create-a-serverless-endpoint)
 
 ## Inference and the company worker are separate services
 
@@ -72,6 +76,10 @@ Qwen's default reasoning effort is `xhigh`; the preset explicitly selects **low 
 
 ## Cost and lifecycle controls
 
+The 40-minute deadline, 30-second idle timeout, absent GPU network volume and local watchdog described in this section belong to the earlier isolated inference trial. The hosted company pilot instead has a separate CPU state volume, a 60-second GPU idle timeout and an independent production Vercel cutoff at **2026-09-17 18:11 UTC (11:11 a.m. Pacific)**. The disabled create example remains a safe starting configuration, not the hosted endpoint's current state. [Hosted operating profile](RUNPOD_CPU_HOSTING.md), [current release evidence](RELEASE_STATUS.md)
+
+The hosted GPU endpoint reached zero running, initializing and idle workers at 16:43:54 UTC between jobs; three historical worker entries were throttled. The account rate then fell to approximately $0.077/hour for CPU and storage. New admitted work can start a GPU again, and this observation does not imply zero billing. A normally scheduled mission follow-up remains unverified; the manual third cycle is not such a test.
+
 The current Runpod pricing page lists the selected 48 GB Serverless tier at **US$1.75 per GPU-hour** and the H100 alternative at **US$4.79 per GPU-hour**. Forty billed minutes would be approximately **US$1.17** or **US$3.19** of compute respectively, plus storage and applicable account charges. Check the account's current quote before starting: these estimates are neither a guaranteed invoice nor a hard spending cap. [Current pricing](https://www.runpod.io/pricing)
 
 Startup, model loading, execution and idle shutdown time are billable. The reference uses an 80 GB container disk and **no new network volume**. Container storage is approximately US$0.10/GB/month, billed in five-minute intervals. A persistent network volume would continue incurring storage charges and is intentionally omitted. [Billing semantics](https://docs.runpod.io/serverless/pricing)
@@ -79,12 +87,12 @@ Startup, model loading, execution and idle shutdown time are billable. The refer
 | Stage | Minimum workers | Maximum workers | Purpose |
 | --- | --- | --- | --- |
 | Prepared / paused pending release | 0 | 0 | No workers admitted; verify the provider reports zero remaining workers |
-| Supervised trial | 0 | 1 | One GPU at most; 30-second idle timeout; external teardown deadline |
+| Historical isolated trial | 0 | 1 | One GPU at most; 30-second idle timeout; external teardown deadline |
 | Approved on-demand operation | 0 | 1 initially | Scale to zero between requests; increase only after measured demand and cost review |
 
-Use a 600-second execution timeout and an independent 40-minute trial deadline. On expiry, stop dispatching, cancel owned pending jobs, disable the endpoint, and verify workers actually stop. A local watchdog is best-effort and can fail if its host loses connectivity; account controls and post-test billing verification remain necessary. Setting maximum workers to zero does not reverse charges or already committed work.
+The isolated trial used a 600-second execution timeout and an independent 40-minute trial deadline. Its teardown stopped dispatch, attempted cancellation of owned pending jobs, disabled the endpoint and verified that workers stopped. Its local watchdog was best-effort and depended on its host's connectivity; the hosted pilot now uses the independent Vercel cutoff described above. Account controls and post-test billing verification remain necessary. Setting maximum workers to zero does not reverse charges or already committed work.
 
-The completed pilot was stopped with minimum and maximum workers at zero; provider inspection confirmed zero total and running workers. The reference remains disabled pending the release decision. Do not confuse minimum zero with disabled: an endpoint with maximum one can start a billed worker when a request arrives. Token limits do not cover GPU download, startup or idle costs.
+The completed isolated pilot was stopped with minimum and maximum workers at zero; provider inspection then confirmed zero total and running workers. The downloadable create example remains disabled by default. The existing endpoint was later re-enabled for the hosted pilot; its present limits and observed state belong in the hosted release record. Do not confuse minimum zero with disabled: an endpoint with maximum one can start a billed worker when a request arrives. Token limits do not cover GPU download, startup or idle costs.
 
 ## Measured pilot results
 

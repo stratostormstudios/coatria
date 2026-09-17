@@ -1,12 +1,14 @@
 # Coatria managed harness hosting
 
-Decision updated 2026-09-17: the user selected **Runpod CPU Pods** for the first hosted worker. This document specifies that dedicated company pilot and the separate work needed for a production fleet. Provisioning and the first real company task remain pending at this revision; the architecture is not a deployment receipt.
+Updated 2026-09-17: the first dedicated company worker is **provisioned on a Runpod CPU Pod** with a new network volume. The cloud worker passed a real model connection test and restored its saved state after restarting on the same Pod and volume. Two hosted mission failures remain distinct: floor geometry exhausted context before the adapter correction, then the recovery cycle spent its entire 2,048-token completion allowance on reasoning and returned no final answer. The installation and cloud worker now allow 8,192 output tokens per step; the manually dispatched third cycle succeeded at 16:53:13.544 UTC and submitted the existing task for independent review. This is a bounded hosted pilot, not a completed production-fleet rollout. The concrete deployment and cutoff contract are in [Runpod CPU hosting](RUNPOD_CPU_HOSTING.md).
+
+The successful hosted workflow does not validate its research quality. The submitted brief was explicitly provisional and had no external research connector; review identified factual errors. Its contribution remains unaccepted and requires independent fact-checking.
 
 ## Selected first deployment
 
-Keep the existing Vercel application and Neon database. Run the trusted Coatria HTTP worker on a **dedicated Runpod CPU Pod with 2 vCPU and 4 GB RAM (`cpu: {id: "cpu3c", vcpuCount: 2}`)**, using a **new private network volume** for worker state. The existing **Qwen3.8-27B-FP8 Serverless GPU endpoint** remains a separate inference service. This choice requires no AWS account. The initial test has a fixed expiry; continuous service requires an explicitly maintained hosting allowance.
+The existing Vercel application and Neon database serve the company. The trusted Coatria HTTP worker runs on a **dedicated Runpod CPU Pod with 2 vCPU and 4 GB RAM (`cpu: {id: "cpu3c", vcpuCount: 2}`), in `US-NC-2`**, using a **new 10 GB standard network volume** for worker state. The existing **Qwen3.8-27B-FP8 Serverless GPU endpoint** remains a separate inference service. This choice requires no AWS account. The pilot expires at **2026-09-17 18:11 UTC (11:11 a.m. Pacific)**; continuous service requires an explicitly maintained hosting allowance.
 
-The CPU worker handles Coatria's queue, lease renewal, typed tool calls and scheduled mission checks. Runpod GPU workers generate model responses. The CPU Pod stays available for scheduling while GPU inference can scale to zero between requests. Closing the customer's browser or switching off the customer's computer must not affect either cloud component once this deployment is verified.
+The CPU worker handles Coatria's queue, lease renewal, typed tool calls and scheduled mission checks. Runpod GPU workers generate model responses. The CPU Pod stays available for scheduling while GPU inference can scale to zero between requests. The hosted runtime and independent Vercel cutoff do not require the customer's browser or desktop process. GPU limits are configured at minimum 0, maximum 1 and a 60-second idle grace period. At 16:43:54 UTC, the provider reported zero running, initializing and idle GPU workers; three historical entries remained throttled. This proves an idle observation between jobs, not permanent GPU shutdown while new work is admitted.
 
 ```mermaid
 flowchart LR
@@ -26,13 +28,13 @@ The existing external-worker installation/API supplies the pilot identity. Hosti
 
 | Component | Initial configuration and boundary |
 | --- | --- |
-| CPU compute | One dedicated 2-vCPU/4-GB CPU Pod; confirm the available CPU flavor, datacenter and price before creation |
-| Worker | Reviewed Node.js runtime, `agent-worker.mjs` and `provider-adapter.mjs`; fixed Coatria origin, approved endpoint/model and bounded limits |
-| Durable disk | A newly created account-private network volume, attached at Pod creation; record the actual volume ID, size, datacenter and mount |
-| GPU inference | Existing Qwen endpoint; set an explicit maximum worker count and idle policy for the approved pilot |
+| CPU compute | One dedicated `cpu3c` 2-vCPU/4-GB CPU Pod in `US-NC-2`; quoted $0.06/hour |
+| Worker | Official Node 24.19.0 image pinned by digest; reviewed source verified before execution; UID/GID 1000, fixed Coatria origin and bounded model/tool limits |
+| Durable disk | New account-private 10 GB standard network volume at `/state`; private worker state directory; same volume retained through verified restart |
+| GPU inference | Existing Qwen endpoint; minimum 0, maximum 1 and idle timeout 60 seconds; zero active workers observed at 16:43:54 UTC between jobs |
 | Credentials | Dedicated company agent credential and private inference credential supplied to the trusted runtime; never committed, logged or sent to the model |
-| Networking | Outbound Coatria and Runpod access; no public worker UI or inference listener; any temporary setup access must be removed or explicitly retained under operator control |
-| Evidence | Record Pod/volume IDs, source/image version, worker contact, task/run IDs, model usage and restart outcome after verification |
+| Networking | Outbound HTTPS; no exposed ports, SSH, Jupyter or global networking |
+| Evidence | Private provisioning/worker receipts record identity and resources; public release evidence includes connection success, restart, source revision and remaining gates without private company objectives or task content |
 
 Runpod network volumes persist independently of compute and typically mount at `/workspace` for Pods. They must be attached during Pod deployment and require a supported Secure Cloud location. Validate CPU/volume compatibility and placement before launching; a network volume does not imply a private VPC or enforced outbound firewall. Do not share the company worker's volume with the GPU model cache or another company. [Network volumes](https://docs.runpod.io/storage/network-volumes), [Pod creation API](https://docs.runpod.io/api-reference-v2/pods/create-a-pod)
 
@@ -69,27 +71,33 @@ Do not copy employee-owned private skills into company memory automatically. Per
 
 ## First company run and release gates
 
-1. **Provision the dedicated worker:** confirm the selected CPU/volume quote and compatible datacenter, create the new volume, launch the Pod and install the reviewed runtime/configuration.
-2. **Verify cloud ownership:** observe the correct company identity and recent worker contact from the Pod. No local worker may be responsible for that contact.
-3. **Run one bounded company task:** first honor an already-approved company mission; otherwise use the launch-checklist objective, limited tools and a small cycle count. Verify the actual task, contribution, result and receipts; leave work for independent human review.
-4. **Verify autonomous scheduling:** allow a genuinely due scheduled cycle to execute from the cloud. Do not count an accelerated test clock or manual API tick as evidence of the normal scheduler.
-5. **Verify persistence and restart:** restart an idle worker using its volume, confirm state belongs to the same origin/credential and prove only one worker owns it. Separately test interrupted execution and expect safe review when recovery is uncertain.
-6. **Verify controls:** pause the agent/mission, revoke authority, rotate the private runtime secret and confirm subsequent unauthorized effects are refused. Check GPU worker limits, idle shutdown and CPU/storage billing.
-7. **Report actual state:** record whether the Pod is still running, the GPU's configured and observed state, ongoing charges and any unresolved gates. Only then call this dedicated cloud pilot operational.
+| Gate | Evidence at this revision |
+| --- | --- |
+| Provisioning and cloud contact | Worker first live at 16:18 UTC on 2026-09-17; dedicated CPU and new volume provisioned; real model connection test passed |
+| First company mission | Created and reserved a task, then failed its context budget because the workspace summary included full floor geometry; no completed business outcome is claimed |
+| Context correction | Provider adapter now presents a compact workspace overview without floor geometry; the public API is unchanged and `layout_get` still exposes the full layout |
+| Recovery cycle | After the context correction, Qwen consumed all 2,048 completion tokens in reasoning and ended with `finish_reason: length`, without a final answer; the run failed rather than being recorded as successful |
+| Further retry | Installation and cloud environment now allow 8,192 output tokens per step; 80,000 total tokens, 600 seconds and 8 steps are unchanged. Third cycle manually dispatched at 16:44 UTC; result recorded at 16:53:13.544 UTC. One task and one contribution are in review; no duplicate or acceptance was observed. Lifetime limit remains 3, so no automatic fourth cycle is authorized |
+| Restart and saved state | Same CPU and network volume restarted; worker logged `state-restored` at 16:30:48 UTC and again at 16:43:02.795 UTC after the allowance update; this does not prove mid-inference crash recovery |
+| Independent cutoff | Production Vercel minute cron produced actual scheduled HTTP 200 responses; expiry is 18:11 UTC; before expiry it performs no provider mutations |
+| Normal mission scheduling | Not verified in this pilot: retries were manually dispatched. The cutoff cron is separate and is not evidence of a normally due mission cycle |
+| Capacity and billing | At 16:43:54 UTC, zero running/initializing/idle GPU workers were observed, with three throttled historical entries. Account rate fell to approximately $0.077/hour for CPU and storage; this is not zero spend or a final invoice |
 
-The owner can shut down their computer after the worker has been established in Runpod; provisioning and a cloud-origin completed run are necessary evidence. A browser heartbeat or local test is insufficient.
+Additional controls still need dedicated drills: authority revocation during work, runtime-secret rotation, interrupted inference, stale-lock recovery, regional outage and backup restoration. Existing automated authorization checks do not replace these operational exercises.
 
 ## Costs and operating limits
 
 The dedicated CPU Pod stays running so it can poll for work and schedule missions. Its billing is independent of GPU scale-to-zero. It is not an ephemeral per-request CPU service.
 
-| Resource | Illustrative estimate | Qualification |
+| Resource | Pilot quote or estimate | Qualification |
 | --- | --- | --- |
-| CPU3, 2 vCPU and 4 GB | Approximately $0.06/hour, or $43.80 at 730 hours | Catalog-derived; verify the deployed flavor and actual hourly quote |
-| New standard network volume | Published first-tier rate $0.07/GB/month | Size and actual quote are recorded at provisioning; continues while CPU compute is stopped |
+| CPU3, 2 vCPU and 4 GB | Quoted $0.06/hour, or $43.80 at 730 hours | Actual selected `cpu3c` Pod; a quote is not proof of current billing |
+| New 10 GB standard network volume | Approximately $0.70/month at $0.07/GB/month | Continues while CPU compute is stopped |
 | Existing Qwen L40S Serverless GPU | Previously verified approximately $1.75 per active GPU-hour | Billed startup/idle periods, storage and account charges must also be accounted for |
 
-These are component estimates, not a complete platform quote or customer price. CPU catalog fields reviewed on 2026-09-17 did not explicitly state a time unit; the estimate follows Runpod's hourly Pod convention. [CPU catalog](https://docs.runpod.io/api-reference-v2/catalog/list-cpu-types), [Pod billing](https://docs.runpod.io/pods/pricing), [Network storage pricing](https://docs.runpod.io/storage/network-volumes)
+These are component quotes and estimates, not a complete platform quote or customer price. The live CPU API retained its $0.06 quote after reporting `EXITED`; the reaper therefore verifies lifecycle state and returns `billingVerified: false`. Actual billing requires separate provider reconciliation. [CPU catalog](https://docs.runpod.io/api-reference-v2/catalog/list-cpu-types), [Pod billing](https://docs.runpod.io/pods/pricing), [Network storage pricing](https://docs.runpod.io/storage/network-volumes)
+
+The production Vercel reaper authenticates with a private cron secret, verifies exact operator-configured resource identities and independently disables the GPU endpoint and stops the CPU after expiry. Subsequent cron requests reconcile pending stops and transient failures. It never deletes the state volume. Provider or scheduler outages may delay the cutoff; it is not a guaranteed dollar cap. See [the independent cutoff contract](RUNPOD_CPU_HOSTING.md#independent-cutoff).
 
 The existing pilot measured a cold Qwen request at about 291 seconds and warm requests at 11–18 seconds. Display “Starting model” during cold startup. A persistent CPU worker does not eliminate GPU startup delay. Warm GPU capacity is a separately authorized recurring cost.
 
@@ -140,6 +148,6 @@ AWS ECS/Fargate with a durable queue and independently secured broker remains an
 
 ## Current state at this revision
 
-Avery's StratoStorm identity has been installed with workspace/task/office-presence grants. Its credential was sealed locally with Windows user encryption during setup. No persistent desktop worker was launched and no real company checklist was executed at the point this revision was prepared. The previous Qwen pilot endpoint was returned to zero allowed workers with zero workers observed; the authorized cloud deployment will need an explicit inference-capacity setting.
+The dedicated hosted worker is running within its fixed pilot window. Runtime release `77a77ebb55e376a9bee09c55db61dd4678342d8b` was verified deployed in Vercel deployment `dpl_3qNjZLiAMDU1ejMMMR5iUgSrotuW`, ready and aliased to `coatria.com`. The first release CI run [35245547823](https://github.com/stratostormstudios/coatria/actions/runs/35245547823) passed 305 tests with one skip; the latest run [35247034385](https://github.com/stratostormstudios/coatria/actions/runs/35247034385) succeeded with 318 tests passed, one skipped and no failures.
 
-The user has selected the dedicated Runpod CPU Pod and new network volume. The Pod, mounted state, cloud-origin company task and scheduled follow-up are still pending verification here. Append the actual provisioning/test evidence after those steps complete; do not infer deployment success from this specification.
+A real connection test, two same-volume state restorations and an idle interval with zero active GPU workers are verified. The third manually dispatched cycle succeeded and the mission completed at its lifetime limit; the contribution remains unaccepted for independent review. Normal mission scheduling is unverified and the lifetime limit of three authorizes no automatic fourth cycle. No private company objective, task identifier or result content is included here. PID-based state locking still needs operator reconciliation after an unclean restart; provider reasoning history and accepted-job recovery are not fully durable; fleet failover, backup/restore and company billing enforcement remain unimplemented production requirements. The fixed-expiry cloud pilot does not establish continuous hosting or general business autonomy.

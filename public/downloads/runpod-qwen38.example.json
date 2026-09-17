@@ -1,8 +1,10 @@
 {
   "referenceVersion": 2,
   "verifiedOn": "2026-09-17",
-  "status": "isolated live pilot passed; endpoint disabled; production capacity unverified",
-  "description": "Separate examples for Runpod REST API v2 and a Coatria installation. No secrets or account identifiers. Create disabled with POST https://api.runpod.io/v2/serverless; activate separately after checking lifecycle controls.",
+  "status": "historical isolated pilot passed; create example remains disabled; hosted pilot is separate and production capacity unverified",
+  "description": "Historical isolated-pilot examples for Runpod REST API v2 and a Coatria installation, not a current deployment snapshot. No secrets or account identifiers. Create disabled with POST https://api.runpod.io/v2/serverless; activate separately after checking lifecycle controls.",
+  "currentHostedGuide": "https://github.com/stratostormstudios/coatria/blob/main/docs/RUNPOD_CPU_HOSTING.md",
+  "currentReleaseStatus": "https://github.com/stratostormstudios/coatria/blob/main/docs/RELEASE_STATUS.md",
   "endpointCreate": {
     "name": "coatria-qwen38-pilot",
     "type": "QUEUE",
@@ -56,6 +58,7 @@
     "networkVolumes": []
   },
   "lifecycle": {
+    "scope": "Historical isolated inference trial. Its 30-second idle timeout and 40-minute local watchdog do not describe the later hosted company's 60-second GPU idle timeout and independent Vercel cutoff at 2026-09-17T18:11:00Z. The hosted CPU has a separate new state volume; this inference example does not.",
     "activateAfterReviewPatch": {
       "workers": {
         "min": 0,
@@ -113,10 +116,11 @@
       "effectiveMaxTotalTokensPerCycle": 80000,
       "timeoutSecondsPerCycle": 600
     },
-    "shutdown": "Provider confirmed zero total and running workers after disabling the endpoint.",
-    "scope": "Real inference, worker and API handlers with synthetic records in an isolated in-memory SQL database. Includes deterministic safety probes. No production company connected or always-on Coatria worker installed.",
+    "shutdown": "Historical isolated-pilot shutdown: provider confirmed zero total and running workers then. The endpoint was later enabled for the separate hosted company pilot; this is not its current state.",
+    "scope": "Historical evaluation using real inference, worker and API handlers with synthetic records in an isolated in-memory SQL database. Includes deterministic safety probes. That evaluation connected no production company or persistent Coatria worker; the later hosted pilot is documented separately.",
     "limitations": "Single bounded canary, not a production capacity or general prompt-injection guarantee. Role/status assertions check text markers and persisted state, not checklist quality or general truthfulness. Original evidence limits report installation settings; the private operator ceiling reduced the effective token limit to 80000. Earlier L40S attempt added a tasks_claim write; the allowed-write mission contract was clarified and unchanged receipt assertions passed. GPU observations are not a controlled benchmark. Raw evidence and account identifiers are not included."
   },
+  "hostedPilotReadiness": "A dedicated CPU worker and state volume are provisioned; real connection and two saved-state restarts passed, latest 2026-09-17T16:43:02.795Z. Company work separately failed on floor geometry context size and then on a recovery response using all initial 2048 completion tokens for reasoning without final output. The overview correction is deployed. Hosted installation and cloud environment now allow 8192 output tokens per step, with 80000 total tokens, 600 seconds and 8 steps unchanged; historical example values above are preserved. Cycle 3 was manually dispatched at 16:44 UTC and succeeded at 16:53:13.544 UTC. One task and one contribution are in review, without duplicate task or acceptance. Mission completed at unchanged lifetime limit 3; no automatic fourth cycle is authorized. The preliminary output contains factual errors and needs independent fact-checking; successful execution does not validate research quality. At 16:43:54 UTC between jobs, GPU summary showed running 0, initializing 0, idle 0 and 3 throttled historical entries; account rate fell to approximately USD 0.077/hour for CPU and storage. This is not zero spend or continuous GPU inactivity. Normal scheduled mission follow-up and production reliability remain unverified.",
   "coatriaWorker": {
     "command": "node agent-worker.mjs --adapter ./provider-adapter.mjs",
     "requiredPrivateEnvironmentNames": [
