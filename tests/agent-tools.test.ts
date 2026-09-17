@@ -6,6 +6,7 @@ import {database,query} from '../src/lib/db';
 import {handleApi} from '../src/lib/api';
 import {hashToken} from '../src/lib/security';
 import {AGENT_CAPABILITIES} from '../src/lib/agent-policy';
+import {AGENT_TOOLS} from '../src/lib/agent-tools';
 
 const emulate=process.env.COATRIA_TEST_EMULATOR==='1',url=process.env.COATRIA_INTEGRATION_DATABASE_URL;
 test('leased tools enforce authority, durable effects, review boundaries and isolated resource projections',{skip:!emulate&&!url,timeout:120000},async t=>{
@@ -23,7 +24,7 @@ test('leased tools enforce authority, durable effects, review boundaries and iso
   const created=await call(`companies/${company}/conversations/commons/runs`,'POST',{clientId:randomUUID(),agentId:agent,prompt:'Prepare a reviewed workspace update'},'member',201);runId=created.run.id;
   const claim=await call('agent/runs/claim','POST',{workerId:'tools-fixture',claimId:randomUUID()});assert.equal(claim.run.id,runId);leaseToken=claim.leaseToken;
   await t.test('discovery is scoped and private resources cannot be reached through arguments',async()=>{
-   const catalog=await call('agent/tools');assert.equal(catalog.tools.length,18);assert(catalog.tools.every((x:any)=>x.inputSchema.type==='object'));
+   const catalog=await call('agent/tools');assert.equal(catalog.tools.length,Object.keys(AGENT_TOOLS).length);assert(catalog.tools.every((x:any)=>x.inputSchema.type==='object'));
    assert(!(catalog.tools.find((x:any)=>x.name==='tasks_list').inputSchema.required??[]).includes('limit'),'defaulted input limits remain optional');
    assert(!(catalog.tools.find((x:any)=>x.name==='tasks_create').inputSchema.required??[]).includes('description'),'defaulted descriptions remain optional');
    const people=(await tool('people_list',{})).result;assert.equal(people.items.length,3);assert(!JSON.stringify(people).includes('@example.invalid'));

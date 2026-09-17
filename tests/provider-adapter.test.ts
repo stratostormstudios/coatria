@@ -154,6 +154,19 @@ test('unrecognized schema assertions fail before provider billing instead of bei
  }
 });
 
+test('date-format preflight accepts real calendar dates and rejects an invalid later call before all writes',async()=>{
+ const options=input('runpod'),dated={...second,name:'dated_task',inputSchema:{type:'object',properties:{dueDate:{type:'string',format:'date'}},required:['dueDate'],additionalProperties:false}};
+ options.tools.list=async()=>({tools:[second,dated]}) as any;let writes=0;options.tools.call=async()=>{writes++;return{name:'Fixture Company'};};
+ const batch=(dueDate:string)=>{const data=response('runpod');data.choices[0].message.tool_calls=[{id:'first',type:'function',function:{name:'tasks_create',arguments:'{}'}},{id:'dated',type:'function',function:{name:'dated_task',arguments:JSON.stringify({dueDate})}}];return data;};
+ for(const date of['2025-02-29','1900-02-29','2026-04-31','2026-13-01','2026-00-01','2026-01-00','2026-1-01','2026-01-01T00:00:00Z',' 2026-01-01','2026-01-01\n']){
+  await assert.rejects(()=>createProviderExecutor({settings,fetch:wire('runpod',[batch(date)]) as typeof fetch})(options),/approved schema/);assert.equal(writes,0,date);
+ }
+ for(const date of['2024-02-29','2000-02-29','2026-09-17','0001-01-01']){
+  await createProviderExecutor({settings,fetch:wire('runpod',[batch(date),response('runpod',false)]) as typeof fetch})(options);
+ }
+ assert.equal(writes,8);
+});
+
 test('Qwen reasoning aliases, including empty content, survive tool turns exactly and malformed reasoning cannot execute tools',async()=>{
  for(const fields of[{reasoning:'Modern vLLM reasoning'},{reasoning_content:'Legacy reasoning'},{reasoning:''},{reasoning_content:''},{reasoning:null},{reasoning:'same',reasoning_content:'same'}]){
   const data=response('runpod');delete data.choices[0].message.reasoning_content;Object.assign(data.choices[0].message,fields);

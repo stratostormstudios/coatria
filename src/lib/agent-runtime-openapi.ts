@@ -5,6 +5,7 @@ import {claimInput,completeInput,failInput,leaseInput,runInput} from './agent-ru
 import {pluginInstallInput,pluginPatchInput} from './plugin-marketplace';
 import {missionCreateInput,missionPatchInput} from './agent-missions';
 import {uuid as uuidInput} from './security';
+import {studioSetupInput,studioProjectInput,studioProjectPatchInput,studioDispatchInput,studioSpecInput,studioGateInput,studioArtifactInput,studioReviewInput,studioDeliveryInput} from './studio-protocol';
 
 type Schema=Record<string,unknown>;
 const uuid:Schema={type:'string',format:'uuid'};
@@ -57,7 +58,8 @@ const paths:Record<string,unknown>={
 for(const[name,tool]of Object.entries(AGENT_TOOLS))paths['/api/agent/tools/'+name]={post:{
  ...operation('agentTool_'+name,tool.description,object({result:{},replayed:{type:'boolean'}}),object({runId:uuid,leaseToken:{type:'string',minLength:20,maxLength:200,writeOnly:true},requestId:uuid,arguments:input(tool.schema)})),
  'x-coatria-capability':tool.capability,'x-coatria-mutating':tool.mutating,
- description:'Live run lease required in the JSON body. Keep requestId stable for the same logical mutation across retries. Mutation receipts commit with effects; reads return the current view. Input schemas cannot express every authorization or cross-field constraint; server validation remains authoritative.',
+ ...(tool.capability==='studio.write'?{'x-coatria-requester-roles':['owner','admin'],'x-coatria-approval-authority':false}:{}),
+ description:'Live run lease required in the JSON body. Keep requestId stable for the same logical mutation across retries. Mutation receipts commit with effects; reads return the current view. Input schemas cannot express every authorization or cross-field constraint; server validation remains authoritative.'+(tool.capability==='studio.write'?' The requester must remain a company owner or administrator. These tools create drafts or register declared artifact metadata; they never approve a plan, verify media, render, spend money or deliver files.':''),
 }};
 
 const runProperties:Record<string,Schema>={
@@ -113,6 +115,47 @@ Object.assign(paths,{
  '/api/agent/autonomy/tick':{post:{...operation('tickAgentMissions','Queue due approved missions for this agent only',ref('AgentAutonomyTick'),input(z.object({maxMissions:z.number().int().min(1).max(5).default(5)}).strict())),description:'Worker-scoped scheduling only. The server enforces current administrator authorship, agent sponsor authority, cycle limits and duplicate-cycle prevention. It does not execute inference or authorize new missions. The provided worker calls this at most once per minute while idle and after uncertain work is reconciled; it must remain online. Failed or expired mission runs require administrator review before another cycle.','x-coatria-worker-scoped':true}},
 });
 
+const studioProjectParameters=[...companyParameters,parameter('projectId')];
+const studioProjectResult=object({project:ref('StudioProject'),replayed:boolean});
+const studioWrite=(name:string,summary:string,result:Schema,schema:z.ZodType,parameters:unknown[]=studioProjectParameters)=>({
+ ...humanAdminOperation(name,summary,result,input(schema),parameters),
+ description:'Current human owner or administrator required. Use a stable clientId and the current revision where specified. Studio roles and skill text do not grant permissions. Declared file references and metadata are not automated media verification. Recording an approval or acceptance is an administrator attestation; preparing a manifest does not transfer files.',
+ responses:createdResponses(result),
+});
+Object.assign(paths,{
+ '/api/companies/{companyId}/studio':{get:operation('readStudio','Read company studio structure and a bounded project page',ref('StudioSnapshot'),undefined,[...companyParameters,...pageParameters],true)},
+ '/api/companies/{companyId}/studio/setup':{post:studioWrite('configureStudio','Apply a versioned company role structure without creating workers or changing grants',object({profile:ref('StudioProfile'),replayed:boolean}),studioSetupInput,companyParameters)},
+ '/api/companies/{companyId}/studio/projects':{post:studioWrite('planStudioProject','Create a draft project, shots, tasks and production dependencies',studioProjectResult,studioProjectInput,companyParameters)},
+ '/api/companies/{companyId}/studio/projects/{projectId}':{
+  get:operation('readStudioProject','Read one complete project and its bounded version and review history',ref('StudioProjectDetail'),undefined,studioProjectParameters,true),
+  patch:{...studioWrite('updateStudioProject','Update project scope or AI-use policy with revision protection and approval invalidation',studioProjectResult,studioProjectPatchInput),responses:{'200':response(studioProjectResult),...errors}},
+ },
+ '/api/companies/{companyId}/studio/projects/{projectId}/dispatch':{post:studioWrite('dispatchStudioWork','Queue one ready planning task for its assigned, explicitly permissioned agent',object({run:ref('AgentRun'),project:ref('StudioProject'),replayed:boolean}),studioDispatchInput)},
+ '/api/companies/{companyId}/studio/projects/{projectId}/gates':{post:studioWrite('recordStudioGate','Record an authorized business approval or acceptance attestation',studioProjectResult,studioGateInput)},
+ '/api/companies/{companyId}/studio/projects/{projectId}/artifacts':{post:studioWrite('registerStudioArtifact','Register an immutable external media reference; no file is fetched',object({artifact:ref('StudioArtifact'),project:ref('StudioProject'),replayed:boolean}),studioArtifactInput)},
+ '/api/companies/{companyId}/studio/projects/{projectId}/reviews':{post:studioWrite('reviewStudioArtifact','Record an independent review of the exact latest media version',object({review:ref('StudioReview'),project:ref('StudioProject'),replayed:boolean}),studioReviewInput)},
+ '/api/companies/{companyId}/studio/projects/{projectId}/deliveries':{post:studioWrite('prepareStudioDelivery','Prepare an approved-version manifest with no media transfer',object({delivery:ref('StudioDelivery'),project:ref('StudioProject'),replayed:boolean}),studioDeliveryInput)},
+});
+
+const studioRoleProperties={key:string,title:string,department:string,skills:{type:'array',items:string},reportsTo:nullable(string)};
+const studioSpec=z.toJSONSchema(studioSpecInput,{io:'output',unrepresentable:'any'});
+const studioSchemas:Record<string,Schema>={
+ StudioSpec:studioSpec,
+ StudioTemplateRole:object(studioRoleProperties),
+ StudioRole:object({...studioRoleProperties,agentId:nullable(uuid),humanId:nullable(uuid),agentName:nullable(string),humanName:nullable(string),connectionState:nullable(string)},[...Object.keys(studioRoleProperties),'agentId','humanId']),
+ StudioSkill:object({key:string,title:string,version:revision,instructions:string}),
+ StudioTemplate:object({id:string,version:revision,name:string,description:string,roles:{type:'array',items:ref('StudioTemplateRole')},stages:{type:'array',items:string},gates:{type:'array',items:object({key:string,title:string})},integrations:{type:'array',items:object({key:string,title:string,requiredFor:string})}}),
+ StudioProfile:object({templateId:string,revision,roles:{type:'array',maxItems:30,items:ref('StudioRole')}}),
+ StudioProject:object({id:uuid,name:string,clientName:string,brief:string,dueDate:nullable({type:'string',format:'date'}),spec:ref('StudioSpec'),aiPolicy:{type:'string',enum:['unknown','allowed','restricted']},revision,status:{type:'string',enum:['intake','planning','production','review','delivery','delivered']},gates:{type:'object',additionalProperties:object({decision:{type:'string',enum:['approved','changes_requested']},note:string,recordedBy:uuid,at:date,deliveryId:uuid},['decision','note','recordedBy','at'])},createdAt:date,updatedAt:date,shotCount:{type:'integer',minimum:0},workCount:{type:'integer',minimum:0},acceptedCount:{type:'integer',minimum:0}},['id','name','clientName','brief','dueDate','spec','aiPolicy','revision','status','gates','createdAt','updatedAt']),
+ StudioShot:object({id:uuid,code:string,description:string,frameStart:{type:'integer',minimum:0},frameEnd:{type:'integer',minimum:0},handles:{type:'integer',minimum:0},disciplines:{type:'array',items:string}}),
+ StudioWorkItem:object({id:uuid,taskId:uuid,title:string,stage:string,roleKey:string,shotId:nullable(uuid),dependencies:{type:'array',items:uuid},status:{type:'string',enum:['todo','doing','review','done']},readiness:{type:'string',enum:['blocked','ready','queued','running','review','accepted']},blockedReason:nullable(string),revision,execution:{type:'string',enum:['agent','dcc','human']},agentId:nullable(uuid),humanId:nullable(uuid),submissionSummary:string,runId:nullable(uuid),runStatus:nullable(runStatus)},['id','taskId','title','stage','roleKey','shotId','dependencies','status','readiness','blockedReason','revision','execution','agentId','humanId']),
+ StudioArtifact:object({id:uuid,workItemId:uuid,name:string,version:revision,url:{type:'string',format:'uri',description:'Declared external reference. This endpoint does not fetch or independently verify its contents.'},sha256:{type:'string',pattern:'^[a-f0-9]{64}$'},frameStart:{type:'integer',minimum:0},frameEnd:{type:'integer',minimum:0},...(studioSpec as any).properties,notes:string,reviewStatus:{type:'string',enum:['pending','approved','changes_requested']},createdAt:date,producedBy:uuid,producedAgentId:nullable(uuid)},['id','workItemId','name','version','url','sha256','frameStart','frameEnd','width','height','fpsNumerator','fpsDenominator','colorSpace','format','notes','reviewStatus']),
+ StudioReview:object({id:uuid,artifactId:uuid,decision:{type:'string',enum:['approved','changes_requested']},note:string,technicalQc:boolean,reviewedBy:uuid,createdAt:date}),
+ StudioDelivery:object({id:uuid,name:string,status:{type:'string',enum:['prepared','acknowledged']},manifest:{type:'object',additionalProperties:true,description:'Versioned delivery manifest; transportStatus records that preparing this document does not transfer media.'},note:string,createdAt:date}),
+ StudioSnapshot:object({templates:{type:'array',items:ref('StudioTemplate')},skills:{type:'array',items:ref('StudioSkill')},profile:nullable(ref('StudioProfile')),projects:{type:'array',maxItems:100,items:ref('StudioProject')},hasMore:boolean,nextAfter:nullable(uuid)}),
+ StudioProjectDetail:object({project:ref('StudioProject'),shots:{type:'array',maxItems:100,items:ref('StudioShot')},workItems:{type:'array',maxItems:1000,items:ref('StudioWorkItem')},artifacts:{type:'array',maxItems:1000,items:ref('StudioArtifact')},reviews:{type:'array',maxItems:1000,items:ref('StudioReview')},deliveries:{type:'array',maxItems:100,items:ref('StudioDelivery')},roles:{type:'array',maxItems:30,items:ref('StudioRole')},skills:{type:'array',items:ref('StudioSkill')}}),
+};
+
 const pluginSchemas:Record<string,Schema>={
  PluginRuntimeConfig:z.toJSONSchema(pluginInstallInput.shape.runtimeConfig,{io:'output',unrepresentable:'any'}),
  AgentCharacter:z.toJSONSchema(pluginInstallInput.shape.character,{io:'output',unrepresentable:'any'}),
@@ -132,8 +175,8 @@ const pluginSchemas:Record<string,Schema>={
 
 /** Public contract only. No credentials, company records or runtime queries. */
 export const agentRuntimeOpenApi={
- openapi:'3.1.0',info:{title:'Coatria agent runtime',version:'1.1.0',description:'External execution, durable invocations, scoped company tools, curated plugin installations and bounded autonomous missions. This is the REST protocol used by the downloadable worker and local MCP stdio bridge; it is not a hosted model provider or remote OAuth MCP server. Current human administrators approve provider/model choices, permissions and mission budgets; agent bearer tokens cannot elevate themselves. Human mutations require a same-origin Origin header; X-Coatria-User may pin the intended session identity. Provider credentials stay on the worker and are never accepted by installation APIs. Read API errors before retrying. Legacy /api/agent/work and /api/agent/report are retired with HTTP 410.'},
+ openapi:'3.1.0',info:{title:'Coatria agent runtime',version:'1.2.0',description:'External execution, durable invocations, scoped company and studio tools, curated plugin installations and bounded autonomous missions. This is the REST protocol used by the downloadable worker and local MCP stdio bridge; it is not a hosted model provider or remote OAuth MCP server. Current human administrators approve provider/model choices, permissions, studio production gates and mission budgets; agent bearer tokens cannot elevate themselves. Human mutations require a same-origin Origin header; X-Coatria-User may pin the intended session identity. Provider credentials stay on the worker and are never accepted by installation APIs. Read API errors before retrying. Legacy /api/agent/work and /api/agent/report are retired with HTTP 410.'},
  servers:[{url:'https://coatria.com',description:'Production; confirm deployment support before connecting'}],
  externalDocs:{description:'Worker, Codex and MCP setup',url:'https://coatria.com/downloads/AGENT_RUNTIME.md'},
- paths,components:{securitySchemes:{agentBearer:{type:'http',scheme:'bearer',description:'Company-scoped agent credential, never a provider key. Runs also require their live lease.'},sessionCookie:{type:'apiKey',in:'cookie',name:'coatria_session'}},schemas:{AgentRun:object(runProperties),...pluginSchemas,Error:{type:'object',properties:{error:{type:'string'},code:{type:'string'}},required:['error']}}},
+ paths,components:{securitySchemes:{agentBearer:{type:'http',scheme:'bearer',description:'Company-scoped agent credential, never a provider key. Runs also require their live lease.'},sessionCookie:{type:'apiKey',in:'cookie',name:'coatria_session'}},schemas:{AgentRun:object(runProperties),...pluginSchemas,...studioSchemas,Error:{type:'object',properties:{error:{type:'string'},code:{type:'string'}},required:['error']}}},
 };

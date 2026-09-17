@@ -162,7 +162,7 @@ test('runtime OpenAPI exposes current tool input constraints and keeps leases ou
  const {agentRuntimeOpenApi}=await import('../src/lib/agent-runtime-openapi');
  const {AGENT_TOOLS}=await import('../src/lib/agent-tools');
  const spec:any=agentRuntimeOpenApi;
- assert.equal(spec.openapi,'3.1.0');assert.equal(Object.keys(AGENT_TOOLS).length,18);
+  assert.equal(spec.openapi,'3.1.0');assert.deepEqual(Object.keys(spec.paths).filter(path=>path.startsWith('/api/agent/tools/')).sort(),Object.keys(AGENT_TOOLS).map(name=>'/api/agent/tools/'+name).sort());
  for(const[name,definition]of Object.entries(AGENT_TOOLS)){
   const operation=spec.paths['/api/agent/tools/'+name].post;assert.equal(operation['x-coatria-capability'],definition.capability);
   assert.deepEqual(operation.security,[{agentBearer:[]}]);

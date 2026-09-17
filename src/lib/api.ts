@@ -11,6 +11,7 @@ import {agentToolsRoute,agentProposalRoute} from './agent-tools';
 import { randomUUID } from 'node:crypto';
 import {pluginMarketplaceRoute,pluginCatalogResponse} from './plugin-marketplace';
 import {agentMissionRoute} from './agent-missions';
+import {studioRoute} from './studio';
 
 export async function handleApi(request: Request, parts: string[]): Promise<Response> {
   const requestId=randomUUID(),started=performance.now();
@@ -39,7 +40,7 @@ export async function handleApi(request: Request, parts: string[]): Promise<Resp
     if(!['GET','HEAD'].includes(method)&&!bearerEndpoint&&!['auth'].includes(parts[0])) {
       const user=await currentUser(request);if(user)await rateLimit(`write:${user.id}`,240,60);
     }
-    for(const handler of [identityRoute,pluginMarketplaceRoute,agentMissionRoute,agentRunRoute,agentToolsRoute,agentProposalRoute,conversationRoute,companyRoute,workRoute,integrationRoute,talentRoute]) {
+    for(const handler of [identityRoute,pluginMarketplaceRoute,agentMissionRoute,agentRunRoute,agentToolsRoute,agentProposalRoute,studioRoute,conversationRoute,companyRoute,workRoute,integrationRoute,talentRoute]) {
       const result=await handler(request,parts,method);if(result)return finish(result);
     }
     fail(404,'API endpoint not found.');

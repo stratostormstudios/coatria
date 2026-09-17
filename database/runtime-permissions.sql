@@ -13,8 +13,12 @@ GRANT SELECT,INSERT,UPDATE,DELETE ON
  contributions,activity,skills,skill_versions,drives,drive_files,openings,
  applications,rate_limits,call_peers,call_signals,task_authors,
  conversations,conversation_events,conversation_reads,message_reactions,conversation_requests,
- agent_runs,agent_run_claims,agent_run_receipts,agent_tool_receipts,agent_proposals,agent_presence,plugin_installations,agent_missions,agent_mission_cycles
+ agent_runs,agent_run_claims,agent_run_receipts,agent_tool_receipts,agent_proposals,agent_presence,plugin_installations,agent_missions,agent_mission_cycles,
+ studio_profiles,studio_role_bindings,studio_projects,studio_shots,studio_work_items,studio_dependencies,studio_requests,studio_dispatches
  TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON studio_artifacts,studio_reviews,studio_gate_events TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON studio_deliveries TO coatria_runtime_v1;
+GRANT UPDATE(status) ON studio_deliveries TO coatria_runtime_v1;
 GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO coatria_runtime_v1;
 ALTER ROLE coatria_runtime_v1 SET statement_timeout='15s';
 ALTER ROLE coatria_runtime_v1 SET idle_in_transaction_session_timeout='20s';

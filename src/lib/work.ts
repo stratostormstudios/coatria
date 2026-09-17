@@ -5,6 +5,7 @@ import { body, fail, id, json, rateLimit } from './security';
 import { existingAssignee, memberMutation, recordActivity } from './company';
 import { taskColumns, taskInput, taskPatch } from './model';
 import { legacyConversationSend } from './conversation-api';
+import {assertStudioTaskAction} from './studio';
 
 export function canApproveTask(task: {status:string;created_by:string;assignee_id?:string|null;submitted_by?:string|null;agent_sponsor?:string|null;author_ids?:string[]}, userId: string, role: string) {
   return ['owner','admin'].includes(role) && task.status === 'review' && ![task.assignee_id,task.submitted_by,task.agent_sponsor,...(task.author_ids||[])].includes(userId);
@@ -42,6 +43,7 @@ export async function workRoute(request: Request, parts: string[], method: strin
     if(parts.length===4&&method==='PATCH') {
       const taskId=id(parts[3]);const data=await body(request,taskPatch);
       const task=await memberMutation(member,false,async client=>{
+        await assertStudioTaskAction(client,companyId,taskId,'human_update',data);
         const current=(await client.query('SELECT t.*,a.created_by AS agent_sponsor FROM tasks t LEFT JOIN agents a ON a.id=t.submitted_agent_id WHERE t.id=$1 AND t.company_id=$2 FOR UPDATE OF t',[taskId,companyId])).rows[0];
         if(!current)fail(404,'Task not found.');
         current.author_ids=(await client.query('SELECT user_id FROM task_authors WHERE task_id=$1 UNION SELECT a.created_by AS user_id FROM contributions c JOIN agents a ON a.id=c.agent_id WHERE c.task_id=$1',[taskId])).rows.map(row=>row.user_id);

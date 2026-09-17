@@ -1,6 +1,6 @@
 import {AGENT_CAPABILITIES,type AgentCapability} from './agent-policy';
 
-export const PLUGIN_CATALOG_VERSION='2026-09-17';
+export const PLUGIN_CATALOG_VERSION='2026-09-17.1';
 export type AgentCharacter={roleTitle:string;persona:string;workStyle:'collaborative'|'independent'|'methodical'};
 export type PluginRuntimeConfig={providerId:string;modelId:string;maxSteps:number;maxOutputTokens:number;maxTotalTokens:number;timeoutSeconds:number};
 export type PluginModel={id:string;label:string;tier:'flagship'|'balanced'|'economy'|'custom';toolSupport:'documented'|'unverified'};
@@ -14,6 +14,8 @@ export type PluginCatalogEntry={
 const model=(id:string,label:string,tier:PluginModel['tier']):PluginModel=>({id,label,tier,toolSupport:'documented'});
 const openaiModels=[model('gpt-6-astra','Astra','flagship'),model('gpt-5.6-terra','Terra','balanced'),model('gpt-5.6-luna','Luna','economy')];
 const claudeModels=[model('claude-sonnet-5','Claude Sonnet 5','balanced'),model('claude-opus-5','Claude Opus 5','flagship'),model('claude-haiku-4-5-20251001','Claude Haiku 4.5','economy')];
+// Available grants are offered for explicit administrator selection. Adding a
+// supported tool never changes any installation's persisted capabilities.
 const common={version:'1.0.0',publisher:'Coatria' as const,capabilities:[...AGENT_CAPABILITIES],verifiedAt:'2026-09-16'};
 const providerFiles=['/downloads/agent-worker.mjs','/downloads/provider-adapter.mjs','/downloads/PROVIDER_BRIDGES.md'];
 /** Curated, version-pinned bridge manifests. Installation never downloads or executes remote code. */
