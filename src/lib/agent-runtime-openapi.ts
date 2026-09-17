@@ -39,6 +39,7 @@ const listParameters=[
  {name:'limit',in:'query',schema:{type:'integer',minimum:1,maximum:50,default:20}},
 ];
 const paths:Record<string,unknown>={
+ '/api/agent/identity':{get:operation('readAgentIdentity','Read the authenticated agent identity and grants for a pinned worker host; no run lease required',object({agent:object({id:uuid,companyId:uuid,name:{type:'string'},status:{const:'active'},capabilities:{type:'array',items:{type:'string',enum:AGENT_CAPABILITIES}}})}))},
  '/api/agent/runs/claim':{post:operation('claimAgentRun','Claim or replay one explicit request; use a new claimId after a confirmed idle result',object({run:nullable(ref('AgentRun')),leaseToken:{type:'string',writeOnly:false},leaseExpiresAt:date,replayed:{type:'boolean'}},['run','replayed']),input(claimInput))},
  '/api/agent/runs/{runId}/heartbeat':{post:operation('renewAgentRun','Renew the owned lease; cannot exceed the run deadline',object({run:ref('AgentRun'),leaseExpiresAt:date}),input(leaseInput),runParameters)},
  '/api/agent/runs/{runId}/context':{get:operation('readAgentRunContext','Read bounded source messages, effective capabilities and the approved runtime installation with a live lease',ref('AgentRunContext'),undefined,[...runParameters,{name:'X-Coatria-Run-Lease',in:'header',required:true,schema:{type:'string',minLength:20,maxLength:200}}])},

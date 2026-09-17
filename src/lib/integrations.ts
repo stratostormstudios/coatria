@@ -26,6 +26,10 @@ async function authenticateConnector(request: Request) {
 }
 export async function integrationRoute(request: Request, parts: string[], method: string): Promise<Response|null> {
   const path=parts.join('/');
+  if(path==='agent/identity'&&method==='GET') {
+    const agent=await authenticateAgent(request);
+    return json({agent:{id:agent.id,companyId:agent.company_id,name:agent.name,status:agent.status,capabilities:agent.capabilities}});
+  }
   if(path==='agent/work'&&method==='GET'||path==='agent/report'&&method==='POST'){await authenticateAgent(request);fail(410,'Use an authorized agent run and its live lease through /api/agent/runs and /api/agent/tools.','AGENT_RUN_REQUIRED');}
   if(path==='connector/config'&&method==='GET') {
     const drive=await authenticateConnector(request);

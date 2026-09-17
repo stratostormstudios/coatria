@@ -134,10 +134,17 @@ test('real database API: tenant isolation, invitations, independent approvals, p
     await call(worker,`vault/${skill.id}`,'PATCH',{title:'Private skill',description:'Version two',content:'A refined technique'});
     const exported=(await call(worker,'vault/export')).data;assert.equal(exported.skills[0].version,2);assert.equal(exported.versions.length,2);assert.equal(exported.versions[0].content,'Personal technique only');
     const agent=(await call(owner,`${base}/agents`,'POST',{name:'Test agent',harness:'custom',description:'Scoped API test'},201)).data;
+    await call(null,'agent/identity','GET',undefined,401);
+    await call(owner,'agent/identity','GET',undefined,401);
+    await call(null,'agent/identity','GET',undefined,401,'ca_invalid-fixture');
+    const identity=await call(null,'agent/identity','GET',undefined,200,agent.token);
+    assert.deepEqual(identity.data,{agent:{id:agent.agent.id,companyId:companyA.id,name:'Test agent',status:'active',capabilities:[]}});
+    assert.equal(identity.response.headers.get('cache-control'),'private, no-store');
     const agentTask=(await call(worker,`${base}/tasks`,'POST',{title:'Agent output',description:'Submit a report'},201)).data.task;
     await call(null,'agent/work','GET',undefined,410,agent.token);
     await call(null,'agent/report','POST',{taskId:agentTask.id,summary:'No implicit authority',tokensUsed:250},410,agent.token);
     await call(owner,`${base}/agents/${agent.agent.id}`,'PATCH',{invocationAccess:'members',capabilities:['workspace.read','tasks.write']});
+    assert.deepEqual((await call(null,'agent/identity','GET',undefined,200,agent.token)).data.agent.capabilities,['workspace.read','tasks.write']);
     const agentRun=(await call(worker,`${base}/conversations/commons/runs`,'POST',{clientId:randomUUID(),agentId:agent.agent.id,prompt:'Submit the requested task for independent review.'},201)).data.run;
     const lease=(await call(null,'agent/runs/claim','POST',{workerId:'integration-worker',claimId:randomUUID()},200,agent.token)).data;
     assert.equal(lease.run.id,agentRun.id);
@@ -150,7 +157,9 @@ test('real database API: tenant isolation, invitations, independent approvals, p
     const reported=(await call(owner,`${base}/workspace`)).data.tasks.find((x:{id:string})=>x.id===agentTask.id);assert.equal(reported.submissionSummary,'Actual report');
     await call(reviewer,`${base}/tasks/${agentTask.id}`,'PATCH',{status:'done',reviewNote:'Independent review.'});
     await call(owner,`${base}/agents/${agent.agent.id}`,'PATCH',{status:'paused'});await call(null,'agent/work','GET',undefined,401,agent.token);
+    await call(null,'agent/identity','GET',undefined,401,agent.token);
     await call(owner,`${base}/agents/${agent.agent.id}`,'PATCH',{status:'revoked'});await call(owner,`${base}/agents/${agent.agent.id}`,'PATCH',{status:'active'},409);
+    await call(null,'agent/identity','GET',undefined,401,agent.token);
     const drive=(await call(owner,`${base}/drives`,'POST',{name:'Local media',kind:'byo',description:'Metadata only'},201)).data;
     const config=(await call(null,'connector/config','GET',undefined,200,drive.token)).data;assert.equal(config.originalsUploaded,false);
     await call(null,'connector/heartbeat','POST',{files:[{path:'../private.mov',size:10,modifiedAt:new Date().toISOString()}],status:'online'},400,drive.token);

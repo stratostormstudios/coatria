@@ -12,6 +12,13 @@ const missions='/api/companies/{companyId}/autonomy/missions';
 const request=(path:string,method:string)=>spec.paths[path][method].requestBody.content['application/json'].schema;
 const input=(schema:z.ZodType)=>z.toJSONSchema(schema,{io:'input',unrepresentable:'any'});
 
+test('agent identity contract authenticates the token without disclosing credential fields',()=>{
+ const identity=spec.paths['/api/agent/identity'].get;
+ assert.deepEqual(identity.security,[{agentBearer:[]}]);assert.equal(identity.requestBody,undefined);assert.deepEqual(identity.parameters,[]);
+ const agent=identity.responses['200'].content['application/json'].schema.properties.agent;
+ assert.equal(agent.additionalProperties,false);assert.deepEqual(Object.keys(agent.properties).sort(),['capabilities','companyId','id','name','status']);
+});
+
 test('marketplace and autonomous APIs expose current strict input contracts and cannot accept credentials',()=>{
  assert.equal(spec.info.version,'1.1.0');
  for(const[path,method,schema]of[[installations,'post',pluginInstallInput],[installations+'/{installationId}','patch',pluginPatchInput],[missions,'post',missionCreateInput],[missions+'/{missionId}','patch',missionPatchInput]]as const){assert.deepEqual(request(path,method),input(schema));assert.equal(request(path,method).additionalProperties,false);}
