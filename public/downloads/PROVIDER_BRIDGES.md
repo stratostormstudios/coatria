@@ -17,7 +17,7 @@ Set `COATRIA_AGENT_TOKEN` privately and the selected provider's credential using
 | Anthropic | `ANTHROPIC_API_KEY` | Messages |
 | Fireworks / Qwen | `FIREWORKS_API_KEY` | Chat Completions |
 | Together / economy | `TOGETHER_API_KEY` | Chat Completions |
-| Runpod | `RUNPOD_API_KEY` and `COATRIA_RUNPOD_ENDPOINT_ID` | OpenAI-compatible Chat Completions |
+| Runpod | `RUNPOD_API_KEY` and `COATRIA_RUNPOD_ENDPOINT_ID` | Queued OpenAI-compatible Chat Completions |
 
 Only fixed official API hosts are accepted. `OPENAI_BASE_URL`, arbitrary installation endpoints and model-generated URLs cannot redirect model credentials. There is no automatic provider fallback or credential import from Slack. Provider billing is separate from Coatria.
 
@@ -34,7 +34,15 @@ The installation supplies the reviewed model ID. Fireworks **`accounts/fireworks
 
 The worker applies a conservative UTF-8-byte estimate before the next HTTP request and aggregates provider-reported usage after each response, including Anthropic cache tokens. These are execution guards, not an exact dollar cap. Provider account limits remain necessary. Operator environment ceilings can further reduce limits: `COATRIA_MAX_STEPS`, `COATRIA_MAX_OUTPUT_TOKENS`, `COATRIA_MAX_TOTAL_TOKENS`, `COATRIA_TIMEOUT_SECONDS`.
 
-The adapter checks every tool name, call ID and argument object in a batch before acting, allows at most 8 calls in that batch and 64 in a run, and executes them sequentially. Coatria validates each tool's full argument schema and rechecks its lease and permissions. A batch is not one atomic transaction: earlier successful actions remain recorded if a later action fails. A recovered or later-attempt run requires review of committed effects and a new human request; the adapter does not invent new action keys and repeat uncertain work.
+The adapter checks every tool name, call ID and the advertised input-schema constraints for the whole batch before acting, allows at most 8 calls in that batch and 64 in a run, and executes them sequentially. Coatria also applies its authoritative refinements, revisions, lease and permissions. A batch is not one atomic transaction: earlier successful actions remain recorded if a later semantic or authorization check fails. A recovered or later-attempt run requires review of committed effects and a new human request; the adapter does not invent new action keys and repeat uncertain work. Adapter deadlines shorten pending tool requests without detaching them from lease cancellation.
+
+## Runpod Qwen preset
+
+The marketplace offers `Qwen/Qwen3.8-27B-FP8`, tested with the official pinned worker in [the deployment example](./runpod-qwen38.example.json). New Runpod installations default to eight model steps, 2,048 output tokens per step, an 80,000-token run allowance and a 600-second deadline. The larger allowance accommodates repeated tool schemas and the conservative byte-based preflight; it is not expected consumption. Existing installations retain their reviewed settings.
+
+The bridge submits one native `/run` job containing the OpenAI chat request, then polls `/status/{jobId}`. This avoids holding one HTTP connection throughout a cold start. Individual HTTP requests are bounded to 30 seconds; only transient status reads retry. A lost submission response is uncertain and never triggers a second submission. Known unfinished jobs receive best-effort cancellation, and the submitted provider TTL adds a separate bound. Cancellation cannot undo an already completed inference or workplace action. Both `reasoning` and `reasoning_content` are retained privately across tool turns; only the final answer becomes a conversation result.
+
+The repository includes `npm run test:agent:fixture` and the explicitly billable `npm run test:agent:live`. Live mode requires the private Runpod environment plus `COATRIA_RUNPOD_MODEL`; it creates only a synthetic in-memory company through real Coatria APIs, and stores sanitized evidence under ignored `.devdata`. It tests a two-cycle mission, persistent task state, role identity, human review and hostile conversation context. It does not modify your production company.
 
 Conversation text and tool results are untrusted inputs. The company character controls role, tone and work style. Completing the authorized task comes first. Bots must identify as AI and report proposals and completed actions accurately; roleplay never grants privileges.
 
@@ -86,7 +94,13 @@ This configuration comes from authenticated run context, not from conversation t
 
 ## Readiness
 
-All six HTTP protocols and the Claude CLI process boundary have local fixture tests. The installed Claude CLI version and flags were inspected without paid inference. Perform an approved provider-account canary before unattended use; fixture tests do not establish real model quality, account access, availability or cost.
+All six HTTP protocols and the Claude CLI process boundary have local fixture tests. The installed Claude CLI version and flags were inspected without paid inference. Other providers still need their own account canaries; fixture tests do not establish real model quality, availability or cost.
+
+On September 17, 2026, **Runpod Qwen3.8-27B-FP8 passed an isolated live pilot on L40S 48 GB**: 17 checks, two mission cycles, one task left in human review, and exactly two write receipts (`tasks_create`, `tasks_submit`). The second cycle did not duplicate work. The suite combined real model behavior and real API handlers with deterministic safety probes; both live cycles received a hostile conversation message without observed forbidden tool attempts or unrelated writes. An earlier attempt added an unwanted `tasks_claim`; an explicit allowed-write mission contract corrected that behavior while the strict receipt assertions stayed unchanged.
+
+The final pilot made seven model requests using 31,243 reported tokens; 338 status polls were counted separately. The first request took 290.918 seconds including queue/startup wait; subsequent requests took 11.289–17.802 seconds. A separate 18,047-token synthetic retrieval prompt passed in 10.293 seconds. The selected configuration and sanitized metrics are in [the deployment example](./runpod-qwen38.example.json). Its installation approved 100,000 tokens per cycle, but the private worker ceiling reduced the effective limit to 80,000; new marketplace installations also default to 80,000. Original evidence records the installation limit. Role/status checks used expected text markers and persisted task state, without certifying checklist quality or general truthfulness.
+
+The endpoint was disabled after testing, with zero workers confirmed. No production company was connected and no always-on Coatria worker was installed. This validates a bounded integration, not production capacity, every attack scenario or continuous business operation. Unattended use still requires a supervised worker, reviewed company permissions and missions, recovery drills, and measured capacity and service targets.
 
 ## Autonomous company missions
 

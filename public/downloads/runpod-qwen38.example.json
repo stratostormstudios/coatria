@@ -1,0 +1,146 @@
+{
+  "referenceVersion": 2,
+  "verifiedOn": "2026-09-17",
+  "status": "isolated live pilot passed; endpoint disabled; production capacity unverified",
+  "description": "Separate examples for Runpod REST API v2 and a Coatria installation. No secrets or account identifiers. Create disabled with POST https://api.runpod.io/v2/serverless; activate separately after checking lifecycle controls.",
+  "endpointCreate": {
+    "name": "coatria-qwen38-pilot",
+    "type": "QUEUE",
+    "image": "runpod/worker-v1-vllm@sha256:fd9e5c55c996361aad2543d96d9d85ca055625ee5d1fcefa2d213141deb45e17",
+    "disk": 80,
+    "ports": [],
+    "env": {
+      "MODEL_NAME": "Qwen/Qwen3.8-27B-FP8",
+      "MODEL_REVISION": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+      "MAX_MODEL_LEN": "32768",
+      "MAX_NUM_SEQS": "2",
+      "MAX_NUM_BATCHED_TOKENS": "2048",
+      "ENABLE_CHUNKED_PREFILL": "true",
+      "VLLM_DEEP_GEMM_WARMUP": "skip",
+      "MAX_CONCURRENCY": "1",
+      "ENABLE_AUTO_TOOL_CHOICE": "true",
+      "TOOL_CALL_PARSER": "qwen3_xml",
+      "REASONING_PARSER": "qwen3",
+      "GPU_MEMORY_UTILIZATION": "0.90",
+      "TRUST_REMOTE_CODE": "false",
+      "TRUST_REQUEST_CHAT_TEMPLATE": "false",
+      "ENABLE_LOG_REQUESTS": "false",
+      "ENABLE_LOG_OUTPUTS": "false",
+      "REQUEST_TIMEOUT": "600",
+      "VLLM_STARTUP_TIMEOUT": "900",
+      "VLLM_EXTRA_ARGS": "--language-model-only --default-chat-template-kwargs '{\"enable_thinking\":true,\"preserve_thinking\":true,\"reasoning_effort\":\"low\"}'"
+    },
+    "gpu": {
+      "pools": [
+        "ADA_48_PRO"
+      ],
+      "count": 1,
+      "minCudaVersion": "13.0",
+      "excludedTypes": [
+        "NVIDIA L40",
+        "NVIDIA RTX 6000 Ada Generation",
+        "NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 2g.48gb"
+      ]
+    },
+    "workers": {
+      "min": 0,
+      "max": 0,
+      "idleTimeout": 30
+    },
+    "scaling": {
+      "type": "QUEUE_DELAY",
+      "queueDelay": 4
+    },
+    "timeout": 600000,
+    "flashboot": "FLASHBOOT",
+    "networkVolumes": []
+  },
+  "lifecycle": {
+    "activateAfterReviewPatch": {
+      "workers": {
+        "min": 0,
+        "max": 1,
+        "idleTimeout": 30
+      }
+    },
+    "disableAfterTrialPatch": {
+      "workers": {
+        "min": 0,
+        "max": 0,
+        "idleTimeout": 5
+      }
+    },
+    "trialDeadlineSeconds": 2400,
+    "trialComputeEstimateUsd": 1.1666666667,
+    "quotedL40sHourlyRateUsd": 1.75,
+    "quotedH100HourlyRateUsd": 4.79,
+    "h100TrialComputeEstimateUsd": 3.1933333333,
+    "costNotice": "Illustrative 40-minute compute estimate, not a hard cap. Startup, model loading and idle time are billed; disk and applicable account charges are additional. Verify current account pricing and actual worker shutdown.",
+    "networkVolume": "none; do not create a persistent volume for this trial"
+  },
+  "coatriaInstallationRuntimeExample": {
+    "providerId": "runpod",
+    "modelId": "Qwen/Qwen3.8-27B-FP8",
+    "maxSteps": 8,
+    "maxOutputTokens": 2048,
+    "maxTotalTokens": 80000,
+    "timeoutSeconds": 600
+  },
+  "measuredPilot": {
+    "date": "2026-09-17",
+    "gpu": "NVIDIA L40S 48 GB",
+    "passedChecks": 17,
+    "missionCycles": 2,
+    "modelRequests": 7,
+    "statusPolls": 338,
+    "reportedTotalTokens": 31243,
+    "elapsedMs": 374127,
+    "firstRequestElapsedMs": 290918,
+    "subsequentRequestElapsedMsRange": [11289, 17802],
+    "taskCount": 1,
+    "taskStatus": "review",
+    "writeReceiptTools": ["tasks_create", "tasks_submit"],
+    "longContextProbe": {
+      "promptTokens": 18047,
+      "elapsedMs": 10293,
+      "retrievalCorrect": true
+    },
+    "pilotLimits": {
+      "maxStepsPerCycle": 8,
+      "maxOutputTokensPerCall": 2048,
+      "installationMaxTotalTokensPerCycle": 100000,
+      "operatorMaxTotalTokensPerCycle": 80000,
+      "effectiveMaxTotalTokensPerCycle": 80000,
+      "timeoutSecondsPerCycle": 600
+    },
+    "shutdown": "Provider confirmed zero total and running workers after disabling the endpoint.",
+    "scope": "Real inference, worker and API handlers with synthetic records in an isolated in-memory SQL database. Includes deterministic safety probes. No production company connected or always-on Coatria worker installed.",
+    "limitations": "Single bounded canary, not a production capacity or general prompt-injection guarantee. Role/status assertions check text markers and persisted state, not checklist quality or general truthfulness. Original evidence limits report installation settings; the private operator ceiling reduced the effective token limit to 80000. Earlier L40S attempt added a tasks_claim write; the allowed-write mission contract was clarified and unchanged receipt assertions passed. GPU observations are not a controlled benchmark. Raw evidence and account identifiers are not included."
+  },
+  "coatriaWorker": {
+    "command": "node agent-worker.mjs --adapter ./provider-adapter.mjs",
+    "requiredPrivateEnvironmentNames": [
+      "COATRIA_AGENT_TOKEN",
+      "RUNPOD_API_KEY",
+      "COATRIA_RUNPOD_ENDPOINT_ID"
+    ],
+    "nonSecretEnvironment": {
+      "COATRIA_URL": "https://coatria.com"
+    },
+    "optionalOperatorCeilingNames": [
+      "COATRIA_MAX_STEPS",
+      "COATRIA_MAX_OUTPUT_TOKENS",
+      "COATRIA_MAX_TOTAL_TOKENS",
+      "COATRIA_TIMEOUT_SECONDS"
+    ],
+    "operationNotice": "The supervised Coatria Node worker must stay online for recurring missions. The Runpod GPU endpoint only performs inference and may scale to zero. Do not put provider or Coatria credentials in the inference template or this example."
+  },
+  "sources": [
+    "https://huggingface.co/Qwen/Qwen3.8-27B-FP8",
+    "https://github.com/runpod-workers/worker-vllm/releases/tag/v2.27.0",
+    "https://recipes.vllm.ai/Qwen/Qwen3.8-27B",
+    "https://docs.runpod.io/serverless/vllm/openai-compatibility",
+    "https://docs.runpod.io/serverless/pricing",
+    "https://www.runpod.io/pricing"
+  ]
+}

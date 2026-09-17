@@ -24,6 +24,8 @@ test('leased tools enforce authority, durable effects, review boundaries and iso
   const claim=await call('agent/runs/claim','POST',{workerId:'tools-fixture',claimId:randomUUID()});assert.equal(claim.run.id,runId);leaseToken=claim.leaseToken;
   await t.test('discovery is scoped and private resources cannot be reached through arguments',async()=>{
    const catalog=await call('agent/tools');assert.equal(catalog.tools.length,18);assert(catalog.tools.every((x:any)=>x.inputSchema.type==='object'));
+   assert(!(catalog.tools.find((x:any)=>x.name==='tasks_list').inputSchema.required??[]).includes('limit'),'defaulted input limits remain optional');
+   assert(!(catalog.tools.find((x:any)=>x.name==='tasks_create').inputSchema.required??[]).includes('description'),'defaulted descriptions remain optional');
    const people=(await tool('people_list',{})).result;assert.equal(people.items.length,3);assert(!JSON.stringify(people).includes('@example.invalid'));
    await tool('workspace_get',{companyId:foreign},400);await tool('vault_export',{},404);await tool('people_list',{limit:101},400);
    assert.equal((await tool('workspace_get',{})).result.company.id,company);

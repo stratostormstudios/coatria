@@ -122,7 +122,10 @@ export async function workOnce({client,state,execute,signal,heartbeatMs=15000,lo
  try{
   if(!job.outcome){
    const recovering=job.started;job.started=true;await state.save();const context=await client.context(job.run.id,job.leaseToken,control.signal);
-   const tools={key:key=>stableRequestId(job.run.id,key),list:()=>client.listTools(control.signal),call:async(name,args,{requestId}={})=>{control.signal.throwIfAborted();if(!UUID.test(requestId||''))throw new Error('Pass a stable requestId, for example tools.key("logical-step").');const response=await client.callTool(name,{runId:job.run.id,leaseToken:job.leaseToken,requestId,arguments:args},control.signal);return response.result;}};
+   // Adapters may shorten a tool request with their own deadline, but cannot
+   // detach it from lease cancellation. Aborted writes still require reconciliation.
+   const toolSignal=extra=>extra?AbortSignal.any([control.signal,extra]):control.signal;
+   const tools={key:key=>stableRequestId(job.run.id,key),list:({signal:extra}={})=>{const signal=toolSignal(extra);signal.throwIfAborted();return client.listTools(signal);},call:async(name,args,{requestId,signal:extra}={})=>{const signal=toolSignal(extra);signal.throwIfAborted();if(!UUID.test(requestId||''))throw new Error('Pass a stable requestId, for example tools.key("logical-step").');const response=await client.callTool(name,{runId:job.run.id,leaseToken:job.leaseToken,requestId,arguments:args},signal);return response.result;}};
    // Trusted adapter configuration is separate from model-visible run context.
    const mcpEnvironment={COATRIA_URL:client.origin,COATRIA_RUN_ID:job.run.id,COATRIA_RUN_LEASE:job.leaseToken};
    const execution=Promise.resolve().then(()=>{control.signal.throwIfAborted();return execute({run:context.run||job.run,context,tools,signal:control.signal,recovering,mcpEnvironment});});

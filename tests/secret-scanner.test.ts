@@ -7,7 +7,7 @@ import {join,resolve,relative,isAbsolute} from 'node:path';
 import {detectSecrets,forbiddenPath,scanRepository} from '../scripts/check-secrets.mjs';
 
 test('secret detection covers provider tokens, scoped tokens and database URLs without returning values',()=>{
-  const values=['vcp'+'_'+ 'a'.repeat(40),'sk'+'-proj-'+ 'b'.repeat(40),'ca'+'_'+ 'c'.repeat(43),'napi'+'_'+ 'd'.repeat(32),'postgresql'+'://owner:private-password@db.example.com/company'];
+  const values=['vcp'+'_'+ 'a'.repeat(40),'sk'+'-proj-'+ 'b'.repeat(40),'ca'+'_'+ 'c'.repeat(43),'napi'+'_'+ 'd'.repeat(32),'rpa'+'_'+ 'e'.repeat(44),'postgresql'+'://owner:private-password@db.example.com/company'];
   for(const value of values){const found=detectSecrets(value);assert.ok(found.length>0);assert.ok(!JSON.stringify(found).includes(value));}
   assert.equal(detectSecrets('postgresql://USER:PASSWORD@HOST/coatria').length,0);
   assert.equal(detectSecrets('postgresql://coatria_test:local_ci_test_only@127.0.0.1:5432/coatria_test').length,0);

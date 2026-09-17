@@ -1,6 +1,6 @@
 import {AGENT_CAPABILITIES,type AgentCapability} from './agent-policy';
 
-export const PLUGIN_CATALOG_VERSION='2026-09-16';
+export const PLUGIN_CATALOG_VERSION='2026-09-17';
 export type AgentCharacter={roleTitle:string;persona:string;workStyle:'collaborative'|'independent'|'methodical'};
 export type PluginRuntimeConfig={providerId:string;modelId:string;maxSteps:number;maxOutputTokens:number;maxTotalTokens:number;timeoutSeconds:number};
 export type PluginModel={id:string;label:string;tier:'flagship'|'balanced'|'economy'|'custom';toolSupport:'documented'|'unverified'};
@@ -56,8 +56,8 @@ export const PLUGIN_CATALOG:PluginCatalogEntry[]=[
   docsUrl:'https://docs.together.ai/docs/serverless/models',credentialEnv:'TOGETHER_API_KEY',setupFiles:providerFiles,
   limitations:['Smaller models need closer review on complex or high-impact tasks.','Qwen3.8 variants without confirmed tool support are not offered in this curated bridge.']},
  {...common,id:'runpod',name:'Your Runpod inference',vendor:'Runpod',category:'inference',harness:'custom',runtime:'chat-completions',
-  summary:'Bring an operator-managed model endpoint.',description:'Connect a Runpod serverless OpenAI-compatible endpoint configured privately on your worker.',
-  providers:[{id:'runpod',models:[],allowCustomModel:true}],
-  docsUrl:'https://docs.runpod.io/serverless/vllm/openai-compatibility',credentialEnv:'RUNPOD_API_KEY',setupFiles:providerFiles,
-  limitations:['Requires an operator-provisioned endpoint and COATRIA_RUNPOD_ENDPOINT_ID on the worker.','Custom models are unverified; test tool calling before granting write capabilities.','The company interface cannot configure arbitrary network destinations.']},
+  summary:'Qwen 3.8 on your own inference endpoint.',description:'Connect a Runpod worker running Qwen3.8 27B FP8, with tracked inference jobs and scoped Coatria tools.',
+  providers:[{id:'runpod',models:[model('Qwen/Qwen3.8-27B-FP8','Qwen3.8 27B FP8','balanced')],allowCustomModel:true}],
+  docsUrl:'https://docs.runpod.io/serverless/vllm/openai-compatibility',credentialEnv:'RUNPOD_API_KEY',setupFiles:[...providerFiles,'/downloads/runpod-qwen38.example.json'],verifiedAt:'2026-09-17',
+  limitations:['Requires an operator-provisioned endpoint and COATRIA_RUNPOD_ENDPOINT_ID on the worker.','The Qwen preset has an isolated live canary; other custom models require their own tests.','Cold starts consume time and GPU credit. A supervised Coatria worker must remain online.','The company interface cannot configure arbitrary network destinations.']},
 ];

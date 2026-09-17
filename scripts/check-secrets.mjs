@@ -10,6 +10,7 @@ const patterns=[
   ['GitHub fine-grained token',/\bgithub_pat_[A-Za-z0-9_]{20,}\b/],
   ['model provider key',/\bsk-[A-Za-z0-9][A-Za-z0-9_-]{19,}\b/],
   ['Neon token',/\bnapi_[A-Za-z0-9_-]{20,}\b/],
+  ['Runpod token',/\brpa_[A-Za-z0-9_-]{20,}\b/],
   ['Supabase secret',/\b(?:sb_secret_|sbp_)[A-Za-z0-9_-]{20,}\b/],
   ['AWS access key',/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/],
   ['Coatria scoped token',/\b(?:ca|cd|ci)_[A-Za-z0-9_-]{40,}\b/],

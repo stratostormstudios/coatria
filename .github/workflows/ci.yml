@@ -49,6 +49,7 @@ jobs:
       - run: npm audit --audit-level=high
       - run: npm run db:migrate
       - run: npm test
+      - run: npm run test:agent:fixture
       - run: npm run typecheck
       - run: npm run build
   scale:

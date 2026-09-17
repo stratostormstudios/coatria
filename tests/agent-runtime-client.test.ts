@@ -97,6 +97,28 @@ test('adapter failure records a bounded generic report and explicit tool keys re
  assert.equal(toolPayload.requestId,stableRequestId(runId,'workspace'));assert.notEqual(stableRequestId(runId,'workspace'),stableRequestId(otherRun,'workspace'));assert.equal(reported.error.includes(token),false);assert.match(reported.clientId,/^[0-9a-f-]{36}$/);
 });
 
+test('adapter deadlines propagate to tools while preserving lease cancellation and legacy calls',async()=>{
+ for(const kind of['list','call']){
+  const state=memoryState(),control=controller(),deadline=controller();let cancelled=0,failed=0,completed=0,started!:()=>void;
+  const ready=new Promise<void>(resolve=>started=resolve);
+  const stalled=(signal:AbortSignal)=>{assert.notEqual(signal,control.signal);started();return new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>{cancelled++;reject(signal.reason);},{once:true}));};
+  const client=fakeClient({listTools:stalled,callTool:(_name:any,_payload:any,signal:AbortSignal)=>stalled(signal),fail:async()=>{failed++;return{run:{status:'failed'}};},complete:async()=>{completed++;return{};}});
+  const execution=workOnce({client,state,signal:control.signal,execute:async({tools}:any)=>{if(kind==='list')await tools.list({signal:deadline.signal});else await tools.call('workspace_get',{}, {requestId:tools.key('deadline'),signal:deadline.signal});return{result:'must not complete'};}});
+  await ready;deadline.abort(new Error('Adapter deadline'));await execution;
+  assert.equal(cancelled,1);assert.equal(control.signal.aborted,false);assert.equal(failed,1);assert.equal(completed,0);assert.equal(state.data.job,null);
+ }
+ const state=memoryState();let reads=0,calls=0;
+ await workOnce({client:fakeClient({listTools:async(signal:AbortSignal)=>{assert.equal(signal.aborted,false);reads++;return{tools:[]};},callTool:async(_name:any,_payload:any,signal:AbortSignal)=>{assert.equal(signal.aborted,false);calls++;return{result:{}};}}),state,execute:async({tools}:any)=>{await tools.list();await tools.call('workspace_get',{}, {requestId:tools.key('legacy')});return{result:'Legacy adapter remains compatible'};}});assert.equal(reads,1);assert.equal(calls,1);
+});
+
+test('an adapter-specific tool signal cannot detach pending requests from lease cancellation',async()=>{
+ const state=memoryState(),control=controller(),deadline=controller();let started!:()=>void,received:AbortSignal|undefined;
+ const ready=new Promise<void>(resolve=>started=resolve);
+ const client=fakeClient({callTool:(_name:any,_payload:any,signal:AbortSignal)=>{received=signal;started();return new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));}});
+ const execution=workOnce({client,state,signal:control.signal,execute:async({tools}:any)=>{await tools.call('workspace_get',{}, {requestId:tools.key('lease'),signal:deadline.signal});return{result:'must not complete'};}});
+ await ready;control.abort(new RuntimeError(409,'RUN_CANCELLED'));await assert.rejects(()=>execution,{code:'RUN_CANCELLED'});assert.equal(received?.aborted,true);assert.equal(deadline.signal.aborted,false);assert.equal(state.data.job,null);
+});
+
 test('MCP discovery respects run capabilities, stable IDs replay, changed arguments and revoked leases fail',async()=>{
  const calls:any[]=[];let revoked=false;
  const client=fakeClient({context:async()=>{if(revoked)throw new RuntimeError(401,'AGENT_ACCESS_ENDED');return {capabilities:['workspace:read']};},listTools:async()=>({tools:[{name:'workspace_get',description:'Read workspace',inputSchema:{type:'object'},capability:'workspace:read',mutating:false},{name:'layout_propose',description:'Propose layout',inputSchema:{type:'object'},capability:'layout:propose',mutating:true}]}),callTool:async(_name:string,payload:any)=>{calls.push(payload);return {result:{ok:true},replayed:calls.length>1};}});

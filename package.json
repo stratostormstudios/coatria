@@ -9,6 +9,8 @@
     "start": "next start --port 4180",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
+    "test:agent:fixture": "node --import tsx scripts/evaluate-runpod.mts --fixture",
+    "test:agent:live": "node --import tsx scripts/evaluate-runpod.mts --live",
     "test:integration": "tsx --test tests/backend-integration.test.ts tests/calls.test.ts",
     "test:media": "node --import tsx tests/room-call-browser.mjs",
     "test:load": "node scripts/load-office.mjs",

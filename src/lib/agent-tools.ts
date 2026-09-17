@@ -114,7 +114,7 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
 
 export async function agentToolsRoute(request:Request,parts:string[],method:string):Promise<Response|null>{
  if(parts[0]!=='agent'||parts[1]!=='tools')return null;const agent=await authenticateAgent(request);
- if(parts.length===2&&method==='GET')return json({protocolVersion:'1.0',requiresRunLease:true,tools:Object.entries(AGENT_TOOLS).filter(([,v])=>agent.capabilities?.includes(v.capability)).map(([name,v])=>({name,description:v.description,capability:v.capability,mutating:v.mutating,inputSchema:z.toJSONSchema(v.schema,{unrepresentable:'any'})}))});
+ if(parts.length===2&&method==='GET')return json({protocolVersion:'1.0',requiresRunLease:true,tools:Object.entries(AGENT_TOOLS).filter(([,v])=>agent.capabilities?.includes(v.capability)).map(([name,v])=>({name,description:v.description,capability:v.capability,mutating:v.mutating,inputSchema:z.toJSONSchema(v.schema,{unrepresentable:'any',io:'input'})}))});
  if(parts.length===3&&method==='POST')return json(await executeAgentTool(agent,parts[2],await body(request,z.unknown(),256*1024)));
  return null;
 }
