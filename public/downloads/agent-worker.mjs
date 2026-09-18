@@ -8,7 +8,7 @@ import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const terminalCodes=new Set(['RUN_LEASE_LOST','RUN_CANCELLED']);
+const terminalCodes=new Set(['RUN_LEASE_LOST','RUN_CANCELLED','COORDINATION_AUTHORITY_ENDED']);
 const fingerprint=value=>createHash('sha256').update(value).digest('hex');
 export function stableRequestId(runId,key){
  if(!UUID.test(runId)||typeof key!=='string'||!key||key.length>200)throw new Error('A run UUID and a nonempty logical operation key are required.');

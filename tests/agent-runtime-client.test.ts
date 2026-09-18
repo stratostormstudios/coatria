@@ -82,12 +82,12 @@ test('uncertain completion survives worker restart and expired local lease witho
  await workOnce({client,state:restarted,execute,signal:controller().signal});assert.equal(executions,1);assert.deepEqual(payloads[1],payloads[0]);assert.equal(restarted.data.job,null);
 });
 
-test('lease cancellation aborts an uncooperative adapter and prevents later tools or completion',async()=>{
+for(const code of ['RUN_CANCELLED','COORDINATION_AUTHORITY_ENDED'])test(`${code} aborts an uncooperative adapter and prevents later tools or completion`,async()=>{
  const state=memoryState();let calls=0,completed=0,tools:any,adapterSignal:AbortSignal|undefined;
- const client=fakeClient({heartbeat:async()=>{throw new RuntimeError(409,'RUN_CANCELLED');},callTool:async()=>{calls++;return {result:{}};},complete:async()=>{completed++;return {};}});
+ const client=fakeClient({heartbeat:async()=>{throw new RuntimeError(409,code);},callTool:async()=>{calls++;return {result:{}};},complete:async()=>{completed++;return {};}});
  const execute=({signal,tools:boundTools}:any)=>{adapterSignal=signal;tools=boundTools;return new Promise(()=>{});};
- await assert.rejects(()=>workOnce({client,state,execute,signal:controller().signal,heartbeatMs:10}),{code:'RUN_CANCELLED'});assert.equal(adapterSignal?.aborted,true);
- await assert.rejects(()=>tools.call('workspace_get',{}, {requestId:tools.key('late')}),{code:'RUN_CANCELLED'});assert.equal(calls,0);assert.equal(completed,0);assert.equal(state.data.job,null);
+ await assert.rejects(()=>workOnce({client,state,execute,signal:controller().signal,heartbeatMs:10}),{code});assert.equal(adapterSignal?.aborted,true);
+ await assert.rejects(()=>tools.call('workspace_get',{}, {requestId:tools.key('late')}),{code});assert.equal(calls,0);assert.equal(completed,0);assert.equal(state.data.job,null);
 });
 
 test('adapter failure records a bounded generic report and explicit tool keys remain stable across attempts',async()=>{

@@ -198,7 +198,7 @@ async function updateProject(client:PoolClient,actor:StudioActor,projectId:strin
   await activity(client,actor,'studio.project_updated',invalidate?'The client brief or AI-use policy changed; business approvals require review again.':'The project delivery date was updated.');return {project:await bump(client,actor.companyId,projectId)};
  });
 }
-async function dispatchWork(client:PoolClient,member:Membership,projectId:string,input:unknown){
+export async function dispatchWork(client:PoolClient,member:Membership,projectId:string,input:unknown){
  const data=parse(studioDispatchInput,input),actor={companyId:member.companyId,userId:member.userId};
  return requestOnce(client,actor,data.clientId,'dispatch:'+projectId,data,async()=>{
   const preview=(await client.query('SELECT w.task_id,w.role_key,w.execution,b.agent_id FROM studio_work_items w JOIN studio_role_bindings b ON b.company_id=w.company_id AND b.role_key=w.role_key WHERE w.company_id=$1 AND w.project_id=$2 AND w.id=$3',[member.companyId,projectId,data.workItemId])).rows[0];if(!preview)fail(404,'Studio work item not found.');if(!preview.agent_id)fail(409,'Assign and connect an agent to this role first.','STUDIO_AGENT_REQUIRED');

@@ -16,6 +16,7 @@ import {studioExecutionRoute} from './studio-execution';
 import {studioStaffingRoute} from './studio-staffing';
 import {studioHostingRoute} from './studio-hosting';
 import {studioMediaRoute} from './studio-media';
+import {studioCoordinationRoute} from './studio-coordination';
 
 export async function handleApi(request: Request, parts: string[]): Promise<Response> {
   const requestId=randomUUID(),started=performance.now();
@@ -44,7 +45,7 @@ export async function handleApi(request: Request, parts: string[]): Promise<Resp
     if(!['GET','HEAD'].includes(method)&&!bearerEndpoint&&!['auth'].includes(parts[0])) {
       const user=await currentUser(request);if(user)await rateLimit(`write:${user.id}`,240,60);
     }
-    for(const handler of [identityRoute,pluginMarketplaceRoute,agentMissionRoute,agentRunRoute,agentToolsRoute,agentProposalRoute,studioMediaRoute,studioExecutionRoute,studioStaffingRoute,studioHostingRoute,studioRoute,conversationRoute,companyRoute,workRoute,integrationRoute,talentRoute]) {
+    for(const handler of [identityRoute,pluginMarketplaceRoute,agentMissionRoute,agentRunRoute,agentToolsRoute,agentProposalRoute,studioMediaRoute,studioExecutionRoute,studioStaffingRoute,studioHostingRoute,studioCoordinationRoute,studioRoute,conversationRoute,companyRoute,workRoute,integrationRoute,talentRoute]) {
       const result=await handler(request,parts,method);if(result)return finish(result);
     }
     fail(404,'API endpoint not found.');

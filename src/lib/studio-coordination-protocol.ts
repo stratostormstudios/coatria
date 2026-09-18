@@ -1,0 +1,14 @@
+import {z} from 'zod';
+import {STUDIO_TEMPLATES} from './studio-protocol';
+
+const uuid=z.string().uuid(),revision=z.number().int().min(1).max(2147483646);
+export const studioCoordinationInput=z.object({
+ clientId:uuid,revision:z.number().int().min(0).max(2147483646),coordinatorAgentId:uuid,
+ allowedRoleKeys:z.array(z.string().refine(key=>STUDIO_TEMPLATES[0].roles.some(role=>role.key===key),'Choose a curated studio role.')).min(1).max(11).refine(keys=>new Set(keys).size===keys.length,'Roles must be unique.'),
+ status:z.enum(['active','paused']),maxRuns:z.number().int().min(1).max(100),maxConcurrentRuns:z.number().int().min(1).max(3),expiresAt:z.string().datetime(),
+}).strict();
+export const studioCoordinationGetInput=z.object({projectId:uuid}).strict();
+export const studioWorkDispatchInput=z.object({projectId:uuid,workItemId:uuid,policyRevision:revision,projectRevision:revision}).strict();
+export type StudioCoordinationPolicy={projectId:string;coordinatorAgentId:string;allowedRoleKeys:string[];status:'active'|'paused';effectiveStatus:'active'|'paused'|'expired'|'approval_required'|'exhausted';blocker:string|null;revision:number;maxRuns:number;runsStarted:number;remainingRuns:number;maxConcurrentRuns:number;approvedBy:string;expiresAt:string;updatedAt:string;profileRevision:number};
+export type StudioCoordinationDispatch={workItemId:string;parentRunId:string;childRunId:string;coordinatorAgentId:string;specialistAgentId:string;policyRevision:number;createdAt:string;status:string};
+export type StudioCoordinationSnapshot={policy:StudioCoordinationPolicy|null;dispatches:StudioCoordinationDispatch[];budgetUnit:'specialist_runs';budgetScope:'coordinator_dispatched_runs_only';startsWorkers:false;startsInference:false};

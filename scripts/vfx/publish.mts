@@ -4,7 +4,7 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {z} from 'zod';
 import {runtimeOrigin,stableRequestId} from '../../public/downloads/agent-worker.mjs';
-import {executionManifestFromResult} from './worker.mjs';
+import {executionManifestFromResult} from './manifest.mjs';
 import {RenderError,type RenderResult} from './renderer.mjs';
 
 const MAX_FILE=20*1024*1024,MAX_RESPONSE=1024*1024;
@@ -56,7 +56,7 @@ export async function publishExecutionOutputs(options:PublishOptions){
  const transport=options.fetch??fetch,timeout=options.requestTimeoutMs??30000;
  async function api(endpoint:string,body?:unknown){
   const signal=AbortSignal.any([AbortSignal.timeout(timeout),...(options.signal?[options.signal]:[])]);
-  try{const response=await abortable(transport(origin+'/api/execution/'+endpoint,{method:body===undefined?'GET':'POST',headers:{Authorization:'Bearer '+options.token,...body===undefined?{}:{'Content-Type':'application/json'}},body:body===undefined?undefined:JSON.stringify(body),signal,redirect:'error'}),signal);const value=await responseJson(response,signal);if(!response.ok)throw new RenderError('PUBLISH_API_REJECTED',`Media API rejected the request (${response.status}).`);return value;}catch(error){if(error instanceof RenderError)throw error;throw new RenderError('PUBLISH_API_UNCERTAIN','The media request did not finish. Re-run to reconcile the same request.');}
+  try{const response=await abortable(transport(origin+'/api/execution/'+endpoint,{method:body===undefined?'GET':'POST',headers:{Authorization:'Bearer '+options.token,...body===undefined?{}:{'Content-Type':'application/json'}},body:body===undefined?undefined:JSON.stringify(body),signal,redirect:'error'}),signal);const value=await responseJson(response,signal);if(!response.ok)throw new RenderError([408,429,500,502,503,504].includes(response.status)?'PUBLISH_API_RETRYABLE':'PUBLISH_API_REJECTED',`Media API rejected the request (${response.status}).`);return value;}catch(error){if(error instanceof RenderError)throw error;throw new RenderError('PUBLISH_API_UNCERTAIN','The media request did not finish. Re-run to reconcile the same request.');}
  }
  const identity=await api('identity'),companyId=uuid.parse((identity.connector as {companyId?:string})?.companyId);
  const files:Array<{id:string;path:string;sha256:string;bytes:number;verifiedState:'verified'}>=[];
@@ -73,7 +73,7 @@ export async function publishExecutionOutputs(options:PublishOptions){
    // A write-once conflict is never accepted as proof. Verification below must
    // retrieve and hash the exact existing bytes before recording success.
    const acceptable=response.ok||response.status===400||response.status===409;void response.body?.cancel().catch(()=>{});
-   if(!acceptable)throw new RenderError('PUBLISH_UPLOAD_REJECTED',`Storage rejected the write-once upload (${response.status}).`);
+   if(!acceptable)throw new RenderError([408,429,500,502,503,504].includes(response.status)?'PUBLISH_UPLOAD_RETRYABLE':'PUBLISH_UPLOAD_REJECTED',`Storage rejected the write-once upload (${response.status}).`);
   }else if(record.verifiedState!=='verified')throw new RenderError('PUBLISH_PROTOCOL','The server omitted an upload grant for unverified media.');
   const verified=fileSchema.parse((await api(`jobs/${options.jobId}/media/verify`,{clientId:publicationRequestId(options.jobId,file.path,'verify'),fileId:record.id})).file);
   if(verified.id!==record.id||verified.path!==file.path||verified.sha256!==file.sha256||verified.bytes!==file.bytes||verified.verifiedState!=='verified')throw new RenderError('PUBLISH_VERIFY_FAILED','Server byte verification did not confirm this exact output.');

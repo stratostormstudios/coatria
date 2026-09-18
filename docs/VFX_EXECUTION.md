@@ -69,8 +69,9 @@ Register and explicitly approve the company execution connector/profile through 
 | `COATRIA_EXECUTION_WORKER_ID` | Stable host worker identity |
 | `COATRIA_EXECUTION_OUTPUT_ROOT` | Absolute private output/state root |
 | `COATRIA_BLENDER_PATH` | Absolute approved Blender executable |
+| `COATRIA_EXECUTION_AUTO_PUBLISH` | Optional exact `true` to publish completed outputs to private Coatria media; absent or `false` leaves publication manual |
 
-`node --import tsx scripts/vfx/worker.mts --once` handles one bounded connector cycle. Omitting `--once` starts the operator-managed polling loop. The worker calls only `/api/execution/identity`, `jobs/claim`, job heartbeat, completion and failure. It never executes model-generated commands or contacts clients.
+`node --import tsx scripts/vfx/worker.mts --once` handles one bounded connector cycle. Omitting `--once` starts the operator-managed polling loop. Without publication enabled, the worker calls only `/api/execution/identity`, `jobs/claim`, job heartbeat, completion and failure. The explicit publication option adds the scoped media upload/verification endpoints and their approved private Blob PUT grants. It never executes model-generated commands or contacts clients.
 
 Each claim retains the server's company, project, work-item, profile and technical-spec snapshot. The worker validates the supported profile, input absence, EXR format, pixel/frame/rate bounds and working space before starting Blender. It renews the lease every 20 seconds; a renewal failure or cancellation aborts its owned process tree. API requests have a 10-second deadline and a streamed 1 MiB response bound. The completion references only verified files under the job directory. Its public status remains **connector-reported**; the backend and a human still need the separate version-review and acceptance gates.
 
@@ -84,7 +85,15 @@ After the API job has succeeded and its sealed local result remains in the same 
 node --import tsx scripts/vfx/publish.mts --job JOB_UUID
 ```
 
-It uses the existing private `COATRIA_BASE_URL`, `COATRIA_EXECUTION_TOKEN`, and `COATRIA_EXECUTION_OUTPUT_ROOT` environment values. The server must have its private Blob store configured. The publisher does not start Blender, request inference, approve a version, or contact a client. The rendering loop does not invoke it automatically.
+It uses the existing private `COATRIA_BASE_URL`, `COATRIA_EXECUTION_TOKEN`, and `COATRIA_EXECUTION_OUTPUT_ROOT` environment values. The server must have its private Blob store configured. The publisher does not start Blender, request inference, approve a version, or contact a client.
+
+An operator can instead enable publication directly on the rendering worker:
+
+```powershell
+node --import tsx scripts/vfx/worker.mts --once --publish-private-media
+```
+
+Omit `--once` to keep polling, or set `COATRIA_EXECUTION_AUTO_PUBLISH=true` on the host instead of passing the publication flag. This permission is saved with each original claim; enabling the option later does not add publication to an existing claim that was accepted without it. Disabling the option while publication is pending stops before further publication transport and preserves the pending work. No model or job parameter can enable the option.
 
 The publisher checks the complete local manifest and file bounds, then requests an exact upload grant for each completed output. Every file must be at most 20 MiB. Its storage PUT sends exactly these two matching headers from the approved grant:
 
@@ -97,11 +106,17 @@ x-content-type: <the same approved MIME type>
 
 After each write, the server reads and hashes the private stored bytes against the immutable completion manifest. A storage response alone is not accepted as verification. Rerunning the same command derives the same upload/verification request IDs and reconciles existing files without overwrite or duplicate file records; changed local outputs fail validation. No credentials or signed URLs are journalled. Success reports `verificationSource: server_bytes` and `independentlyReviewed: false`. Use the Studio UI to promote the whole verified sequence into a pending version, then obtain independent review before preparing a delivery manifest.
 
+Automatic publication begins only after the completion API acknowledges the exact persisted render receipt. Before making another claim, the worker records a separate `publishing` phase and removes the old render lease from that state. A restart resumes the same job using the publisher's stable file IDs and hash verification. After every file is server-verified, it writes an immutable, secret-free receipt under `.connector-state/<worker-id>.publications/<job-id>.json`. Publication does not accept a studio task, promote a version, approve a review, or mark client delivery.
+
+Network uncertainty, HTTP 408/429, and selected transient 5xx responses retry with persisted exponential backoff: 5, 10, 20, 40, then 60 seconds, with at most eight attempts per job. Restarting does not reset that budget. The polling worker waits without claiming or rendering other work until publication finishes. `--once` returns `publication_pending` and exit code 2 when a retry remains. The completion still exists on the server; this status is about publication only.
+
 ## Failure and recovery
 
 The adapter uses an exclusive local execution lock. Successful job files and manifests are never overwritten by a retry. Known failed attempts retain a failure record and logs; a subsequent authorized attempt gets another directory. Corrupt committed files fail verification and do not silently trigger a replacement render. An interrupted attempt without a failure record requires explicit reconciliation.
 
 The worker persists the exact completion request before posting it. If the response is lost, restart resends that same body and idempotency key before making another claim or rendering again. An uncertain/interrupted render fails closed and preserves its state. A stale host lock, reused PID, different hostname, live child process, or unknown completion requires operator investigation; this is not automatic fleet failover. Inspect the backend job, local child processes and sealed outputs before resetting any private lock/state. Do not delete output evidence to make a retry appear clean.
+
+Revoked/expired publication credentials, changed outputs, an inconsistent success receipt, unsupported upload grants, and exhausted retry budgets stop automatic publication for operator reconciliation. A cancelled or lost PUT may already have stored its bytes; it remains pending until the server verifies the exact immutable content. The worker never reports a completed render as failed merely because publication needs recovery, and never overwrites output evidence to clear an upload problem. The standalone publisher remains available for an explicitly reviewed recovery; reconcile its verified result with the preserved worker state before authorizing more claims.
 
 Timeout/cancellation targets only the process tree launched by this adapter. This is a process-lifecycle control, not an operating-system sandbox. `--disable-autoexec`, `--factory-startup` and `--offline-mode` do **not** make arbitrary `.blend` files or Python safe. Running external scenes would require a separate reviewed profile, input provenance and digest checks, constrained mounts, network isolation, resource quotas and an appropriate container/VM security boundary. External Blender inputs are rejected by this profile.
 
@@ -112,6 +127,8 @@ On 2026-09-17, installed Blender **5.2.0 LTS**, build `fbe6228777e7`, produced f
 The recorded bundled OCIO config digest was `df5714c85d5afb5e9762281503a0c48a9f65dadb22d32a3aee50c454a0821f62`; each manifest also records the profile hash and every bundled transform hash used by its installed Blender distribution. Renderer determinism here means a fixed scene, seed and parameter contract. Bit-for-bit equivalence across Blender builds, CPU architectures or color bundles is not promised.
 
 `tests/vfx-renderer.test.ts` checks bounds, hashes, dimensions, missing frames, sealed-result replay, uncertain-state refusal, subprocess timeout, cancellation, identity-bound receipt replay and streamed response limits. The default suite uses explicitly labeled header fixtures for verification logic; it skips the real Blender test. Set `COATRIA_TEST_BLENDER=1` and optionally `COATRIA_BLENDER_PATH` to exercise the installed renderer. The real test produces and verifies `.blend`, EXR and PNG outputs, including failed-start recovery. Company execution API tests separately cover authorization, leases and human review boundaries.
+
+`tests/vfx-publisher.test.ts` also exercises the worker's real publication state machine against injected storage/API transports: acknowledgement loss, restart after a partial PUT, cancellation after bytes reach storage, retry backoff and exhaustion, withdrawn opt-in, simulated expired/revoked connector responses, modified files, and replay after a success receipt was written. These tests make no cloud calls. They verify transport and recovery behavior, not cloud rendering capacity or creative quality.
 
 A subsequent integrated local workflow passed seven checks using the real React UI, HTTP API handlers, migrated PGlite, installed Blender, and a real private Vercel Blob store. It created and approved a four-frame ACEScg job, observed the leased renderer's heartbeat and completion, published and server-verified all seven output files, replayed publication without duplicate records, loaded the actual private preview in the browser, enforced independent review, and prepared an exact real-file delivery manifest. No browser page errors were recorded. This used a synthetic company; it ran no inference and performed no client transport. The test blobs were removed after validation. The local record is `.devdata/studio-media-evidence/evidence.json`.
 
