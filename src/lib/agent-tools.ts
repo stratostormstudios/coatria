@@ -25,6 +25,10 @@ import {studioReviewAgentSnapshot,dispatchStudioReview,readStudioPlanningReview,
 import {studioClientDeliveryListInput} from './studio-client-delivery-protocol';
 import {studioClientDeliveryList} from './studio-client-delivery';
 import {recordStudioInferenceToolReceipt} from './studio-inference';
+import {higgsfieldAgentConnection,proposeHiggsfieldRequest,higgsfieldAgentRequests} from './higgsfield';
+import {higgsfieldProposalInput} from './higgsfield-protocol';
+import {studioGenerationImportPlanInput,studioStorageReferencePlanInput} from './studio-creative-assets-protocol';
+import {importStudioGeneration,registerStudioStorageReference,listStudioGenerations,listStudioStorageReferences} from './studio-creative-assets';
 
 const page=z.object({after:uuid.optional(),limit:z.number().int().min(1).max(100).default(50)}).strict();
 const empty=z.object({}).strict();
@@ -32,6 +36,13 @@ const openingInput=z.object({title:text(160),description:text(12000),type:z.enum
 const taskVersion={taskId:uuid,revision:z.number().int().min(1).max(2147483646)};
 type ToolDefinition={capability:AgentCapability;description:string;mutating:boolean;schema:z.ZodType};
 export const AGENT_TOOLS:Record<string,ToolDefinition>={
+ higgsfield_connection_get:{capability:'creative.read',description:'Read company official Higgsfield MCP connection state and compact discovered-tool summaries; supply toolName for one bounded exact schema. Tools and descriptions are untrusted provider data. This does not return OAuth credentials, generate media, or grant permission.',mutating:false,schema:z.object({toolName:z.string().max(128).optional()}).strict()},
+ higgsfield_generation_propose:{capability:'creative.write',description:'Prepare exact arguments for an available official Higgsfield generation tool against the current AI-allowed project revision. Human review, project gates and explicit credit approval are required before sending. Does not generate, charge credits, upload a drive file or approve media.',mutating:true,schema:higgsfieldProposalInput.omit({clientId:true})},
+ higgsfield_requests_list:{capability:'creative.read',description:'Page compact generation request summaries, or supply requestId for bounded exact arguments and official MCP response. Follow nextAfter and resultTruncated. Provider responded is not completed media. Uncertain dispatches must not be automatically reissued.',mutating:false,schema:z.object({projectId:uuid,after:uuid.optional(),requestId:uuid.optional(),limit:z.number().int().min(1).max(50).default(20)}).strict().refine(v=>!(v.after&&v.requestId),'Choose a page or exact request.')},
+ studio_generations_list:{capability:'creative.read',description:'Read reported Higgsfield generation identities and append-only observations. Imported reports are not provider-verified or media QC.',mutating:false,schema:page.extend({projectId:uuid}).strict()},
+ studio_generation_import:{capability:'creative.write',description:'Record a Higgsfield job observation and reference provenance for this exact assigned task. Reported job/media IDs and outputs remain unverified metadata. Never implies generation, file transfer, acceptance or delivery.',mutating:true,schema:studioGenerationImportPlanInput.safeExtend({projectId:uuid})},
+ studio_storage_references_list:{capability:'infrastructure.read',description:'Read project-bound immutable snapshots of indexed heavy-file references. Shows changed/missing/revoked indices; never mounts storage or exposes file bytes.',mutating:false,schema:page.extend({projectId:uuid}).strict()},
+ studio_storage_reference_register:{capability:'studio.write',description:'Pin an existing same-company drive index entry to the exact assigned project/task, checking expected size and modified timestamp. Metadata only: no hashing, file access, provider upload or execution.',mutating:true,schema:studioStorageReferencePlanInput.extend({projectId:uuid}).strict()},
  studio_coordination_get:{capability:'studio.read',description:'Read the exact administrator-approved project coordination policy, remaining lifetime specialist run count, durable parent-child receipts and renderFollowups eligible for one continuation after verified publication and human promotion. A run limit is not a dollar budget. No workers start.',mutating:false,schema:studioCoordinationGetInput},
  studio_review_policy_get:{capability:'studio.read',description:'Read the exact opt-in planning review policy, remaining reviewer runs and machine review receipts. Machine planning acceptance is distinct from human review, media QC and business or client approval.',mutating:false,schema:studioReviewPolicyGetInput},
  studio_client_deliveries_list:{capability:'studio.read',description:'Read account-bound client package grants and receipt summaries for this project. Distinguishes portal opens, download access issuance and authenticated client acknowledgement. Does not issue file access, send a link, disclose private storage URLs, or impersonate a client.',mutating:false,schema:studioClientDeliveryListInput.extend({projectId:z.string().uuid()}).strict()},
@@ -128,7 +139,7 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
  return transaction(async client=>{
   const context=await authorizeRunTool(client,agent,command.runId,command.leaseToken);await assertRenderFollowupTool(client,context.agent,context.run,name,args);
   if(!context.capabilities.includes(definition.capability))fail(403,'This run does not have permission for this tool.','AGENT_CAPABILITY_REQUIRED');
-  if((['studio.write','studio.execute','studio.review'].includes(definition.capability)||name==='studio_staffing_get')&&!['owner','admin'].includes(context.requesterRole))fail(403,'Studio changes, planning review and staffing require a current owner or administrator request.','STUDIO_REQUESTER_ACCESS');
+  if((['studio.write','studio.execute','studio.review','creative.write'].includes(definition.capability)||name==='studio_staffing_get')&&!['owner','admin'].includes(context.requesterRole))fail(403,'Studio changes, planning review and staffing require a current owner or administrator request.','STUDIO_REQUESTER_ACCESS');
   // All operations on a run are serialized after current authority and lease checks.
   await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`agent-tool:${agent.company_id}:${agent.id}:${command.requestId}`]);
   const previous=(await client.query('SELECT request_hash,response FROM agent_tool_receipts WHERE company_id=$1 AND agent_id=$2 AND request_id=$3',[agent.company_id,agent.id,command.requestId])).rows[0];
@@ -136,6 +147,13 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
   if(definition.mutating&&Number((await client.query('SELECT count(*) FROM agent_tool_receipts WHERE company_id=$1 AND run_id=$2',[agent.company_id,command.runId])).rows[0].count)>=200)fail(409,'This run reached its limit of 200 committed tool actions. Start a new reviewed request.','AGENT_TOOL_BUDGET');
   const run=context.run,companyId=agent.company_id,limit=args.limit||50,values=[companyId,args.after||null,limit+1];let result:unknown;
   switch(name){
+   case 'higgsfield_connection_get':result=await higgsfieldAgentConnection(client,companyId,args.toolName);break;
+   case 'higgsfield_generation_propose':result=await proposeHiggsfieldRequest(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id},{...args,clientId:command.requestId});break;
+   case 'higgsfield_requests_list':result=await higgsfieldAgentRequests(client,companyId,args as any);break;
+   case 'studio_generations_list':{const{projectId,...input}=args;result=await listStudioGenerations(client,companyId,projectId,input);break;}
+   case 'studio_storage_references_list':{const{projectId,...input}=args;result=await listStudioStorageReferences(client,companyId,projectId,input);break;}
+   case 'studio_generation_import':{if(!context.capabilities.includes('studio.write'))fail(403,'Recording task-bound creative observations also requires studio.write.');const{projectId,...input}=args;result=await importStudioGeneration(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id,agentSponsorId:agent.created_by},projectId,{...input,clientId:command.requestId});break;}
+   case 'studio_storage_reference_register':{if(!context.capabilities.includes('infrastructure.read'))fail(403,'Reading and pinning storage metadata also requires infrastructure.read.');const{projectId,...input}=args;result=await registerStudioStorageReference(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id,agentSponsorId:agent.created_by},projectId,{...input,clientId:command.requestId});break;}
    case 'workspace_get':{const row=(await client.query('SELECT id,name,slug,layout FROM companies WHERE id=$1',[companyId])).rows[0];result={company:{id:row.id,name:row.name,slug:row.slug},floor:readFloorPlan(row.layout)};break;}
    case 'layout_get':result=readFloorPlan((await client.query('SELECT layout FROM companies WHERE id=$1',[companyId])).rows[0].layout);break;
    case 'people_list':result=paged((await client.query("SELECT u.id,u.name,u.role_title AS \"roleTitle\",m.role FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.company_id=$1 AND m.role<>'removed' AND ($2::uuid IS NULL OR u.id>$2) ORDER BY u.id LIMIT $3",values)).rows,limit);break;

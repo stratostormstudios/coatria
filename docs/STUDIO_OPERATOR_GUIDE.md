@@ -1,6 +1,8 @@
 # Running an AI production studio in Coatria
 
-The Studio workspace connects a client brief to specialist responsibilities, production tasks, real output evidence, review, a private client delivery portal, and authenticated acceptance. The current renderer is a controlled Blender product-turntable profile. Other VFX applications and client footage need additional approved connectors.
+The current production scope uses Higgsfield for references and generations: **brief → references → generation → review → delivery**. The Studio workspace keeps responsibilities, planning tasks and approvals separate from actual generation jobs and media evidence. Workstation and render-server execution are deferred. Existing Blender projects and execution records remain available under **Generations & references → Advanced / legacy**; they are not Higgsfield jobs.
+
+Heavy footage, EXRs and renders remain on local, NAS or cloud storage. The current connected-drive service indexes a folder's file metadata only, including a cloud folder already mounted by your operator. It does not provide a cloud-object adapter, upload or download media, or grant a generation provider access to originals. Approve each reference or proxy before sending it externally. A provider result URL alone does not prove that the media was archived on your storage or delivered to a client.
 
 ## Set up the company
 
@@ -8,7 +10,9 @@ Open **Production studio → Build an AI team**. Describe your production busine
 
 Select **Include a separate AI planning reviewer** to create a dedicated review identity without installing a plugin manually. It uses one slot within the total team size: a team of three becomes two production specialists plus one reviewer. Review its name, working style, exact `studio.read` and `studio.review` grants, versioned role instructions and model limits before applying. The instructions are saved in its installation; they do not create or access a private skill-vault entry. It starts paused with no producing or human QC role. Return to **Agent hosts** to enroll it separately. Staffing creates no review policy, host or compute, and does not change previously saved plans that omit this option.
 
-StratoStorm's initial team uses three specialists:
+The new staffing draft describes the Higgsfield scope and initially selects only compositing as an existing planning/handoff responsibility. Existing role titles, shared instructions, permissions and saved proposals are preserved. Choosing these responsibilities does not install a Higgsfield connection or certify an automated DCC skill. The reasoning model selected for company agents is separate from the generation service.
+
+StratoStorm's earlier procedural pilot used three specialists; their saved identities have not been renamed or reconfigured by this UI change:
 
 | Specialist | Responsibilities |
 | --- | --- |
@@ -32,7 +36,9 @@ Keep the one-time host credential in the server's private configuration. After t
 
 Choose **New project** and enter the client or internal project name, brief, AI-use policy, shots, exact frame ranges, handles, dimensions, rational frame rate, output format, and color space.
 
-The **Production path** selector defaults to general production for artists or compatible approved connectors. Explicitly select **Controlled Blender turntable pilot** for one lighting shot at frames 1001–1004, no handles, 384 × 384, 24 fps and Linear Rec.709 EXR. This replaces draft shot/specification settings, never the brief or AI-use permission. The review checks dimensions, full frame coverage including handles, aggregate pixels, frame rate, format, color space and discipline against the shipped profile. Unsupported pilot settings must be corrected or moved to the general path. The preset creates fixed original procedural geometry; it does not turn a freeform client brief into custom product footage, approve work or launch a renderer.
+The **Production path** selector defaults to **Higgsfield · generations & references**, with a five-second, 1,920 × 1,080, 24 fps MP4 / Rec.709 planning specification and no handles. These are desired delivery settings, not a claim that every Higgsfield model supports that exact output. Confirm the chosen generation model's supported settings in **Generations & references**. Creating a project creates planning tasks; it does not submit a provider job, archive media, or approve the client's AI-use policy. Existing task stages remain visible and must not be interpreted as automatically connected generation steps.
+
+**Manual production planning** keeps the draft's current custom specification. Selecting either the Higgsfield preset or **Advanced / legacy · Blender turntable preset** replaces draft shot/specification settings, never the brief or AI-use permission. The legacy preset is retained for existing controlled-render workflows: one lighting shot, frames 1001–1004, no handles, 384 × 384, 24 fps, Linear Rec.709 EXR and fixed original procedural geometry. Its existing capability checks remain in place. It does not turn a freeform brief into client footage or start compute, and render-server setup is outside the current production scope.
 
 Coatria prepares existing tasks in dependency order:
 
@@ -63,9 +69,9 @@ The run allowance counts coordinator-created specialist requests across the proj
 
 The coordinator is instructed to stop and report missing inputs or blocked work. The server enforces task dependencies, permissions, and approval gates; these controls do not guarantee an accurate model narrative. Confirm claimed progress against actual tool receipts, persisted task and run states, and independent review rather than accepting the agent's report alone.
 
-## Render and inspect real outputs
+## Advanced / legacy: render execution
 
-For a supported DCC step, connect the controlled renderer and explicitly grant the assigned specialist `studio.execute`. This permits a render proposal, not unrestricted shell execution. In **Render jobs**, a human reviews the exact profile, frame range, specification, and input references before approving execution.
+This section documents the retained controlled-render path, which is deferred for new Higgsfield production. In **Generations & references**, expand **Advanced / legacy — Blender execution** to inspect existing connections and jobs. These controls are separate from Higgsfield. For an operator-approved legacy DCC step, the assigned specialist requires `studio.execute`; a human reviews the exact profile, frame range, specification and input references before execution. This capability does not permit unrestricted shell execution.
 
 The current Blender profile builds original geometry and produces a native scene, EXR frames, a PNG preview, and a hashed manifest. It does not accept arbitrary `.blend` files, scripts, textures, or filmed footage. Its pilot limits are 24 frames, 1,024 pixels per axis, and 8 million aggregate pixels.
 
@@ -85,6 +91,6 @@ The portal issues temporary access only to the included verified files. It recor
 
 The REST contract is published at [Coatria agent OpenAPI](https://coatria.com/api/agent/openapi). A connected harness discovers allowed tools through `/api/agent/tools`. Its tools use the same project state, role assignments, permissions, leases, and approval gates as the interface.
 
-Company structure and task evidence are shared company records. Personal employee skill vaults remain separate. The implemented pilot remains bounded: approved procedural Blender work, a company-allowlisted CPU host preset, private image-sequence delivery, and explicit human final review. It does not establish arbitrary client-footage processing in Nuke/Houdini, unrestricted fleet provisioning, a company-wide dollar ledger, or million-user capacity. Rejected planning work needs a reviewed new producer pass; specialist coordination does not automatically retry uncertain or failed work.
+Company structure and task evidence are shared company records. Personal employee skill vaults remain separate. Current production is scoped to Higgsfield generations and references, with storage-only connected drives. The earlier controlled Blender pilot and private image-sequence portal remain documented as separate capabilities; they do not establish delivery of every generated movie or access to arbitrary connected-drive media. A company reasoning host is distinct from a workstation or render server. Neither this scope nor the earlier pilot certifies unrestricted fleet provisioning, a company-wide dollar ledger or million-user capacity. Rejected planning work needs a reviewed new producer pass; specialist coordination does not automatically retry uncertain or failed work.
 
 Operational detail: [machine planning review](STUDIO_MACHINE_REVIEW.md), [managed CPU hosting](STUDIO_CPU_PROVISIONING.md), [server inference](STUDIO_INFERENCE.md), and [client delivery](STUDIO_CLIENT_DELIVERY.md).

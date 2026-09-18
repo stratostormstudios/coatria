@@ -141,6 +141,7 @@ test('all advertised tool argument constraints are checked before any batch writ
  const {AGENT_TOOLS}=await import('../src/lib/agent-tools');const {z}=await import('zod');
  const options=input('runpod',{maxTotalTokens:100000});
  const catalog=Object.entries(AGENT_TOOLS).map(([name,definition])=>({name,...definition,inputSchema:z.toJSONSchema(definition.schema,{unrepresentable:'any',io:'input'})}));
+ for(const name of['higgsfield_generation_propose','studio_generation_import','studio_storage_reference_register'])assert(catalog.some(tool=>tool.name===name),name);
  options.context.capabilities=[...new Set(catalog.map(item=>item.capability))];options.tools.list=async()=>({tools:catalog}) as any;
  let writes=0;options.tools.call=async()=>{writes++;return {name:'Fixture Company'};};
  const uuid='10000000-0000-4000-8000-000000000992',item={id:'desk',type:'desk',x:25,y:25,w:10,h:10,label:'Desk',rotation:90};
@@ -156,6 +157,9 @@ test('all advertised tool argument constraints are checked before any batch writ
   ['layout_propose',{layout:[{...item,hidden:true}],floor:{width:20,depth:20},revision:0}],
   ['layout_propose',{layout:[item],floor:{width:7,depth:20},revision:0}],
   ['layout_propose',{layout:Array(181).fill(item),floor:{width:20,depth:20},revision:0}],
+  ['higgsfield_generation_propose',{projectId:uuid,projectRevision:1,tool:'generate_image',arguments:{['k'.repeat(121)]:'invalid record key'},note:'Concept'}],
+  ['studio_generation_import',{projectId:uuid,revision:1,providerJobId:uuid,kind:'image',model:'fixture',sourceTool:'generate_image',observedStatus:'pending',observedAt:'2026-02-29T12:00:00Z'}],
+  ['studio_storage_reference_register',{projectId:uuid,revision:1,driveId:uuid,path:'reference.png',expectedBytes:5,expectedModifiedAt:'2026-09-18T12:00:00',name:'Reference'}],
  ];
  for(const[name,args]of invalid){const data=response('runpod');data.choices[0].message.tool_calls=[first,calls(name,args)];
   const execute=createProviderExecutor({settings,fetch:wire('runpod',[data]) as typeof fetch});await assert.rejects(()=>execute(options),/approved schema/,name);assert.equal(writes,0,name);
@@ -165,10 +169,41 @@ test('all advertised tool argument constraints are checked before any batch writ
 });
 
 test('unrecognized schema assertions fail before provider billing instead of being silently ignored',async()=>{
- for(const schema of[{$ref:'https://attacker.invalid/schema'},{type:'object',dependentRequired:{a:['b']}},{type:'object',properties:{a:{type:'string',format:'unrecognized'}}}]){
+ for(const schema of[{$ref:'https://attacker.invalid/schema'},{type:'object',dependentRequired:{a:['b']}},{type:'object',properties:{a:{type:'string',format:'unrecognized'}}},{type:'object',propertyNames:[]},{type:'object',propertyNames:{type:'string',format:'unrecognized'}},{type:'object',propertyNames:{$ref:'https://attacker.invalid/keys'}},{type:'object',propertyName:{type:'string'}}]){
   let billed=0;const options=input();options.tools.list=async()=>({tools:[{...tool,inputSchema:schema}]}) as any;
   const execute=createProviderExecutor({settings,fetch:(async()=>{billed++;return Response.json(response('openai',false));}) as typeof fetch});await assert.rejects(()=>execute(options),/Unsupported/);assert.equal(billed,0);
  }
+});
+
+test('propertyNames validates every own key including declared properties before any batch side effect',async()=>{
+ const options=input('runpod');let writes=0,inferences=0;
+ const record={...second,name:'record_task',inputSchema:{type:'object',properties:{named:{type:'object',propertyNames:{type:'string',minLength:1,maxLength:3,pattern:'^[a-z]+$'},properties:{TOO_LONG:{type:'integer'}},additionalProperties:{type:'integer'}}},required:['named'],additionalProperties:false}};
+ options.tools.list=async()=>({tools:[second,record]}) as any;options.tools.call=async()=>{writes++;return{name:'Fixture Company'};};
+ const batch=(named:Record<string,unknown>)=>{const reply=response('runpod');reply.choices[0].message.tool_calls=[{id:'valid-first',type:'function',function:{name:'tasks_create',arguments:'{}'}},{id:'record',type:'function',function:{name:'record_task',arguments:JSON.stringify({named})}}];return reply;};
+ for(const named of[{'':1},{long:1},{Abc:1},{TOO_LONG:1},{abc:'not an integer'}]){
+  const before=inferences;await assert.rejects(()=>createProviderExecutor({settings,fetch:wire('runpod',[batch(named)],()=>inferences++) as typeof fetch})(options),/approved schema/);
+  assert.equal(writes,0);assert.equal(inferences-before,1,'Invalid generated arguments stop before another inference');
+ }
+ await createProviderExecutor({settings,fetch:wire('runpod',[batch({abc:1,xyz:2}),response('runpod',false)]) as typeof fetch})(options);assert.equal(writes,2);
+ // Boolean schemas and Unicode length use the same JSON Schema semantics as values.
+ for(const [propertyNames,valid,invalid] of [[false,{}, {a:1}],[{type:'string',maxLength:2},{'🎬🎬':1},{'🎬🎬🎬':1}]] as const){
+  options.tools.list=async()=>({tools:[second,{...record,inputSchema:{type:'object',properties:{named:{type:'object',propertyNames,additionalProperties:true}},required:['named'],additionalProperties:false}}]}) as any;
+  const before:number=writes;await assert.rejects(()=>createProviderExecutor({settings,fetch:wire('runpod',[batch(invalid)]) as typeof fetch})(options),/approved schema/);assert.equal(writes,before);
+  await createProviderExecutor({settings,fetch:wire('runpod',[batch(valid),response('runpod',false)]) as typeof fetch})(options);assert.equal(writes,before+2);
+ }
+});
+
+test('zoned ISO date-time format checks calendar, clock and offset without relying on a schema regex',async()=>{
+ const options=input('runpod');let writes=0,inferences=0;
+ const dated={...second,name:'observed_task',inputSchema:{type:'object',properties:{observedAt:{type:'string',format:'date-time'}},required:['observedAt'],additionalProperties:false}};
+ options.tools.list=async()=>({tools:[second,dated]}) as any;options.tools.call=async()=>{writes++;return{name:'Fixture Company'};};
+ const batch=(observedAt:string)=>{const reply=response('runpod');reply.choices[0].message.tool_calls=[{id:'valid-first',type:'function',function:{name:'tasks_create',arguments:'{}'}},{id:'observed',type:'function',function:{name:'observed_task',arguments:JSON.stringify({observedAt})}}];return reply;};
+ for(const value of['2025-02-29T12:00:00Z','1900-02-29T12:00:00Z','2026-04-31T00:00:00+02:00','2026-00-01T00:00:00Z','2026-13-01T00:00:00Z','2026-01-00T00:00:00Z','2026-09-18T24:00:00Z','2026-09-18T12:60:00Z','2026-09-18T12:00:60Z','2026-09-18T12:00:00+24:00','2026-09-18T12:00:00-00:60','2026-09-18T12:00:00+0200','2026-09-18T12:00:00','2026-09-18','2026-09-18 12:00:00Z','2026-09-18T12:00Z','2026-09-18T12:00:00.Z','2026-09-18T12:00:00Z\n',' 2026-09-18T12:00:00Z']){
+  const before=inferences;await assert.rejects(()=>createProviderExecutor({settings,fetch:wire('runpod',[batch(value)],()=>inferences++) as typeof fetch})(options),/approved schema/,value);assert.equal(writes,0,value);assert.equal(inferences-before,1);
+ }
+ const valid=['2024-02-29T23:59:59Z','2000-02-29T00:00:00+14:00','2026-01-01T00:00:00.123456789+02:00','2026-12-31T23:59:59-12:00','0001-01-01T00:00:00Z','2026-09-18T00:00:00+23:59','2026-09-18T12:00:00-00:00'];
+ for(const value of valid)await createProviderExecutor({settings,fetch:wire('runpod',[batch(value),response('runpod',false)]) as typeof fetch})(options);
+ assert.equal(writes,valid.length*2);
 });
 
 test('date-format preflight accepts real calendar dates and rejects an invalid later call before all writes',async()=>{

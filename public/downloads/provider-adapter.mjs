@@ -11,12 +11,17 @@ const PROVIDERS={
 const object=value=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const integer=(value,min,max,name)=>{if(!Number.isSafeInteger(value)||value<min||value>max)throw new Error('Invalid '+name+' limit.');return value;};
 const encoded=(value,limit=1024*1024)=>{let result;try{result=JSON.stringify(value);}catch{throw new Error('Invalid bridge data.');}if(typeof result!=='string'||Buffer.byteLength(result)>limit)throw new Error('Bridge data exceeded its size limit.');return result;};
+const calendarDate=(year,month,day)=>{const days=[31,year%4===0&&(year%100!==0||year%400===0)?29:28,31,30,31,30,31,31,30,31,30,31];return month>=1&&month<=12&&day>=1&&day<=days[month-1];};
+// Match the zoned ISO timestamps emitted by the API schemas. Checking the local
+// calendar fields avoids Date.parse silently normalizing impossible dates or
+// comparing the wrong day after a timezone offset crosses midnight.
+const isoDateTime=value=>{const m=/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/.exec(value);return !!m&&calendarDate(Number(m[1]),Number(m[2]),Number(m[3]))&&Number(m[4])<=23&&Number(m[5])<=59&&Number(m[6])<=59&&(m[7]===undefined||Number(m[7])<=23&&Number(m[8])<=59);};
 // The downloadable bridge has no package dependencies. Compile the JSON Schema
 // vocabulary emitted by Coatria; reject unfamiliar assertions rather than skip
 // them. Server authorization, refinements and revisions remain authoritative.
 function argumentValidator(schema){
  let nodes=0;const annotations=new Set(['$schema','title','description','default','examples','deprecated','readOnly','writeOnly']);
- const keywords=new Set(['type','properties','required','additionalProperties','items','minItems','maxItems','minLength','maxLength','minimum','maximum','exclusiveMinimum','exclusiveMaximum','enum','const','anyOf','allOf','oneOf','pattern','format']);
+ const keywords=new Set(['type','properties','propertyNames','required','additionalProperties','items','minItems','maxItems','minLength','maxLength','minimum','maximum','exclusiveMinimum','exclusiveMaximum','enum','const','anyOf','allOf','oneOf','pattern','format']);
  const primitive=value=>value===null||['string','number','boolean'].includes(typeof value);
  function compile(rule,depth=0){
   if(++nodes>2000||depth>16)throw new Error('Coatria tool schema exceeded its limits.');
@@ -32,13 +37,13 @@ function argumentValidator(schema){
   if(rule.properties!==undefined&&!object(rule.properties))throw new Error('Invalid Coatria tool properties.');
   const properties=new Map(Object.entries(rule.properties||{}).map(([key,child])=>[key,compile(child,depth+1)]));
   if(rule.required!==undefined&&(!Array.isArray(rule.required)||rule.required.some(key=>typeof key!=='string')))throw new Error('Invalid Coatria required arguments.');
-  const required=rule.required||[],additional=rule.additionalProperties===undefined?()=>true:compile(rule.additionalProperties,depth+1);
-  checks.push(value=>!object(value)||(required.every(key=>Object.hasOwn(value,key))&&Object.entries(value).every(([key,item])=>(properties.get(key)||additional)(item))));
+  const required=rule.required||[],additional=rule.additionalProperties===undefined?()=>true:compile(rule.additionalProperties,depth+1),propertyName=rule.propertyNames===undefined?()=>true:compile(rule.propertyNames,depth+1);
+  checks.push(value=>!object(value)||(required.every(key=>Object.hasOwn(value,key))&&Object.entries(value).every(([key,item])=>propertyName(key)&&(properties.get(key)||additional)(item))));
   const item=rule.items===undefined?()=>true:compile(rule.items,depth+1);
   checks.push(value=>!Array.isArray(value)||((rule.minItems===undefined||value.length>=rule.minItems)&&(rule.maxItems===undefined||value.length<=rule.maxItems)&&value.every(item)));
   let pattern;if(rule.pattern!==undefined){if(typeof rule.pattern!=='string'||rule.pattern.length>2048)throw new Error('Invalid Coatria tool pattern.');try{pattern=new RegExp(rule.pattern,'u');}catch{throw new Error('Invalid Coatria tool pattern.');}}
-  if(rule.format!==undefined&&!['uuid','uri','date'].includes(rule.format))throw new Error('Unsupported Coatria tool format.');
-  checks.push(value=>{if(typeof value!=='string')return true;const length=[...value].length;if(rule.minLength!==undefined&&length<rule.minLength||rule.maxLength!==undefined&&length>rule.maxLength||pattern&&!pattern.test(value))return false;if(rule.format==='uuid'&&!/^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/i.test(value))return false;if(rule.format==='uri'){try{new URL(value);}catch{return false;}}if(rule.format==='date'){if(!/^\d{4}-\d{2}-\d{2}$/.test(value))return false;const date=new Date(value+'T00:00:00.000Z');if(!Number.isFinite(date.getTime())||date.toISOString().slice(0,10)!==value)return false;}return true;});
+  if(rule.format!==undefined&&!['uuid','uri','date','date-time'].includes(rule.format))throw new Error('Unsupported Coatria tool format.');
+  checks.push(value=>{if(typeof value!=='string')return true;const length=[...value].length;if(rule.minLength!==undefined&&length<rule.minLength||rule.maxLength!==undefined&&length>rule.maxLength||pattern&&!pattern.test(value))return false;if(rule.format==='uuid'&&!/^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/i.test(value))return false;if(rule.format==='uri'){try{new URL(value);}catch{return false;}}if(rule.format==='date'){if(!/^\d{4}-\d{2}-\d{2}$/.test(value))return false;const date=new Date(value+'T00:00:00.000Z');if(!Number.isFinite(date.getTime())||date.toISOString().slice(0,10)!==value)return false;}if(rule.format==='date-time'&&!isoDateTime(value))return false;return true;});
   checks.push(value=>typeof value!=='number'||((rule.minimum===undefined||value>=rule.minimum)&&(rule.maximum===undefined||value<=rule.maximum)&&(rule.exclusiveMinimum===undefined||value>rule.exclusiveMinimum)&&(rule.exclusiveMaximum===undefined||value<rule.exclusiveMaximum)));
   return value=>checks.every(check=>check(value));
  }

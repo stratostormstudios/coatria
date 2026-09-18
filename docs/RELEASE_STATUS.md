@@ -1,10 +1,20 @@
+# Higgsfield production update — v1.7 candidate
+
+The current product direction is the official Higgsfield MCP plugin for creative generation and references. Workstation and render-server expansion is deferred. Heavy originals stay on company storage; the current drive connector and new project pointers are metadata-only. See [Higgsfield production](HIGGSFIELD_PRODUCTION.md) for the implementation and remaining acceptance requirements.
+
+Public OAuth discovery and public PKCE client registration have been verified against Higgsfield. Account consent, authenticated catalog discovery and a real generation are still pending. This source record is not evidence of production deployment; release output records track that separately.
+
+The earlier v1.6 implementation is live at source f0a56fe; its application, 50-session test and Linux renderer CI passed. No Runpod rendering or inference is started by this scope change.
+
+---
+
 # Coatria — Studio readiness and historical release evidence
 
-## Current Studio implementation · v1.6
+## Historical Studio implementation · v1.6
 
 The repository now implements reviewed studio organization and staffing, dependency-aware project work, a separate opt-in planning reviewer, bounded coordination, managed CPU sessions, server-owned inference, controlled Blender execution, private-media verification and account-bound client delivery. The v1.6 increment adds the reviewed planning-reviewer staffing option, an explicit supported procedural-pilot project preset, and a scoped continuation after a verified, human-promoted render. These are bounded workflow capabilities, not evidence of an unattended VFX business or completed client production.
 
-The last verified live release recorded for this update is **v1.5, source `da87026`**. Its [CI run 35301982436](https://github.com/stratostormstudios/coatria/actions/runs/35301982436) passed 533 tests with four explicit skips on PostgreSQL 17.11, plus the 17-check deterministic agent fixture. The isolated 50-session office check completed 6,959 requests with zero unexpected errors and p95 69.76 ms; it did not test fifty concurrent model workers. Current deployment and migration outcomes belong to the operator's release record. New v1.6 source or passing local checks do not certify a v1.6 production deployment.
+The earlier v1.5 baseline was **source `da87026`**. Its [CI run 35301982436](https://github.com/stratostormstudios/coatria/actions/runs/35301982436) passed 533 tests with four explicit skips on PostgreSQL 17.11, plus the 17-check deterministic agent fixture. The isolated 50-session office check completed 6,959 requests with zero unexpected errors and p95 69.76 ms; it did not test fifty concurrent model workers. Current deployment and migration outcomes belong to the operator's release record. New v1.6 source or passing local checks do not certify a v1.6 production deployment.
 
 **Current compute state:** the operator reports the pilot CPU and GPUs stopped. No historical worker count or minimum-worker setting below describes current running compute. Retained storage charges and delayed provider billing remain separate.
 

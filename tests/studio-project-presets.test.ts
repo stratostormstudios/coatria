@@ -1,9 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {proceduralTurntablePreset,proceduralTurntableFit} from '../src/lib/studio-project-presets';
+import {higgsfieldProjectPreset,HIGGSFIELD_PRODUCTION_STEPS,proceduralTurntablePreset,proceduralTurntableFit} from '../src/lib/studio-project-presets';
 import {studioProjectInput} from '../src/lib/studio-protocol';
 import {executionSubmitInput,EXECUTION_BUILTIN_PROFILES} from '../src/lib/studio-execution-protocol';
+
+test('Higgsfield planning defaults use the existing movie contract without authorizing generation or inventing a provider job',()=>{
+ const preset=higgsfieldProjectPreset();const project=studioProjectInput.parse({clientId:randomUUID(),name:'AI concept',clientName:'Internal',brief:'Develop a concept from approved references and retain originals on connected storage.',aiPolicy:'unknown',...preset});
+ assert.equal(project.spec.format,'mp4');assert.equal(project.spec.colorSpace,'Rec.709');assert.equal((project.shots[0].frameEnd-project.shots[0].frameStart+1)*project.spec.fpsDenominator/project.spec.fpsNumerator,5);assert.equal(project.shots[0].handles,0);assert.equal(project.aiPolicy,'unknown');
+ assert.deepEqual(HIGGSFIELD_PRODUCTION_STEPS,['Brief','References','Generation','Review','Delivery']);
+ for(const authority of ['gates','execution','provider','model','generationId','productionMode'])assert.equal(authority in project,false,authority);
+ assert.equal(proceduralTurntableFit(project.spec,project.shots).supported,false);
+ const separate=higgsfieldProjectPreset();preset.shots[0].handles=8;preset.spec.width=384;assert.equal(separate.shots[0].handles,0);assert.equal(separate.spec.width,1920);
+});
 
 test('explicit procedural preset fits actual project and controlled execution contracts without approving work',()=>{
  const preset=proceduralTurntablePreset(),fit=proceduralTurntableFit(preset.spec,preset.shots);assert.equal(fit.supported,true);assert.deepEqual(fit.reasons,[]);

@@ -31,6 +31,11 @@ GRANT UPDATE(status,revision,revoked_at) ON studio_client_deliveries TO coatria_
 GRANT UPDATE(status) ON studio_deliveries TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON studio_inference_jobs,studio_inference_reservations,studio_inference_tool_receipts TO coatria_runtime_v1;
 GRANT UPDATE(status,provider_job_id,submitted_at,cancel_requested_at,cancel_request_id,output,model_calls,used_tokens,error_code,poll_lease_id,poll_lease_expires_at,last_reconciled_at,updated_at) ON studio_inference_jobs TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON studio_generations,studio_generation_receipts,studio_storage_references,studio_creative_requests TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON higgsfield_oauth_attempts,higgsfield_connections,higgsfield_requests TO coatria_runtime_v1;
+GRANT UPDATE(consumed_at) ON higgsfield_oauth_attempts TO coatria_runtime_v1;
+GRANT UPDATE(id,revision,status,connected_by,sealed,expires_at,tools,connected_at,updated_at) ON higgsfield_connections TO coatria_runtime_v1;
+GRANT UPDATE(status,approved_by,dispatched_at,result,error_code,updated_at) ON higgsfield_requests TO coatria_runtime_v1;
 GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO coatria_runtime_v1;
 ALTER ROLE coatria_runtime_v1 SET statement_timeout='15s';
 ALTER ROLE coatria_runtime_v1 SET idle_in_transaction_session_timeout='20s';
