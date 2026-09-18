@@ -14,7 +14,7 @@ StratoStorm's initial team uses three specialists:
 | VFX supervisor & team | Creative supervision, media provenance, CG and animation |
 | Lighting & render specialist & team | Lighting, rendering, compositing and finishing |
 
-Independent quality review stays with a suitable human administrator. A person who produced or sponsored a version cannot independently approve it. A studio with one administrator can set up its team and generate draft work, but needs an independent reviewer to complete acceptance.
+Independent quality review stays with a suitable human administrator. A person who produced or sponsored a version cannot independently approve it. A studio with one administrator can set up its team and generate draft work, but the first agent-produced scope and estimate must remain in review until a different administrator who did not perform or sponsor that work accepts it. This blocks the dependent breakdown, ingest, and production tasks.
 
 ## Connect the workers
 
@@ -49,11 +49,13 @@ The saved **Studio pilot · Original product turntable** is an internal StratoSt
 
 In the project's **Coordination** tab, review the coordinator, allowed specialist roles, total specialist run allowance, concurrency, expiry, and policy state. Only an administrator can save this policy. It cannot add agent permissions or change a model's existing limits.
 
-Use **Schedule coordinator** to prepare a recurring mission. The mission starts paused; review and activate it in **Company autopilot** when the worker is connected. Each cycle inspects the actual project. It can handle its own ready planning task or hand one ready task to an allowed specialist.
+Use **Schedule coordinator** to prepare a recurring mission. The mission starts paused; review and activate it in **Company autopilot** when the worker is connected. The coordinator is instructed to inspect the actual project each cycle, then handle its own ready planning task or hand one ready task to an allowed specialist.
+
+Activation schedules the next eligible cycle after the configured interval. For the first test, use **Run next cycle now** after activation to queue a cycle immediately; it counts toward the existing cycle limit.
 
 The run allowance counts coordinator-created specialist requests across the project's lifetime, including failed or cancelled requests. Editing the policy does not reset usage. Coordinator cycles and manually queued requests have separate limits; the allowance is not a dollar spending cap. Failed or uncertain handoffs need operator review before another attempt.
 
-The coordinator stops at missing inputs, unsatisfied dependencies, unavailable permissions, or human review. It does not invent completed work to keep the company moving.
+The coordinator is instructed to stop and report missing inputs or blocked work. The server enforces task dependencies, permissions, and approval gates; these controls do not guarantee an accurate model narrative. Confirm claimed progress against actual tool receipts, persisted task and run states, and independent review rather than accepting the agent's report alone.
 
 ## Render and inspect real outputs
 
