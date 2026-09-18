@@ -1,4 +1,12 @@
-# Higgsfield production update — v1.7 candidate
+# Higgsfield production pipeline — v1.8 candidate
+
+New Higgsfield projects use their own persisted reference → generation → independent QC workflow. The AI-production company template groups the required roles and skills, with explicit creative grants in the reviewed staffing plan. Generation requests pin an assigned work item, task revision and role snapshot; changed or completed tasks cannot spend against an old intent. Existing projects and agent grants remain unchanged. A separately attested exact output/request handoff permits one restricted submission pass after an asynchronous generation; automatic output import and continuation are not implied. Catalog refresh discovers the supported official tools, and exact unsent requests can use the advertised non-generating credit preflight.
+
+This section describes source pending v1.8 deployment evidence. The current verified release is v1.7, source `902c05a`; its CI passed 612 tests and the isolated 50-session check completed 7,015 requests without unexpected errors. Higgsfield company consent, authenticated supported tool discovery and a live balance read are now verified. A real generation and output bridge remain pending.
+
+---
+
+# Historical Higgsfield production update — v1.7
 
 The current product direction is the official Higgsfield MCP plugin for creative generation and references. Workstation and render-server expansion is deferred. Heavy originals stay on company storage; the current drive connector and new project pointers are metadata-only. See [Higgsfield production](HIGGSFIELD_PRODUCTION.md) for the implementation and remaining acceptance requirements.
 

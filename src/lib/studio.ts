@@ -4,11 +4,13 @@ import {z} from 'zod';
 import {requireMembership,type Membership} from './auth';
 import {memberMutation} from './company';
 import {body,fail,id,json} from './security';
-import {STUDIO_TEMPLATES,STUDIO_SKILLS,STUDIO_DISCIPLINES,studioSetupInput,studioProjectInput,studioProjectPatchInput,studioDispatchInput,studioArtifactInput,studioGateInput,studioReviewInput,studioDeliveryInput,type StudioProject,type StudioRole,type StudioWorkItem,type StudioProjectDetail,type StudioSnapshot} from './studio-protocol';
+import {STUDIO_TEMPLATES,STUDIO_SKILLS,STUDIO_DISCIPLINES,getStudioTemplate,studioSetupInput,studioProjectInput,studioProjectPatchInput,studioDispatchInput,studioArtifactInput,studioGateInput,studioReviewInput,studioDeliveryInput,type StudioProject,type StudioRole,type StudioWorkItem,type StudioProjectDetail,type StudioSnapshot} from './studio-protocol';
 import {createAgentRunInTransaction} from './agent-runs';
+import {studioCreativeFollowupSnapshot,dispatchStudioCreativeFollowup} from './studio-creative-followup';
+import {studioCreativeFollowupInput} from './studio-creative-followup-protocol';
 
 export type StudioActor={companyId:string;userId:string;agentId?:string;runId?:string;agentSponsorId?:string};
-const projectColumns=`id,name,client_name AS "clientName",brief,due_date::text AS "dueDate",spec,ai_policy AS "aiPolicy",revision,status,gates,created_at AS "createdAt",updated_at AS "updatedAt"`;
+const projectColumns=`id,name,client_name AS "clientName",brief,production_path AS "productionPath",due_date::text AS "dueDate",spec,ai_policy AS "aiPolicy",revision,status,gates,created_at AS "createdAt",updated_at AS "updatedAt"`;
 const parse=<T>(schema:z.ZodType<T>,input:unknown):T=>{const result=schema.safeParse(input);if(!result.success)fail(400,result.error.issues.map(i=>i.message).join(' '));return result.data;};
 function canonical(v:unknown):string{return Array.isArray(v)?'['+v.map(canonical).join(',')+']':v&&typeof v==='object'?'{'+Object.entries(v).sort(([a],[b])=>a.localeCompare(b)).map(([k,w])=>JSON.stringify(k)+':'+canonical(w)).join(',')+'}':JSON.stringify(v);}
 async function requestOnce<T>(client:PoolClient,actor:StudioActor,clientId:string,operation:string,data:unknown,run:()=>Promise<T>):Promise<T&{replayed:boolean}>{
@@ -24,9 +26,12 @@ async function lockedProject(client:PoolClient,companyId:string,projectId:string
  if(!p)fail(404,'Studio project not found.');if(revision!==undefined&&p.revision!==revision)fail(409,'The project changed. Refresh before continuing.','STUDIO_REVISION_CONFLICT');return p;
 }
 async function bump(client:PoolClient,companyId:string,projectId:string){return (await client.query(`UPDATE studio_projects SET revision=revision+1,updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2 RETURNING ${projectColumns}`,[companyId,projectId])).rows[0] as StudioProject;}
-async function studioRoles(client:PoolClient,companyId:string):Promise<StudioRole[]>{
+async function studioRoles(client:PoolClient,companyId:string,productionPath?:StudioProject['productionPath']):Promise<StudioRole[]>{
+ const profile=(await client.query('SELECT template_id FROM studio_profiles WHERE company_id=$1',[companyId])).rows[0],companyTemplate=profile?getStudioTemplate(profile.template_id):undefined;
+ if(!companyTemplate)fail(409,'Apply a supported studio template before accessing its role structure.','STUDIO_SETUP_REQUIRED');
+ const template=productionPath==='higgsfield'?getStudioTemplate('ai-production')!:companyTemplate;
  const rows=(await client.query(`SELECT b.role_key,b.agent_id,b.human_id,a.name AS agent_name,u.name AS human_name,CASE WHEN a.id IS NULL THEN NULL WHEN a.status<>'active' THEN a.status WHEN a.expires_at<=clock_timestamp() THEN 'expired' WHEN a.last_seen_at>clock_timestamp()-interval '2 minutes' THEN 'recent_contact' ELSE 'not_connected' END AS connection_state FROM studio_role_bindings b LEFT JOIN agents a ON a.company_id=b.company_id AND a.id=b.agent_id LEFT JOIN users u ON u.id=b.human_id WHERE b.company_id=$1`,[companyId])).rows;
- return STUDIO_TEMPLATES[0].roles.map(role=>{const row=rows.find(r=>r.role_key===role.key);return {...role,skills:[...role.skills],agentId:row?.agent_id??null,humanId:row?.human_id??null,agentName:row?.agent_name,humanName:row?.human_name,connectionState:row?.connection_state};});
+ return template.roles.map(role=>{const row=rows.find(r=>r.role_key===role.key);return {...role,skills:[...role.skills],agentId:row?.agent_id??null,humanId:row?.human_id??null,agentName:row?.agent_name,humanName:row?.human_name,connectionState:row?.connection_state};});
 }
 export async function studioSnapshot(client:PoolClient,companyId:string,after?:string,limit=50):Promise<StudioSnapshot>{
  if(after&&!(await client.query('SELECT id FROM studio_projects WHERE company_id=$1 AND id=$2',[companyId,after])).rowCount)fail(404,'Studio cursor not found.');
@@ -35,10 +40,11 @@ export async function studioSnapshot(client:PoolClient,companyId:string,after?:s
  return {templates:STUDIO_TEMPLATES,skills:STUDIO_SKILLS,profile:p?{templateId:p.templateId,revision:p.revision,roles:await studioRoles(client,companyId)}:null,projects:projects.slice(0,limit),hasMore:projects.length>limit,nextAfter:projects.length>limit?projects[limit-1].id:null};
 }
 export async function setupStudio(client:PoolClient,actor:StudioActor,input:unknown){
- if(actor.agentId)fail(403,'An administrator must apply the company structure.');const data=parse(studioSetupInput,input);
+ if(actor.agentId)fail(403,'An administrator must apply the company structure.');const data=parse(studioSetupInput,input),template=getStudioTemplate(data.templateId)!;
  return requestOnce(client,actor,data.clientId,'setup',data,async()=>{
   await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`studio-profile:${actor.companyId}`]);
-  const current=(await client.query('SELECT revision FROM studio_profiles WHERE company_id=$1 FOR UPDATE',[actor.companyId])).rows[0];if((current?.revision??0)!==data.revision)fail(409,'The studio structure changed. Refresh before applying.','STUDIO_REVISION_CONFLICT');
+  const current=(await client.query('SELECT revision,template_id FROM studio_profiles WHERE company_id=$1 FOR UPDATE',[actor.companyId])).rows[0];if((current?.revision??0)!==data.revision)fail(409,'The studio structure changed. Refresh before applying.','STUDIO_REVISION_CONFLICT');
+  if(current&&current.template_id!==data.templateId&&(await client.query('SELECT id FROM studio_projects WHERE company_id=$1 LIMIT 1',[actor.companyId])).rowCount)fail(409,'Existing projects retain their company role structure. Create a separate studio to change its template.','STUDIO_TEMPLATE_IN_USE');
   // Role changes serialize with every studio authority check. No project/run
   // locks follow here; active work must be cancelled and reconciled separately.
   const previous=(await client.query('SELECT role_key,agent_id,human_id FROM studio_role_bindings WHERE company_id=$1 ORDER BY role_key FOR UPDATE',[actor.companyId])).rows;
@@ -48,25 +54,30 @@ export async function setupStudio(client:PoolClient,actor:StudioActor,input:unkn
    if((await client.query("SELECT w.id FROM studio_work_items w JOIN tasks t ON t.company_id=w.company_id AND t.id=w.task_id WHERE w.company_id=$1 AND w.role_key=$2 AND (EXISTS(SELECT 1 FROM studio_dispatches d JOIN agent_runs r ON r.company_id=d.company_id AND r.id=d.run_id WHERE d.company_id=w.company_id AND d.work_item_id=w.id AND r.status IN ('queued','running')) OR EXISTS(SELECT 1 FROM agent_runs r WHERE r.company_id=t.company_id AND r.id=t.agent_run_id AND r.status IN ('queued','running'))) LIMIT 1",[actor.companyId,old.role_key])).rowCount)fail(409,'Cancel active requests and reconcile their tasks before changing this role assignment.','STUDIO_ROLE_BUSY');
   }
   for(const binding of data.assignments){
-   if(!STUDIO_TEMPLATES[0].roles.some(r=>r.key===binding.roleKey))fail(400,'Unknown studio role.');
+   if(!template.roles.some(r=>r.key===binding.roleKey))fail(400,'Unknown studio role.');
    if(binding.agentId&&!(await client.query("SELECT id FROM agents WHERE company_id=$1 AND id=$2 AND status<>'revoked'",[actor.companyId,binding.agentId])).rowCount)fail(400,'Choose an agent in this company.');
    if(binding.humanId&&!(await client.query("SELECT user_id FROM memberships WHERE company_id=$1 AND user_id=$2 AND role<>'removed'",[actor.companyId,binding.humanId])).rowCount)fail(400,'Choose a current company member.');
   }
   await client.query('INSERT INTO studio_profiles(company_id,template_id,template_version,created_by) VALUES($1,$2,$3,$4) ON CONFLICT(company_id) DO UPDATE SET template_id=EXCLUDED.template_id,template_version=EXCLUDED.template_version,revision=studio_profiles.revision+1,updated_at=clock_timestamp()',[actor.companyId,data.templateId,data.templateVersion,actor.userId]);
   // Explicit complete assignment snapshot; omitted roles are unassigned, not invented workers.
-  for(const role of STUDIO_TEMPLATES[0].roles){const b=data.assignments.find(a=>a.roleKey===role.key);await client.query('INSERT INTO studio_role_bindings(company_id,role_key,agent_id,human_id) VALUES($1,$2,$3,$4) ON CONFLICT(company_id,role_key) DO UPDATE SET agent_id=EXCLUDED.agent_id,human_id=EXCLUDED.human_id',[actor.companyId,role.key,b?.agentId??null,b?.humanId??null]);}
-  await activity(client,actor,'studio.configured','The VFX studio structure and role assignments were configured.');return {profile:(await studioSnapshot(client,actor.companyId)).profile};
+  for(const old of previous.filter(row=>!template.roles.some(role=>role.key===row.role_key)))await client.query('UPDATE studio_role_bindings SET agent_id=NULL,human_id=NULL WHERE company_id=$1 AND role_key=$2',[actor.companyId,old.role_key]);
+  for(const role of template.roles){const b=data.assignments.find(a=>a.roleKey===role.key);await client.query('INSERT INTO studio_role_bindings(company_id,role_key,agent_id,human_id) VALUES($1,$2,$3,$4) ON CONFLICT(company_id,role_key) DO UPDATE SET agent_id=EXCLUDED.agent_id,human_id=EXCLUDED.human_id',[actor.companyId,role.key,b?.agentId??null,b?.humanId??null]);}
+  await activity(client,actor,'studio.configured',`The ${template.name} structure and role assignments were configured.`);return {profile:(await studioSnapshot(client,actor.companyId)).profile};
  });
 }
 export async function createStudioProject(client:PoolClient,actor:StudioActor,input:unknown){
  const data=parse(studioProjectInput,input);
- return requestOnce(client,actor,data.clientId,'project',data,async()=>{
-  if(!(await client.query('SELECT company_id FROM studio_profiles WHERE company_id=$1 FOR UPDATE',[actor.companyId])).rowCount)fail(409,'Apply a studio structure before planning a project.','STUDIO_SETUP_REQUIRED');
+ const {productionPath,...legacyRequest}=data;
+ const result=await requestOnce(client,actor,data.clientId,'project',productionPath==='vfx'?legacyRequest:data,async()=>{
+  const profile=(await client.query('SELECT template_id FROM studio_profiles WHERE company_id=$1 FOR UPDATE',[actor.companyId])).rows[0],template=profile?getStudioTemplate(profile.template_id):undefined;
+  if(!template)fail(409,'Apply a studio structure before planning a project.','STUDIO_SETUP_REQUIRED');
   if(Number((await client.query('SELECT count(*) FROM studio_projects WHERE company_id=$1',[actor.companyId])).rows[0].count)>=200)fail(409,'This workspace has reached its 200-project pilot limit.');
-  const p=(await client.query(`INSERT INTO studio_projects(company_id,name,client_name,brief,due_date,spec,ai_policy,created_by,created_agent_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING ${projectColumns}`,[actor.companyId,data.name,data.clientName,data.brief,data.dueDate,JSON.stringify(data.spec),data.aiPolicy,actor.userId,actor.agentId??null])).rows[0] as StudioProject;
+  const p=(await client.query(`INSERT INTO studio_projects(company_id,name,client_name,brief,due_date,spec,ai_policy,created_by,created_agent_id,production_path) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING ${projectColumns}`,[actor.companyId,data.name,data.clientName,data.brief,data.dueDate,JSON.stringify(data.spec),data.aiPolicy,actor.userId,actor.agentId??null,data.productionPath])).rows[0] as StudioProject;
   const add=async(key:string,title:string,stage:string,roleKey:string,execution:string,shotId:string|null,deps:string[])=>{
-   const skillKeys=STUDIO_TEMPLATES[0].roles.find(r=>r.key===roleKey)?.skills??[];
-   const description=`Studio project ${p.name}. Role: ${roleKey}. Stage: ${stage}. Skills: ${skillKeys.join(', ')}. Read studio_get for current brief, dependencies and skill instructions. ${execution==='dcc'?'Requires an artist or approved DCC connector and an actual versioned media artifact. A written report is not rendered media.':execution==='human'?'Requires a human production/review handoff.':'Prepare a reviewable production contribution.'} Never bypass project gates or accept your own work.`;
+   if(!template.roles.some(r=>r.key===roleKey))fail(409,'This company template does not include a required project role. Choose a compatible project path.','STUDIO_TEMPLATE_ROLE_REQUIRED');
+   const role=(p.productionPath==='higgsfield'?getStudioTemplate('ai-production')!:template).roles.find(r=>r.key===roleKey)!;
+   const skillKeys=[...new Set([...role.skills,...(stage==='references'?['creative-references']:execution==='creative'?['higgsfield-production']:[])])];
+   const description=`Studio project ${p.name}. Production path: ${p.productionPath}. Role: ${roleKey}. Stage: ${stage}. Skills: ${skillKeys.join(', ')}. Read studio_get for current brief, dependencies and skill instructions. ${execution==='dcc'?'Requires an artist or approved DCC connector and an actual versioned media artifact. A written report is not rendered media.':execution==='creative'?'Use the official company Higgsfield connection to prepare an exact task-bound generation request for administrator credit approval. Requires actual versioned media before submission; a generation observation or text report is insufficient. No DCC or shell execution.':execution==='human'?'Requires a human production/review handoff.':stage==='references'?'Prepare approved reference identities, rights, intended use and explicit missing-input notes. Indexed paths do not provide bytes or upload references.':'Prepare a reviewable production contribution.'} Never bypass project gates or accept your own work.`;
    const task=(await client.query('INSERT INTO tasks(company_id,title,description,created_by,created_agent_id) VALUES($1,$2,$3,$4,$5) RETURNING id',[actor.companyId,title,description,actor.userId,actor.agentId??null])).rows[0];
    if(actor.agentId)await client.query('INSERT INTO task_authors(task_id,user_id) SELECT $1,unnest($2::uuid[]) ON CONFLICT DO NOTHING',[task.id,[...new Set([actor.userId,actor.agentSponsorId??actor.userId])]]);
    const w=(await client.query('INSERT INTO studio_work_items(company_id,project_id,shot_id,logical_key,task_id,stage,role_key,execution) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',[actor.companyId,p.id,shotId,key,task.id,stage,roleKey,execution])).rows[0];
@@ -77,13 +88,22 @@ export async function createStudioProject(client:PoolClient,actor:StudioActor,in
   const roleFor:Record<string,string>={prep:'prep',matchmove:'prep',layout:'cg',animation:'cg',fx:'fx',lighting:'lighting',compositing:'comp'};
   for(const shot of data.shots){
    const s=(await client.query('INSERT INTO studio_shots(company_id,project_id,code,description,frame_start,frame_end,handles,disciplines) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',[actor.companyId,p.id,shot.code,shot.description,shot.frameStart,shot.frameEnd,shot.handles,JSON.stringify(shot.disciplines)])).rows[0];
-   let previous=await add(`${shot.code}:ingest`,`${shot.code} · Media ingest`,'ingest','ingest','human',s.id,[breakdown]);
-   for(const discipline of STUDIO_DISCIPLINES.filter(d=>shot.disciplines.includes(d)))previous=await add(`${shot.code}:${discipline}`,`${shot.code} · ${discipline}`,discipline,roleFor[discipline],'dcc',s.id,[previous]);
+   let previous:string;
+   if(p.productionPath==='higgsfield'){
+    previous=await add(`${shot.code}:references`,`${shot.code} · References & provenance`,'references','ingest','agent',s.id,[breakdown]);
+    previous=await add(`${shot.code}:generation`,`${shot.code} · Higgsfield generation`,'generation','comp','creative',s.id,[previous]);
+   }else{
+    previous=await add(`${shot.code}:ingest`,`${shot.code} · Media ingest`,'ingest','ingest','human',s.id,[breakdown]);
+    for(const discipline of STUDIO_DISCIPLINES.filter(d=>shot.disciplines.includes(d)))previous=await add(`${shot.code}:${discipline}`,`${shot.code} · ${discipline}`,discipline,roleFor[discipline],'dcc',s.id,[previous]);
+   }
    finals.push(await add(`${shot.code}:qc`,`${shot.code} · Independent shot QC`,'qc','qc','human',s.id,[previous]));
   }
   await add('delivery',`${p.name} · Package & delivery handoff`,'delivery','delivery','human',null,finals);
   await activity(client,actor,'studio.project_planned',`A studio project was planned with ${data.shots.length} shots and explicit production dependencies.`);return {project:p};
  });
+ // Historical idempotency receipts predate this field; keep their committed
+ // project identity while projecting the same backward-compatible VFX path.
+ return {...result,project:{...result.project,productionPath:result.project.productionPath??'vfx'}};
 }
 async function workItems(client:PoolClient,companyId:string,project:StudioProject):Promise<StudioWorkItem[]>{
  await client.query('SELECT role_key FROM studio_role_bindings WHERE company_id=$1 ORDER BY role_key FOR SHARE',[companyId]);
@@ -93,6 +113,7 @@ async function workItems(client:PoolClient,companyId:string,project:StudioProjec
   let blockedReason:string|null=null;if(project.gates.brief?.decision!=='approved')blockedReason='Client brief approval is required.';
   else if(!['estimate','breakdown'].includes(w.stage)&&project.gates.production?.decision!=='approved')blockedReason='Production authorization is required.';
   else if(w.dependencies.some((dep:string)=>statuses.get(dep)!=='done'))blockedReason='An upstream task still needs independent acceptance.';
+  else if(w.execution==='creative'&&project.aiPolicy!=='allowed')blockedReason='Higgsfield generation requires the client AI-use policy to allow AI media production.';
   else if(project.aiPolicy==='restricted'&&w.execution==='dcc'&&w.agentId)blockedReason='AI use is restricted. Assign an authorized human for media work.';
   return {...w,readiness:w.status==='done'?'accepted':w.status==='review'?'review':blockedReason?'blocked':w.runStatus==='queued'?'queued':w.status==='doing'||w.runStatus==='running'?'running':'ready',blockedReason} as StudioWorkItem;
  });
@@ -103,14 +124,20 @@ export async function studioProjectDetail(client:PoolClient,companyId:string,pro
  const artifacts=(await client.query(`SELECT a.id,a.work_item_id AS "workItemId",a.name,a.version,a.url,a.sha256,a.metadata,a.produced_by AS "producedBy",a.produced_agent_id AS "producedAgentId",a.created_at AS "createdAt",COALESCE((SELECT r.decision FROM studio_reviews r WHERE r.company_id=a.company_id AND r.project_id=a.project_id AND r.artifact_id=a.id ORDER BY r.created_at DESC,r.id DESC LIMIT 1),'pending') AS "reviewStatus" FROM studio_artifacts a WHERE a.company_id=$1 AND a.project_id=$2 ORDER BY a.created_at DESC,a.id DESC LIMIT 1000`,[companyId,projectId])).rows.map(a=>{const {metadata,...rest}=a;return {...rest,...metadata};});
  const reviews=(await client.query('SELECT id,artifact_id AS "artifactId",decision,note,technical_qc AS "technicalQc",reviewed_by AS "reviewedBy",created_at AS "createdAt" FROM studio_reviews WHERE company_id=$1 AND project_id=$2 ORDER BY created_at DESC,id DESC LIMIT 1000',[companyId,projectId])).rows;
  const deliveries=(await client.query('SELECT id,name,status,manifest,note,created_at AS "createdAt" FROM studio_deliveries WHERE company_id=$1 AND project_id=$2 ORDER BY created_at DESC,id DESC LIMIT 100',[companyId,projectId])).rows;
- return {project,shots,workItems:await workItems(client,companyId,project),artifacts,reviews,deliveries,roles:await studioRoles(client,companyId),skills:STUDIO_SKILLS} as StudioProjectDetail;
+ const roles=await studioRoles(client,companyId,project.productionPath),skillKeys=new Set(roles.flatMap(role=>role.skills));
+ return {project,shots,workItems:await workItems(client,companyId,project),artifacts,reviews,deliveries,roles,skills:STUDIO_SKILLS.filter(skill=>skillKeys.has(skill.key))} as StudioProjectDetail;
 }
 export async function registerStudioArtifact(client:PoolClient,actor:StudioActor,projectId:string,input:unknown){
  const data=parse(studioArtifactInput,input);return requestOnce(client,actor,data.clientId,'artifact:'+projectId,data,async()=>{
   const project=await lockedProject(client,actor.companyId,projectId,data.revision);if(project.status==='delivered')fail(409,'Delivered projects are immutable. Create follow-up work.');
-  const work=(await workItems(client,actor.companyId,project)).find(w=>w.id===data.workItemId);if(!work)fail(404,'Work item not found.');if(work.execution!=='dcc')fail(400,'Register media against a VFX or CG production work item.');
+  const work=(await workItems(client,actor.companyId,project)).find(w=>w.id===data.workItemId);if(!work)fail(404,'Work item not found.');if(!['dcc','creative'].includes(work.execution))fail(400,'Register media against a VFX, CG or creative generation work item.');
   if(work.status==='done')fail(409,'Accepted work is immutable. Create follow-up work for a new version.');if(work.blockedReason)fail(409,work.blockedReason,'STUDIO_WORK_BLOCKED');
-  if(actor.agentId){if(project.aiPolicy!=='allowed')fail(403,'This project does not authorize agent processing of media.','STUDIO_AI_RESTRICTED');if(work.agentId!==actor.agentId)fail(403,'Only the assigned specialist may register this media artifact.');const t=(await client.query('SELECT agent_run_id FROM tasks WHERE company_id=$1 AND id=$2 FOR UPDATE',[actor.companyId,work.taskId])).rows[0];if(t.agent_run_id!==actor.runId)fail(403,'Reserve the production task for this run first.');}
+  if(actor.agentId){if(project.aiPolicy!=='allowed')fail(403,'This project does not authorize agent processing of media.','STUDIO_AI_RESTRICTED');if(work.agentId!==actor.agentId)fail(403,'Only the assigned specialist may register this media artifact.');const t=(await client.query('SELECT agent_run_id FROM tasks WHERE company_id=$1 AND id=$2 FOR UPDATE',[actor.companyId,work.taskId])).rows[0];if(t.agent_run_id!==actor.runId)fail(403,'Reserve the production task for this run first.');
+   if(work.execution==='creative'){
+    const authority=(await client.query('SELECT a.capabilities AS agent_capabilities,r.capabilities AS run_capabilities FROM agents a JOIN agent_runs r ON r.company_id=a.company_id AND r.agent_id=a.id AND r.id=$3 WHERE a.company_id=$1 AND a.id=$2',[actor.companyId,actor.agentId,actor.runId])).rows[0];
+    if(!authority||['creative.read','creative.write'].some(cap=>!authority.agent_capabilities.includes(cap)||!authority.run_capabilities.includes(cap)))fail(403,'Creative media work requires explicitly approved creative.read and creative.write grants.','AGENT_CAPABILITY_REQUIRED');
+   }
+  }
   if(Number((await client.query('SELECT count(*) FROM studio_artifacts WHERE company_id=$1 AND project_id=$2',[actor.companyId,projectId])).rows[0].count)>=1000)fail(409,'This project reached its 1,000-version pilot limit.');
   const version=Number((await client.query('SELECT COALESCE(max(version),0)+1 AS version FROM studio_artifacts WHERE company_id=$1 AND project_id=$2 AND work_item_id=$3',[actor.companyId,projectId,work.id])).rows[0].version);
   const {clientId:_,revision:__,workItemId:___,name,url,sha256,...metadata}=data;
@@ -127,11 +154,12 @@ export async function assertStudioTaskAction(client:PoolClient,companyId:string,
   if(!agent.capabilities?.includes('studio.write')||!run?.capabilities?.includes('studio.write'))fail(403,'This studio work requires an explicitly approved studio.write grant.','AGENT_CAPABILITY_REQUIRED');
   if(work.agentId!==agent.id)fail(403,'The studio role must be assigned to this agent before it can perform this work.','STUDIO_ROLE_REQUIRED');
   if(work.execution==='human')fail(403,'This stage requires a human production or quality handoff.','STUDIO_HUMAN_REQUIRED');
-  if(work.execution==='dcc'&&project.aiPolicy!=='allowed')fail(403,'This project does not authorize agent processing of media.','STUDIO_AI_RESTRICTED');
+  if(['dcc','creative'].includes(work.execution)&&project.aiPolicy!=='allowed')fail(403,'This project does not authorize agent processing of media.','STUDIO_AI_RESTRICTED');
+  if(work.execution==='creative'&&['creative.read','creative.write'].some(cap=>!agent.capabilities?.includes(cap)||!run?.capabilities?.includes(cap)))fail(403,'Creative media work requires explicitly approved creative.read and creative.write grants.','AGENT_CAPABILITY_REQUIRED');
  }
  if(!agent&&name==='human_update'&&(await client.query("SELECT r.id FROM agent_runs r WHERE r.company_id=$1 AND r.status IN ('queued','running') AND (r.id IN (SELECT d.run_id FROM studio_dispatches d WHERE d.company_id=$1 AND d.work_item_id=$2) OR r.id=(SELECT t.agent_run_id FROM tasks t WHERE t.company_id=$1 AND t.id=$3)) LIMIT 1",[companyId,work.id,taskId])).rowCount)fail(409,'Cancel or finish the active agent request before editing its studio task.','STUDIO_RUN_ACTIVE');
  if(work.blockedReason)fail(409,work.blockedReason,'STUDIO_WORK_BLOCKED');
- if(work.execution==='dcc'&&(name==='tasks_submit'||args.status==='review'||args.status==='done')){
+ if(['dcc','creative'].includes(work.execution)&&(name==='tasks_submit'||args.status==='review'||args.status==='done')){
   const artifact=(await client.query(`SELECT a.id,COALESCE((SELECT r.decision FROM studio_reviews r WHERE r.company_id=a.company_id AND r.project_id=a.project_id AND r.artifact_id=a.id ORDER BY r.created_at DESC,r.id DESC LIMIT 1),'pending') AS decision FROM studio_artifacts a WHERE a.company_id=$1 AND a.project_id=$2 AND a.work_item_id=$3 ORDER BY a.version DESC LIMIT 1`,[companyId,project.id,work.id])).rows[0];
   if(!artifact)fail(409,'Register an actual versioned media reference before submitting this production task. A text result is insufficient.','STUDIO_ARTIFACT_REQUIRED');
   if(args.status==='done'&&artifact.decision!=='approved')fail(409,'The latest media version needs independent technical review before task acceptance.','STUDIO_ARTIFACT_REVIEW_REQUIRED');
@@ -201,9 +229,12 @@ async function updateProject(client:PoolClient,actor:StudioActor,projectId:strin
 export async function dispatchWork(client:PoolClient,member:Membership,projectId:string,input:unknown){
  const data=parse(studioDispatchInput,input),actor={companyId:member.companyId,userId:member.userId};
  return requestOnce(client,actor,data.clientId,'dispatch:'+projectId,data,async()=>{
-  const preview=(await client.query('SELECT w.task_id,w.role_key,w.execution,b.agent_id FROM studio_work_items w JOIN studio_role_bindings b ON b.company_id=w.company_id AND b.role_key=w.role_key WHERE w.company_id=$1 AND w.project_id=$2 AND w.id=$3',[member.companyId,projectId,data.workItemId])).rows[0];if(!preview)fail(404,'Studio work item not found.');if(!preview.agent_id)fail(409,'Assign and connect an agent to this role first.','STUDIO_AGENT_REQUIRED');
-  const role=STUDIO_TEMPLATES[0].roles.find(r=>r.key===preview.role_key)!;
-  const prompt=`Act as ${role.title} in this company. Read studio_get with projectId ${projectId} and workItemId ${data.workItemId} for current task ${preview.task_id}, role assignments, dependencies and the curated skills ${role.skills.join(', ')} before acting. Continue that existing task; do not create a duplicate. If all current permissions and gates allow, reserve it with tasks_claim using its current revision, ${preview.execution==='dcc'?'Read studio_execution_get for approved connector profiles and existing jobs. If actual verified outputs already exist, report their exact job IDs and hashes; register only a real accessible media reference matching those files before submitting for review. Otherwise propose one bounded job with studio_execution_submit, then stop while human approval and the connector handle execution. A proposed or queued job is not a rendered result.':'Prepare the requested production-planning contribution and submit with tasks_submit for independent human review.'} Do not approve work, execute shell commands, transfer files, contact clients, promise prices or deploy compute. Stop and report any missing input or authority. Return a short status report with the task ID and actual committed state.`;
+  const preview=(await client.query('SELECT w.task_id,w.role_key,w.stage,w.execution,b.agent_id,p.template_id,project.production_path FROM studio_work_items w JOIN studio_role_bindings b ON b.company_id=w.company_id AND b.role_key=w.role_key JOIN studio_profiles p ON p.company_id=w.company_id JOIN studio_projects project ON project.company_id=w.company_id AND project.id=w.project_id WHERE w.company_id=$1 AND w.project_id=$2 AND w.id=$3',[member.companyId,projectId,data.workItemId])).rows[0];if(!preview)fail(404,'Studio work item not found.');if(!preview.agent_id)fail(409,'Assign and connect an agent to this role first.','STUDIO_AGENT_REQUIRED');
+  const template=getStudioTemplate(preview.template_id);if(!template?.roles.some(role=>role.key===preview.role_key))fail(409,'The project role is not present in the current studio template.','STUDIO_TEMPLATE_ROLE_REQUIRED');
+  const role=(preview.production_path==='higgsfield'?getStudioTemplate('ai-production')!:template).roles.find(r=>r.key===preview.role_key)!;
+  const skills=[...new Set([...role.skills,...(preview.execution==='creative'?['higgsfield-production']:preview.stage==='references'?['creative-references']:[])])];
+  const instruction=preview.execution==='dcc'?'Read studio_execution_get for approved connector profiles and existing jobs. If actual verified outputs already exist, report their exact job IDs and hashes; register only a real accessible media reference matching those files before submitting for review. Otherwise propose one bounded job with studio_execution_submit, then stop while human approval and the connector handle execution. A proposed or queued job is not a rendered result.':preview.execution==='creative'?`Read higgsfield_connection_get and higgsfield_requests_list for this project and the exact work item before proposing generation. Use only the discovered official Higgsfield tools through higgsfield_generation_propose, binding projectId ${projectId} and workItemId ${data.workItemId}. Review approved references and exact input schema; do not invent uploads or provider media IDs. Prepare one exact request for human credit approval, then stop while consent, approval and provider execution complete. Reuse existing requests and actual output versions; never automatically retry uncertain spending. Importing a job observation does not complete this task. Register an actual versioned media artifact with correct specification and provenance before tasks_submit for independent review. Never request a DCC job, shell command or workstation/server compute.`:preview.stage==='references'?'Prepare the exact shot reference plan, source provenance, rights and sharing-consent gaps; a storage listing is not access or a provider upload. Submit that reviewable planning contribution with tasks_submit for independent acceptance.':'Prepare the requested production-planning contribution and submit with tasks_submit for independent human review.';
+  const prompt=`Act as ${role.title} in this company. Read studio_get with projectId ${projectId} and workItemId ${data.workItemId} for current task ${preview.task_id}, role assignments, dependencies and the curated skills ${skills.join(', ')} before acting. Continue that existing task; do not create a duplicate. If all current permissions and gates allow, reserve it with tasks_claim using its current revision. ${instruction} Do not approve work, execute shell commands, transfer files, contact clients, promise prices or deploy compute. Stop and report any missing input or authority. Return a short status report with the task ID and actual committed state.`;
   // Lock agent/run before project, matching the leased-tool lock order. Any
   // gate or competing-dispatch failure rolls back this ordinary run creation.
   const queued=await createAgentRunInTransaction(client,member,'commons',{clientId:data.clientId,agentId:preview.agent_id,prompt});
@@ -211,6 +242,7 @@ export async function dispatchWork(client:PoolClient,member:Membership,projectId
   if(work.agentId!==preview.agent_id)fail(409,'The role assignment changed. Refresh before dispatch.');
   if(work.execution==='human')fail(409,'This step requires a human production or quality handoff.','STUDIO_EXTERNAL_EXECUTION_REQUIRED');
   if(work.execution==='dcc'&&!queued.run.capabilities.includes('studio.execute'))fail(409,'The specialist needs an explicitly reviewed studio.execute grant to propose connector work.','STUDIO_AGENT_CAPABILITIES');
+  if(work.execution==='creative'&&['creative.read','creative.write'].some(cap=>!queued.run.capabilities.includes(cap)))fail(409,'The generation specialist needs explicitly reviewed creative.read and creative.write grants.','STUDIO_AGENT_CAPABILITIES');
   const completedDcc=work.execution==='dcc'&&work.status==='doing'&&!work.blockedReason&&(!work.runStatus||['succeeded','failed','cancelled'].includes(work.runStatus))&&(await client.query("SELECT id FROM studio_execution_jobs WHERE company_id=$1 AND work_item_id=$2 AND status IN ('succeeded','failed','failed_uncertain','cancelled') LIMIT 1",[member.companyId,work.id])).rowCount;
   if(work.readiness!=='ready'&&!completedDcc)fail(409,work.blockedReason??'This work is already running or awaiting review.','STUDIO_WORK_BLOCKED');
   if(work.execution==='dcc'&&(await client.query("SELECT id FROM studio_execution_jobs WHERE company_id=$1 AND work_item_id=$2 AND status IN ('awaiting_approval','queued','running') LIMIT 1",[member.companyId,work.id])).rowCount)fail(409,'Review or finish the pending connector job before requesting another specialist pass.','EXECUTION_ALREADY_PENDING');
@@ -223,6 +255,11 @@ export async function dispatchWork(client:PoolClient,member:Membership,projectId
 export async function studioRoute(request:Request,parts:string[],method:string):Promise<Response|null>{
  if(parts[0]!=='companies'||parts[2]!=='studio')return null;
  const member=await requireMembership(request,id(parts[1]),method!=='GET'),actor:StudioActor={companyId:member.companyId,userId:member.userId};
+ if(parts[3]==='projects'&&parts.length===6&&parts[5]==='creative-followup'){
+  const projectId=id(parts[4]);if(!['owner','admin'].includes(member.role))fail(403,'A company administrator must review a generation handoff.');
+  if(method==='GET')return json(await memberMutation(member,true,client=>studioCreativeFollowupSnapshot(client,member.companyId,projectId)));
+  if(method==='POST'){const data=await body(request,studioCreativeFollowupInput,5000),result=await memberMutation(member,true,client=>dispatchStudioCreativeFollowup(client,member,projectId,data));return json(result,result.replayed?200:201);}
+ }
  if(parts.length===3&&method==='GET'){
   const params=new URL(request.url).searchParams,keys=[...params.keys()];if(new Set(keys).size!==keys.length||keys.some(k=>!['after','limit'].includes(k)))fail(400,'Unsupported or duplicate studio query parameter.');
   const pagination=parse(z.object({after:z.string().uuid().optional(),limit:z.coerce.number().int().min(1).max(100).default(50)}),Object.fromEntries(params));

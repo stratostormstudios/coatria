@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {readFile,readdir} from 'node:fs/promises';
 import {z} from 'zod';
 import {AGENT_TOOLS,studioAgentProject,studioAgentSnapshot} from '../src/lib/agent-tools';
@@ -133,6 +133,21 @@ test('studio agent APIs retain grant snapshots, requester authority, receipts an
    assert.equal(blueprint.result.createsWorkers,false);assert.equal(blueprint.result.requiresAdministratorApplication,true);assert(!JSON.stringify([template,blueprint,snapshot]).includes('UNSHARED_PRIVATE_STUDIO_SKILL'));
    assert.equal((await query('SELECT count(*)::int AS count FROM agents WHERE company_id=$1',[companyId])).rows[0].count,before);assert.equal((await query('SELECT count(*)::int AS count FROM agent_missions WHERE company_id=$1',[companyId])).rows[0].count,0);
    await tool('studio_get',{projectId:randomUUID()},404);await tool('studio_get',{projectId:foreignProjectId},404);await tool('studio_get',{companyId:foreignId},400);
+  });
+  await t.test('historical tool receipts replay with legacy defaults and reject a changed production template',async()=>{
+   await start();
+   const canonical=(value:any):string=>value===null||typeof value!=='object'?JSON.stringify(value):Array.isArray(value)?'['+value.map(canonical).join(',')+']':'{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+canonical(value[key])).join(',')+'}';
+   const staffing={brief:'Plan a synthetic production company.',teamSize:2,disciplines:['compositing'],provider:{pluginId:'runpod',manifestVersion:'1.0.0',runtimeConfig:{providerId:'runpod',modelId:'Qwen/Qwen3.8-27B-FP8'}}};
+   const before=(await query('SELECT (SELECT count(*) FROM studio_projects WHERE company_id=$1)::int AS projects,(SELECT count(*) FROM studio_staffing_proposals WHERE company_id=$1)::int AS proposals',[companyId])).rows[0];
+   for(const[name,input,field,legacy,changed]of [['studio_plan',plan,'productionPath','vfx','higgsfield'],['studio_staffing_propose',staffing,'templateId','vfx-boutique','ai-production']]as const){
+    const requestId=randomUUID(),args=AGENT_TOOLS[name].schema.parse(input) as Record<string,unknown>;delete args[field];
+    const hash=createHash('sha256').update(canonical({tool:name,runId,arguments:args})).digest('hex'),response={historicalReceipt:randomUUID()};
+    await query('INSERT INTO agent_tool_receipts(company_id,agent_id,run_id,request_id,tool,request_hash,response) VALUES($1,$2,$3,$4,$5,$6,$7)',[companyId,agentId,runId,requestId,name,hash,JSON.stringify(response)]);
+    for(const submitted of [input,{...input,[field]:legacy}]){const replay=await tool(name,submitted,200,requestId);assert.equal(replay.replayed,true);assert.deepEqual(replay.result,response);}
+    await tool(name,{...input,[field]:changed},409,requestId);
+    const stored=(await query('SELECT request_hash,response FROM agent_tool_receipts WHERE company_id=$1 AND agent_id=$2 AND request_id=$3',[companyId,agentId,requestId])).rows[0];assert.equal(stored.request_hash,hash);assert.deepEqual(stored.response,response);
+   }
+   assert.deepEqual((await query('SELECT (SELECT count(*) FROM studio_projects WHERE company_id=$1)::int AS projects,(SELECT count(*) FROM studio_staffing_proposals WHERE company_id=$1)::int AS proposals',[companyId])).rows[0],before);
   });
   await t.test('draft creation is receipted and a demoted requester cannot replay an authorized write',async()=>{
    await start();const requestId=randomUUID(),created=await tool('studio_plan',plan,200,requestId),replay=await tool('studio_plan',plan,200,requestId);assert.equal(replay.replayed,true);assert.deepEqual(replay.result,created.result);

@@ -2,14 +2,14 @@ import {EXECUTION_BUILTIN_PROFILES} from './studio-execution-protocol';
 import type {StudioProject} from './studio-protocol';
 
 type Shot={frameStart:number;frameEnd:number;handles:number;disciplines:readonly string[]};
-/** Planning defaults only; model-specific generation settings are reviewed in the Higgsfield panel. */
+/** Explicit creative workflow and delivery targets; provider settings are reviewed in the Higgsfield panel. */
 export function higgsfieldProjectPreset(){
- return {spec:{width:1920,height:1080,fpsNumerator:24,fpsDenominator:1,format:'mp4' as const,colorSpace:'Rec.709'},shots:[{code:'SH010',description:'A five-second concept clip developed from approved references. Confirm the generation model and its supported settings before submitting.',frameStart:1,frameEnd:120,handles:0,disciplines:['compositing' as const]}]};
+ return {productionPath:'higgsfield' as const,spec:{width:1920,height:1080,fpsNumerator:24,fpsDenominator:1,format:'mp4' as const,colorSpace:'Rec.709'},shots:[{code:'SH010',description:'A five-second concept clip developed from approved references. Confirm the generation model and its supported settings before submitting.',frameStart:1,frameEnd:120,handles:0,disciplines:['compositing' as const]}]};
 }
 export const HIGGSFIELD_PRODUCTION_STEPS=['Brief','References','Generation','Review','Delivery'] as const;
-/** An explicit UI starting point, not permission to execute or a new backend project mode. */
+/** Explicit legacy workflow starting point; never permission to execute. */
 export function proceduralTurntablePreset(){
- return {spec:{width:384,height:384,fpsNumerator:24,fpsDenominator:1,format:'exr' as const,colorSpace:'Linear Rec.709'},shots:[{code:'SH010',description:'An original procedural product turntable. No client model, textures or filmed footage are consumed.',frameStart:1001,frameEnd:1004,handles:0,disciplines:['lighting' as const]}]};
+ return {productionPath:'vfx' as const,spec:{width:384,height:384,fpsNumerator:24,fpsDenominator:1,format:'exr' as const,colorSpace:'Linear Rec.709'},shots:[{code:'SH010',description:'An original procedural product turntable. No client model, textures or filmed footage are consumed.',frameStart:1001,frameEnd:1004,handles:0,disciplines:['lighting' as const]}]};
 }
 /** Capability fit for the one-shot pilot only. Server approval and worker validation still apply. */
 export function proceduralTurntableFit(spec:StudioProject['spec'],shots:readonly Shot[]){

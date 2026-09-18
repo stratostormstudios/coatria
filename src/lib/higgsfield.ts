@@ -6,9 +6,10 @@ import {requireMembership,type Membership} from './auth';
 import {memberMutation} from './company';
 import {body,fail,hashToken,id,json,rateLimit,secret} from './security';
 import {sealHiggsfieldSecret,openHiggsfieldSecret} from './higgsfield-secrets';
-import {higgsfieldProposalInput,higgsfieldReadInput,higgsfieldExecuteInput,HIGGSFIELD_READ_TOOLS,HIGGSFIELD_GENERATION_TOOLS} from './higgsfield-protocol';
+import {higgsfieldProposalInput,higgsfieldReadInput,higgsfieldExecuteInput,higgsfieldEstimateInput,HIGGSFIELD_READ_TOOLS,HIGGSFIELD_GENERATION_TOOLS} from './higgsfield-protocol';
 import {discoverHiggsfield,registerHiggsfield,higgsfieldAuthorizationUrl,exchangeHiggsfieldCode,refreshHiggsfieldToken,listHiggsfieldTools,callHiggsfieldTool,HIGGSFIELD_MCP_ENDPOINT,type HiggsfieldMetadata,type HiggsfieldClient,type HiggsfieldToken} from './higgsfield-mcp';
 import type {StudioActor} from './studio';
+import {higgsfieldProposalWork,assertHiggsfieldWorkForDispatch} from './higgsfield-work';
 
 const callback='https://coatria.com/api/higgsfield/callback';
 type Credentials={metadata:HiggsfieldMetadata;client:HiggsfieldClient;token:HiggsfieldToken};
@@ -18,8 +19,8 @@ const allowed=new Set<string>([...HIGGSFIELD_READ_TOOLS,...HIGGSFIELD_GENERATION
 const canonical=(value:unknown):string=>Array.isArray(value)?'['+value.map(canonical).join(',')+']':value&&typeof value==='object'?'{'+Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>JSON.stringify(k)+':'+canonical(v)).join(',')+'}':JSON.stringify(value);
 const digest=(value:unknown)=>hashToken(canonical(value));
 const plain=<T>(v:T):T=>JSON.parse(JSON.stringify(v));
-const projectColumns=`id,revision,ai_policy,gates`;
-const requestColumns=`id,project_id AS "projectId",tool,arguments,note,request_hash AS "requestHash",status,created_at AS "createdAt",result,error_code AS "errorCode"`;
+const projectColumns=`id,revision,ai_policy,gates,status,production_path`;
+const requestColumns=`id,project_id AS "projectId",work_item_id AS "workItemId",task_revision AS "taskRevision",tool,arguments,note,request_hash AS "requestHash",status,created_at AS "createdAt",result,error_code AS "errorCode"`;
 const transport={timeoutMs:8000};
 const parse=<T>(schema:z.ZodType<T>,value:unknown)=>{const p=schema.safeParse(value);if(!p.success)fail(400,p.error.issues.map(i=>i.message).slice(0,3).join(' '));return p.data;};
 async function connection(client:PoolClient,companyId:string,exclusive=false){
@@ -39,6 +40,19 @@ export async function higgsfieldAgentConnection(client:PoolClient,companyId:stri
  if(!toolName)return {...view,tools:view.tools.map((tool:Row)=>({name:tool.name,description:tool.description.slice(0,400),schemaAvailable:true}))};
  const selected=view.tools.find((tool:Row)=>tool.name===toolName);if(!selected)fail(404,'Tool not available in the official company connection.');
  if(Buffer.byteLength(JSON.stringify(selected))>48000)fail(413,'This provider schema needs administrator review outside the bounded agent context.');return {...view,tools:[selected]};
+}
+async function refreshCatalog(member:Membership){
+ await rateLimit(`higgsfield-catalog:${member.companyId}`,5,60);
+ const saved=await credential(member);if('error'in saved)fail(409,'Reconnect Higgsfield.','HIGGSFIELD_RECONNECT_REQUIRED');
+ const tools=(await listHiggsfieldTools(saved.token,transport)).filter(tool=>allowed.has(tool.name)).map(({name,description,inputSchema})=>({name,description,inputSchema}));
+ if(!tools.some(tool=>HIGGSFIELD_GENERATION_TOOLS.includes(tool.name as typeof HIGGSFIELD_GENERATION_TOOLS[number])))fail(409,'The official account exposes no supported generation tools.','HIGGSFIELD_CATALOG_UNSUPPORTED');
+ return memberMutation(member,true,async db=>{
+  const current=await connection(db,member.companyId,true);
+  if(current.id!==saved.row.id||current.revision!==saved.row.revision)fail(409,'The connection changed while discovering tools. Refresh again.');
+  const changed=digest(current.tools)!==digest(tools);
+  if(changed)await db.query('UPDATE higgsfield_connections SET tools=$2,revision=revision+1,updated_at=clock_timestamp() WHERE company_id=$1',[member.companyId,JSON.stringify(tools)]);
+  return {...await higgsfieldConnectionView(db,member.companyId),catalogChanged:changed,existingProposalsNeedReview:changed};
+ });
 }
 async function begin(member:Membership){
  await rateLimit(`higgsfield-connect:${member.userId}`,5,3600);
@@ -115,13 +129,15 @@ export async function proposeHiggsfieldRequest(client:PoolClient,actor:StudioAct
  await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`higgsfield-request:${actor.companyId}:${actor.userId}:${data.clientId}`]);
  const old=(await client.query(`SELECT ${requestColumns},agent_id FROM higgsfield_requests WHERE company_id=$1 AND requested_by=$2 AND client_id=$3`,[actor.companyId,actor.userId,data.clientId])).rows[0];
  if(old){if(old.requestHash!==requestHash||old.agent_id!==(actor.agentId??null))fail(409,'This request ID was already used with different generation details.','IDEMPOTENCY_CONFLICT');delete old.agent_id;return {request:plain(old),replayed:true};}
- const project=(await client.query(`SELECT ${projectColumns} FROM studio_projects WHERE company_id=$1 AND id=$2 FOR SHARE`,[actor.companyId,data.projectId])).rows[0];
+ const project=(await client.query(`SELECT ${projectColumns} FROM studio_projects WHERE company_id=$1 AND id=$2 FOR UPDATE`,[actor.companyId,data.projectId])).rows[0];
  if(!project)fail(404,'Project not found.');if(project.revision!==data.projectRevision)fail(409,'Refresh the changed project before proposing a generation.');
+ if(project.status==='delivered')fail(409,'Delivered projects are closed. Create follow-up work.','STUDIO_PROJECT_CLOSED');
  if(project.ai_policy!=='allowed')fail(409,'Confirm the project permits AI generation first.');
+ const work=await higgsfieldProposalWork(client,actor,project,data.workItemId);
  const connected=await connection(client,actor.companyId);
  if(!connected.tools.some((tool:Row)=>tool.name===data.tool))fail(409,'This tool is not available in the connected official Higgsfield account.');
  if(Number((await client.query('SELECT count(*) FROM higgsfield_requests WHERE company_id=$1 AND project_id=$2',[actor.companyId,data.projectId])).rows[0].count)>=200)fail(409,'This project reached its 200 generation-request pilot limit.');
- const row=(await client.query(`INSERT INTO higgsfield_requests(company_id,project_id,requested_by,agent_id,run_id,client_id,project_revision,connection_revision,tool,arguments,note,request_hash) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING ${requestColumns}`,[actor.companyId,data.projectId,actor.userId,actor.agentId??null,actor.runId??null,data.clientId,data.projectRevision,connected.revision,data.tool,JSON.stringify(data.arguments),data.note,requestHash])).rows[0];
+ const row=(await client.query(`INSERT INTO higgsfield_requests(company_id,project_id,requested_by,agent_id,run_id,client_id,project_revision,connection_revision,tool,arguments,note,request_hash,work_item_id,task_revision,role_agent_id,role_human_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING ${requestColumns}`,[actor.companyId,data.projectId,actor.userId,actor.agentId??null,actor.runId??null,data.clientId,data.projectRevision,connected.revision,data.tool,JSON.stringify(data.arguments),data.note,requestHash,work?.workItemId??null,work?.taskRevision??null,work?.roleAgentId??null,work?.roleHumanId??null])).rows[0];
  return {request:plain(row),replayed:false};
 }
 export async function listHiggsfieldRequests(client:PoolClient,companyId:string,projectId:string,options:{after?:string;requestId?:string;limit?:number}={}){
@@ -129,7 +145,7 @@ export async function listHiggsfieldRequests(client:PoolClient,companyId:string,
  if(options.requestId){const row=(await client.query(`SELECT ${requestColumns} FROM higgsfield_requests WHERE company_id=$1 AND project_id=$2 AND id=$3`,[companyId,projectId,id(options.requestId)])).rows[0];if(!row)fail(404,'Generation request not found.');return {request:plain(row)};}
  const limit=options.limit??20;if(!Number.isInteger(limit)||limit<1||limit>50)fail(400,'Use a request page limit from 1 to 50.');
  if(options.after&&!(await client.query('SELECT 1 FROM higgsfield_requests WHERE company_id=$1 AND project_id=$2 AND id=$3',[companyId,projectId,id(options.after)])).rowCount)fail(404,'Request cursor not found.');
- const rows=(await client.query(`SELECT id,project_id AS "projectId",tool,note,request_hash AS "requestHash",status,created_at AS "createdAt",error_code AS "errorCode",result IS NOT NULL AS "hasReceipt" FROM higgsfield_requests WHERE company_id=$1 AND project_id=$2 AND ($3::uuid IS NULL OR id>$3) ORDER BY id LIMIT $4`,[companyId,projectId,options.after??null,limit+1])).rows;
+ const rows=(await client.query(`SELECT id,project_id AS "projectId",work_item_id AS "workItemId",task_revision AS "taskRevision",tool,note,request_hash AS "requestHash",status,created_at AS "createdAt",error_code AS "errorCode",result IS NOT NULL AS "hasReceipt" FROM higgsfield_requests WHERE company_id=$1 AND project_id=$2 AND ($3::uuid IS NULL OR id>$3) ORDER BY id LIMIT $4`,[companyId,projectId,options.after??null,limit+1])).rows;
  return {requests:plain(rows.slice(0,limit)),hasMore:rows.length>limit,nextAfter:rows.length>limit?rows[limit-1].id:null};
 }
 export async function higgsfieldAgentRequests(client:PoolClient,companyId:string,input:{projectId:string;after?:string;requestId?:string;limit?:number}){
@@ -146,8 +162,9 @@ async function execute(member:Membership,requestId:string,input:unknown){
   if(row.status!=='proposed')return {replayed:true,row};
   const current=await connection(db,member.companyId);
   if(current.revision!==connected.revision||row.connection_revision!==current.revision)fail(409,'The Higgsfield connection changed. Prepare a new request.');
-  const project=(await db.query(`SELECT ${projectColumns} FROM studio_projects WHERE company_id=$1 AND id=$2 FOR SHARE`,[member.companyId,row.project_id])).rows[0];
-  if(!project||project.revision!==row.project_revision||project.ai_policy!=='allowed'||['brief','estimate','production'].some(gate=>project.gates[gate]?.decision!=='approved'))fail(409,'Approve the brief, estimate and production gates, then propose against the current project revision.');
+  const project=(await db.query(`SELECT ${projectColumns} FROM studio_projects WHERE company_id=$1 AND id=$2 FOR UPDATE`,[member.companyId,row.project_id])).rows[0];
+  if(!project||project.status==='delivered'||project.revision!==row.project_revision||project.ai_policy!=='allowed'||['brief','estimate','production'].some(gate=>project.gates[gate]?.decision!=='approved'))fail(409,'Approve the brief, estimate and production gates, then propose against the current project revision.');
+  await assertHiggsfieldWorkForDispatch(db,member.companyId,project,row);
   if(!current.tools.some((tool:Row)=>tool.name===row.tool))fail(409,'The exact official tool is no longer available.');
   await db.query("UPDATE higgsfield_requests SET status='dispatching',approved_by=$3,dispatched_at=clock_timestamp(),updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2",[member.companyId,row.id,member.userId]);return {replayed:false,row};
  });
@@ -159,12 +176,35 @@ async function execute(member:Membership,requestId:string,input:unknown){
  await transaction(async db=>{await db.query("UPDATE higgsfield_requests SET status=$3,result=$4,error_code=$5,updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2 AND status='dispatching'",[member.companyId,requestId,status,JSON.stringify(result),errorCode]);});
  return {requestId,status,result,errorCode,replayed:false,mediaCompleted:false};
 }
+async function estimate(member:Membership,requestId:string,input:unknown){
+ const data=parse(higgsfieldEstimateInput,input);await rateLimit(`higgsfield-estimate:${member.companyId}`,10,60);
+ const saved=await credential(member);if('error'in saved)fail(409,'Reconnect Higgsfield.','HIGGSFIELD_RECONNECT_REQUIRED');
+ const prepared=await memberMutation(member,true,async db=>{
+  const row=(await db.query('SELECT * FROM higgsfield_requests WHERE company_id=$1 AND id=$2',[member.companyId,id(requestId)])).rows[0];
+  if(!row)fail(404,'Generation request not found.');
+  if(row.request_hash!==data.requestHash||row.status!=='proposed')fail(409,'Estimate the exact unsent request.');
+  const current=await connection(db,member.companyId);
+  if(current.id!==saved.row.id||current.revision!==saved.row.revision||row.connection_revision!==current.revision)fail(409,'The connection or catalog changed. Prepare a new request.');
+  const project=(await db.query(`SELECT ${projectColumns} FROM studio_projects WHERE company_id=$1 AND id=$2 FOR UPDATE`,[member.companyId,row.project_id])).rows[0];
+  if(!project||project.status==='delivered'||project.revision!==row.project_revision||project.ai_policy!=='allowed')fail(409,'Refresh the project and its AI-use permission.');
+  await assertHiggsfieldWorkForDispatch(db,member.companyId,project,row);
+  const tool=current.tools.find((entry:Row)=>entry.name===row.tool),paramsSchema=tool?.inputSchema?.properties?.params;
+  const alternatives=[paramsSchema,...(Array.isArray(paramsSchema?.anyOf)?paramsSchema.anyOf:[])];
+  if(!alternatives.some(schema=>schema?.type==='object'&&schema.properties?.get_cost?.type==='boolean'))fail(409,'The connected tool does not advertise a supported read-only cost preflight.','HIGGSFIELD_ESTIMATE_UNAVAILABLE');
+  const params=row.arguments.params;
+  if(!params||typeof params!=='object'||Array.isArray(params))fail(409,'Use an object-valued params argument from the official schema before estimating.');
+  // Never forward caller-controlled flags or serialized params to a paid tool.
+  return {tool:row.tool,arguments:{params:{...params,get_cost:true}}};
+ });
+ return {requestId,requestHash:data.requestHash,estimateOnly:true,spendingAuthorized:false,priceGuaranteed:false,result:await callHiggsfieldTool(saved.token,prepared.tool,prepared.arguments,{timeoutMs:20000})};
+}
 export async function higgsfieldRoute(request:Request,parts:string[],method:string):Promise<Response|null>{
  if(parts.join('/')==='higgsfield/callback'&&method==='GET')return finish(request);
  if(parts[0]!=='companies'||parts[2]!=='higgsfield')return null;
  const companyId=id(parts[1]),member=await requireMembership(request,companyId,method!=='GET');
  if(parts.length===3&&method==='GET')return json(await memberMutation(member,false,db=>higgsfieldConnectionView(db,companyId)));
  if(parts.length===4&&parts[3]==='connect'&&method==='POST'){await body(request,z.object({}).strict());return json(await begin(member));}
+ if(parts.length===4&&parts[3]==='catalog'&&method==='POST'){await body(request,z.object({}).strict());return json(await refreshCatalog(member));}
  if(parts.length===4&&parts[3]==='disconnect'&&method==='POST'){
   const data=await body(request,z.object({revision:z.number().int().positive()}).strict());
   await memberMutation(member,true,async db=>{await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`higgsfield-control:${companyId}`]);const r=await db.query("UPDATE higgsfield_connections SET status='disconnected',sealed=NULL,revision=revision+1,tools='[]',updated_at=clock_timestamp() WHERE company_id=$1 AND revision=$2",[companyId,data.revision]);if(!r.rowCount)fail(409,'The connection changed. Refresh first.');});return json({disconnected:true,providerJobsCancelled:false});
@@ -176,5 +216,6 @@ export async function higgsfieldRoute(request:Request,parts:string[],method:stri
  if(parts.length===4&&parts[3]==='requests'&&method==='GET'){const p=parse(z.object({projectId:z.string().uuid(),after:z.string().uuid().optional(),requestId:z.string().uuid().optional(),limit:z.coerce.number().int().min(1).max(50).default(20)}).strict().refine(v=>!(v.after&&v.requestId),'Choose a page or exact request.'),Object.fromEntries(new URL(request.url).searchParams));return json(await memberMutation(member,false,db=>listHiggsfieldRequests(db,companyId,p.projectId,p)));}
  if(parts.length===4&&parts[3]==='requests'&&method==='POST'){const data=await body(request,higgsfieldProposalInput);return json(await memberMutation(member,true,db=>proposeHiggsfieldRequest(db,{companyId,userId:member.userId},data)),201);}
  if(parts.length===6&&parts[3]==='requests'&&parts[5]==='execute'&&method==='POST'){const data=await body(request,higgsfieldExecuteInput);return json(await execute(member,id(parts[4]),data));}
+ if(parts.length===6&&parts[3]==='requests'&&parts[5]==='estimate'&&method==='POST'){const data=await body(request,higgsfieldEstimateInput);return json(await estimate(member,id(parts[4]),data));}
  return null;
 }

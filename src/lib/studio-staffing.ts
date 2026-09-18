@@ -8,8 +8,8 @@ import {pluginInstallInput} from './plugin-marketplace';
 import {PLUGIN_CATALOG} from './plugin-catalog';
 import {setupStudio,type StudioActor} from './studio';
 import {managedAgentAuthoritySql,managedAgentAuthorityPrincipals} from './studio-hosting';
-import {STUDIO_TEMPLATES} from './studio-protocol';
-import {draftStudioStaffing,STUDIO_STAFFING_CAPABILITIES,STUDIO_PLANNING_REVIEW_CAPABILITIES,STUDIO_PLANNING_REVIEW_INSTRUCTIONS,studioStaffingProposeInput,studioStaffingApplyInput,studioStaffingRejectInput,type StudioStaffingPlan,type StudioStaffingProposal,type StudioStaffingExisting,type StudioStaffingSpecialist,type StudioStaffingApplication} from './studio-staffing-protocol';
+import {getStudioTemplate} from './studio-protocol';
+import {draftStudioStaffing,studioStaffingCapabilities,STUDIO_STAFFING_CAPABILITIES,STUDIO_PLANNING_REVIEW_CAPABILITIES,STUDIO_PLANNING_REVIEW_INSTRUCTIONS,studioStaffingProposeInput,studioStaffingApplyInput,studioStaffingRejectInput,type StudioStaffingPlan,type StudioStaffingProposal,type StudioStaffingExisting,type StudioStaffingSpecialist,type StudioStaffingApplication} from './studio-staffing-protocol';
 
 const columns=`id,company_id AS "companyId",revision,status,plan,plan_hash AS "planHash",profile_revision AS "profileRevision",created_by AS "createdBy",created_agent_id AS "createdAgentId",run_id AS "runId",created_at AS "createdAt",expires_at AS "expiresAt",applied_by AS "appliedBy",applied_at AS "appliedAt",result,rejection_note AS "rejectionNote"`;
 const parse=<T>(schema:z.ZodType<T>,input:unknown):T=>{const result=schema.safeParse(input);if(!result.success)fail(400,result.error.issues.map(issue=>issue.message).slice(0,3).join(' '),'VALIDATION_ERROR');return result.data;};
@@ -37,10 +37,11 @@ async function validateSource(client:PoolClient,actor:StudioActor,creating:boole
  if(!source||source.requested_by!==actor.userId||source.status!=='active'||!source.credential_live||source.invocation_access==='none'||!source.capabilities.includes('studio.write')||!source.run_capabilities.includes('studio.write')||(creating?source.run_status!=='running':!['running','succeeded'].includes(source.run_status)))fail(409,'The proposing agent or requester no longer has authority.','STAFFING_SOURCE_UNAVAILABLE');
  await requireAdministrator(client,actor.companyId,source.created_by);
 }
-async function existingSnapshot(client:PoolClient,companyId:string,agentId:string):Promise<StudioStaffingExisting>{
+async function existingSnapshot(client:PoolClient,companyId:string,agentId:string,requiredCapabilities:readonly string[]=STUDIO_STAFFING_CAPABILITIES):Promise<StudioStaffingExisting>{
  const result=(await client.query(`SELECT a.id AS "agentId",p.id AS "installationId",p.revision AS "installationRevision",a.name,a.created_by AS "sponsorId",a.status,a.expires_at AS "expiresAt",a.invocation_access AS "invocationAccess",a.conversation_access AS "conversationAccess",a.capabilities,p.plugin_id AS "pluginId",p.manifest_version AS "manifestVersion",p.runtime_config AS "runtimeConfig",p.character FROM agents a JOIN plugin_installations p ON p.company_id=a.company_id AND p.agent_id=a.id WHERE a.company_id=$1 AND a.id=$2`,[companyId,agentId])).rows[0];
  if(!result)fail(404,'Choose an installed agent in this company.','STAFFING_AGENT_NOT_FOUND');
- if(!['active','paused'].includes(result.status)||!result.expiresAt||+new Date(result.expiresAt)<=Date.now()||result.invocationAccess==='none'||STUDIO_STAFFING_CAPABILITIES.some(capability=>!result.capabilities.includes(capability)))fail(409,'The existing agent needs current studio and task grants with administrator invocation enabled. Review it in Plugins.','STAFFING_AGENT_NOT_READY');
+  if(!['active','paused'].includes(result.status)||!result.expiresAt||+new Date(result.expiresAt)<=Date.now()||result.invocationAccess==='none'||STUDIO_STAFFING_CAPABILITIES.some(capability=>!result.capabilities.includes(capability)))fail(409,'The existing agent needs current studio and task grants with administrator invocation enabled. Review it in Plugins.','STAFFING_AGENT_NOT_READY');
+ if(requiredCapabilities.some(capability=>!result.capabilities.includes(capability)))fail(409,'This existing agent lacks the selected role’s creative or storage grants. Review its exact permissions separately in Plugins, then prepare a new staffing plan. Staffing never upgrades a bound agent.','STAFFING_AGENT_GRANTS_REQUIRED');
  await requireAdministrator(client,companyId,result.sponsorId);
  validateInstallation({clientId:stableId('staffing-existing:'+agentId),pluginId:result.pluginId,manifestVersion:result.manifestVersion,name:result.name,runtimeConfig:result.runtimeConfig,character:result.character,capabilities:result.capabilities,invocationAccess:result.invocationAccess});
  return JSON.parse(JSON.stringify({...result,capabilities:[...result.capabilities].sort()}));
@@ -57,23 +58,27 @@ export async function listStudioStaffingProposals(client:PoolClient,companyId:st
 
 /** Invoke inside memberMutation or the already-authorized leased tool transaction. */
 export async function proposeStudioStaffing(client:PoolClient,actor:StudioActor,input:unknown){
- const data=parse(studioStaffingProposeInput,input),actorKey=actor.agentId?'agent:'+actor.agentId:'human:'+actor.userId,requestHash=digest(data);
+ const data=parse(studioStaffingProposeInput,input),actorKey=actor.agentId?'agent:'+actor.agentId:'human:'+actor.userId;
+ // Preserve idempotent retries against proposals created before template choice
+ // existed. Explicit/default VFX is the same legacy operation; AI is distinct.
+ const {templateId,...legacyRequest}=data,requestHash=digest(templateId==='vfx-boutique'?legacyRequest:data);
  await validateSource(client,actor,true);
  await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`staffing-proposal:${actor.companyId}:${actorKey}:${data.clientId}`]);
  const old=(await client.query('SELECT id,request_hash FROM studio_staffing_proposals WHERE company_id=$1 AND actor_key=$2 AND client_id=$3',[actor.companyId,actorKey,data.clientId])).rows[0];
  if(old){if(old.request_hash!==requestHash)fail(409,'This request ID belongs to a different staffing plan.','IDEMPOTENCY_CONFLICT');return {proposal:await getStudioStaffingProposal(client,actor.companyId,old.id),replayed:true};}
  if(Number((await client.query("SELECT count(*) FROM studio_staffing_proposals WHERE company_id=$1 AND status='pending' AND expires_at>clock_timestamp()",[actor.companyId])).rows[0].count)>=100)fail(409,'Review existing staffing proposals before creating more.','STAFFING_PROPOSAL_LIMIT');
- let draft:ReturnType<typeof draftStudioStaffing>;try{const {clientId:_,...fields}=data;draft=draftStudioStaffing(fields);}catch(error){fail(400,error instanceof Error?error.message:'Invalid specialist grouping.','STAFFING_PLAN_INVALID');}
+  let draft:ReturnType<typeof draftStudioStaffing>;try{const {clientId:_,...fields}=data;draft=draftStudioStaffing(fields);}catch(error){fail(400,error instanceof Error?error.message:'Invalid specialist grouping.','STAFFING_PLAN_INVALID');}
+ const template=getStudioTemplate(data.templateId);if(!template)fail(400,'Choose an available studio template.','STAFFING_TEMPLATE_UNAVAILABLE');
  const reviewer=data.reviewerHumanId?await requireAdministrator(client,actor.companyId,data.reviewerHumanId):null;
  if(data.reviewerHumanId===actor.userId)fail(409,'Choose another administrator for independent QC, or leave the reviewer unassigned until they join.','STAFFING_REVIEWER_CONFLICT');
  const profile=(await client.query('SELECT revision FROM studio_profiles WHERE company_id=$1',[actor.companyId])).rows[0];
  const specialists:StudioStaffingSpecialist[]=[];
  for(const group of draft.specialists){
-  const existing=group.existingAgentId?await existingSnapshot(client,actor.companyId,group.existingAgentId):null;
+  const capabilities=studioStaffingCapabilities(data.templateId,group.roleKeys),existing=group.existingAgentId?await existingSnapshot(client,actor.companyId,group.existingAgentId,capabilities):null;
   if(existing?.sponsorId===data.reviewerHumanId)fail(409,'The independent reviewer cannot sponsor a producing specialist.','STAFFING_REVIEWER_CONFLICT');
-  const candidate={clientId:stableId('staffing-plan:'+data.clientId+':'+group.key),...data.provider,name:group.name,character:group.character,capabilities:[...STUDIO_STAFFING_CAPABILITIES],invocationAccess:'admins' as const,expiresInDays:30};
+  const candidate={clientId:stableId('staffing-plan:'+data.clientId+':'+group.key),...data.provider,name:group.name,character:group.character,capabilities,invocationAccess:'admins' as const,expiresInDays:30};
   const normalized=existing?null:validateInstallation(candidate).data;
-  specialists.push({key:group.key,name:existing?.name??group.name,roleKeys:group.roleKeys,skillKeys:group.skillKeys,skills:group.skills,character:existing?.character??normalized!.character,mode:existing?'bind':'create',capabilities:existing?.capabilities??[...STUDIO_STAFFING_CAPABILITIES],invocationAccess:existing?.invocationAccess??'admins',conversationAccess:existing?.conversationAccess??'none',provider:existing?{pluginId:existing.pluginId,manifestVersion:existing.manifestVersion,runtimeConfig:existing.runtimeConfig}:data.provider,existing});
+  specialists.push({key:group.key,name:existing?.name??group.name,roleKeys:group.roleKeys,skillKeys:group.skillKeys,skills:group.skills,character:existing?.character??normalized!.character,mode:existing?'bind':'create',capabilities:existing?.capabilities??capabilities,invocationAccess:existing?.invocationAccess??'admins',conversationAccess:existing?.conversationAccess??'none',provider:existing?{pluginId:existing.pluginId,manifestVersion:existing.manifestVersion,runtimeConfig:existing.runtimeConfig}:data.provider,existing});
  }
  let planningReviewer:StudioStaffingSpecialist|undefined;
  if(data.planningReviewer){
@@ -83,13 +88,14 @@ export async function proposeStudioStaffing(client:PoolClient,actor:StudioActor,
   planningReviewer={key:'planning-reviewer',name:normalized.name,roleKeys:[],skillKeys:[instructions.key],skills:[{...instructions}],character:normalized.character,mode:'create',capabilities:[...STUDIO_PLANNING_REVIEW_CAPABILITIES],invocationAccess:'admins',conversationAccess:'none',provider:data.provider,existing:null};
  }
  const warnings=['New identities start paused and unconnected. No worker, inference, DCC job, media access or client delivery is started.','Shared curated role skills are installed; private employee skill vaults are never read or copied.','This complete role plan replaces the current role assignments when applied. Unselected disciplines remain unassigned.'];
- if(!reviewer)warnings.push('Independent QC is unassigned. Invite another administrator before reviewing produced media or approving its delivery; setup and draft work can proceed.');
+  if(!reviewer)warnings.push('Independent QC is unassigned. Invite another administrator before reviewing produced media or approving its delivery; setup and draft work can proceed.');
+ if(data.templateId==='ai-production')warnings.push('AI creative roles receive explicit creative.read and creative.write grants for proposals and unverified observations. Reference planning receives creative.read and infrastructure.read for metadata only. Human approval is still required for each paid Higgsfield request; no provider connection, media upload, generation or storage access is activated by this plan.');
  const actualAgentCount=specialists.length+(planningReviewer?1:0);
  if(actualAgentCount<data.teamSize)warnings.push(`The requested ${data.teamSize} agents exceed the ${actualAgentCount} useful role groups in this scope; only ${actualAgentCount} identities are proposed.`);
  if(planningReviewer)warnings.push('The separate planning reviewer has planning-only authority and no production or human QC role. Its versioned role instructions are saved in its installation persona. Configure and approve a finite project review policy separately; no policy is created here. New agents share the applying administrator as sponsor, so shared-sponsor machine review requires its own explicit policy approval. This is not independent human review.');
  if(specialists.some(s=>s.roleKeys.length>1))warnings.push('One identity may cover several roles. Those roles share the same worker, grants and provider budget.');
- if(specialists.some(s=>s.existing&&(s.existing.capabilities.some(capability=>!STUDIO_STAFFING_CAPABILITIES.includes(capability as typeof STUDIO_STAFFING_CAPABILITIES[number]))||s.existing.conversationAccess!=='none'||s.existing.invocationAccess!=='admins')))warnings.push('Some existing agents have broader grants than a new studio specialist. Their exact retained permissions are shown in this plan; applying does not change them.');
- const plan:StudioStaffingPlan={version:1,templateId:'vfx-boutique',templateVersion:1,brief:data.brief,requestedAgentCount:data.teamSize,actualAgentCount,newAgentCount:specialists.filter(s=>s.mode==='create').length+(planningReviewer?1:0),disciplines:[...data.disciplines],reviewer:data.reviewerHumanId&&reviewer?{humanId:data.reviewerHumanId,...reviewer}:null,profileRevision:profile?.revision??0,specialists,...planningReviewer?{planningReviewer}:{},unassignedRoleKeys:STUDIO_TEMPLATES[0].roles.filter(role=>role.key!=='qc'&&!draft.requiredRoleKeys.includes(role.key)).map(role=>role.key),warnings,startsWorkers:false,startsInference:false,copiesPrivateSkills:false,newIdentityStatus:'paused',credentialDelivery:'not_issued'};
+ if(specialists.some(s=>s.existing&&(s.existing.capabilities.some(capability=>!studioStaffingCapabilities(data.templateId,s.roleKeys).includes(capability))||s.existing.conversationAccess!=='none'||s.existing.invocationAccess!=='admins')))warnings.push('Some existing agents have broader grants than a new studio specialist. Their exact retained permissions are shown in this plan; applying does not change them.');
+ const plan:StudioStaffingPlan={version:1,templateId:data.templateId,templateVersion:template.version,brief:data.brief,requestedAgentCount:data.teamSize,actualAgentCount,newAgentCount:specialists.filter(s=>s.mode==='create').length+(planningReviewer?1:0),disciplines:[...data.disciplines],reviewer:data.reviewerHumanId&&reviewer?{humanId:data.reviewerHumanId,...reviewer}:null,profileRevision:profile?.revision??0,specialists,...planningReviewer?{planningReviewer}:{},unassignedRoleKeys:template.roles.filter(role=>role.key!=='qc'&&!draft.requiredRoleKeys.includes(role.key)).map(role=>role.key),warnings,startsWorkers:false,startsInference:false,copiesPrivateSkills:false,newIdentityStatus:'paused',credentialDelivery:'not_issued'};
  const row=(await client.query('INSERT INTO studio_staffing_proposals(company_id,actor_key,client_id,request_hash,created_by,created_agent_id,run_id,plan,plan_hash,profile_revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id',[actor.companyId,actorKey,data.clientId,requestHash,actor.userId,actor.agentId??null,actor.runId??null,JSON.stringify(plan),digest(plan),plan.profileRevision])).rows[0];
  await client.query("INSERT INTO activity(company_id,actor_id,kind,description) VALUES($1,$2,'studio.staffing_proposed',$3)",[actor.companyId,actor.userId,`A ${actualAgentCount}-identity staffing plan was proposed for human review; no workers or credentials were issued.`]);
  return {proposal:await getStudioStaffingProposal(client,actor.companyId,row.id),replayed:false};
@@ -115,15 +121,15 @@ export async function applyStudioStaffing(client:PoolClient,member:Membership,pr
  if(proposal.status!=='pending')fail(409,'This staffing proposal has already been reviewed.','STAFFING_ALREADY_REVIEWED');
  if(+new Date(proposal.expiresAt)<=Date.now())fail(409,'This staffing proposal expired. Generate a fresh proposal.','STAFFING_PROPOSAL_EXPIRED');
  await validateSource(client,{companyId:member.companyId,userId:proposal.createdBy,agentId:proposal.createdAgentId??undefined,runId:proposal.runId??undefined},false);
- const plan=proposal.plan;if(plan.reviewer)await requireAdministrator(client,member.companyId,plan.reviewer.humanId);
+ const plan=proposal.plan,template=getStudioTemplate(plan.templateId);if(!template||template.version!==plan.templateVersion)fail(409,'The reviewed studio template is unavailable. Prepare a new plan.','STAFFING_TEMPLATE_UNAVAILABLE');if(plan.reviewer)await requireAdministrator(client,member.companyId,plan.reviewer.humanId);
  if(plan.newAgentCount&&plan.reviewer?.humanId===member.userId)fail(409,'Choose an independent administrator to review media; the installing sponsor cannot be its quality reviewer.','STAFFING_REVIEWER_CONFLICT');
  for(const specialist of plan.specialists){
   if(specialist.mode==='bind'){
    if(!specialist.existing)fail(409,'The staffing proposal is incomplete.');
-   const current=await existingSnapshot(client,member.companyId,specialist.existing.agentId);
+   const current=await existingSnapshot(client,member.companyId,specialist.existing.agentId,studioStaffingCapabilities(plan.templateId,specialist.roleKeys));
    if(digest(current)!==digest(specialist.existing))fail(409,'An existing agent changed after the proposal. Review a new staffing plan.','STAFFING_AGENT_CHANGED');
    if(current.sponsorId===plan.reviewer?.humanId)fail(409,'The independent reviewer cannot sponsor a producing specialist.','STAFFING_REVIEWER_CONFLICT');
-  }else if(canonical(specialist.capabilities)!==canonical([...STUDIO_STAFFING_CAPABILITIES])||specialist.invocationAccess!=='admins'||specialist.conversationAccess!=='none')fail(409,'The proposed new identity exceeds studio grants.','STAFFING_GRANT_INVALID');
+  }else if(canonical(specialist.capabilities)!==canonical(studioStaffingCapabilities(plan.templateId,specialist.roleKeys))||specialist.invocationAccess!=='admins'||specialist.conversationAccess!=='none')fail(409,'The proposed new identity exceeds its reviewed template role grants.','STAFFING_GRANT_INVALID');
  }
  if(plan.planningReviewer){const reviewer=plan.planningReviewer;if(reviewer.key!=='planning-reviewer'||reviewer.mode!=='create'||reviewer.existing!==null||reviewer.roleKeys.length!==0||canonical(reviewer.capabilities)!==canonical([...STUDIO_PLANNING_REVIEW_CAPABILITIES])||reviewer.invocationAccess!=='admins'||reviewer.conversationAccess!=='none')fail(409,'The planning reviewer must be a distinct new identity with planning-only grants.','STAFFING_GRANT_INVALID');}
  await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${member.companyId}:agent-quota`]);
@@ -143,7 +149,7 @@ export async function applyStudioStaffing(client:PoolClient,member:Membership,pr
   const installed=(await client.query('INSERT INTO plugin_installations(company_id,agent_id,installed_by,client_id,request_hash,plugin_id,manifest_version,runtime_config,character) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id',[member.companyId,agent.id,member.userId,installation.clientId,hashToken(JSON.stringify(installation)),installation.pluginId,installation.manifestVersion,JSON.stringify(installation.runtimeConfig),JSON.stringify(installation.character)])).rows[0];
   applied.push({key:specialist.key,name:specialist.name,roleKeys:specialist.roleKeys,agentId:agent.id,installationId:installed.id,mode:'create',status:'paused',connectionState:'unconnected',credentialState:'not_issued',capabilities:specialist.capabilities});
  }
- const assignments=STUDIO_TEMPLATES[0].roles.map(role=>({roleKey:role.key,agentId:applied.find(s=>s.roleKeys.includes(role.key))?.agentId??null,humanId:role.key==='qc'?plan.reviewer?.humanId??null:null}));
+ const assignments=template.roles.map(role=>({roleKey:role.key,agentId:applied.find(s=>s.roleKeys.includes(role.key))?.agentId??null,humanId:role.key==='qc'?plan.reviewer?.humanId??null:null}));
  const configured=await setupStudio(client,{companyId:member.companyId,userId:member.userId},{clientId:stableId('staffing-setup:'+proposalId),templateId:plan.templateId,templateVersion:plan.templateVersion,revision:plan.profileRevision,assignments});
  const result:StudioStaffingApplication={proposalId,profileRevision:configured.profile!.revision,specialists:applied.filter(person=>person.key!=='planning-reviewer'),...plan.planningReviewer?{planningReviewer:applied.find(person=>person.key==='planning-reviewer')!}:{},reviewerHumanId:plan.reviewer?.humanId??null,startsWorkers:false,startsInference:false,credentialDelivery:'not_issued'};
  await client.query("UPDATE studio_staffing_proposals SET status='applied',revision=revision+1,applied_by=$3,applied_at=clock_timestamp(),result=$4 WHERE company_id=$1 AND id=$2",[member.companyId,proposalId,member.userId,JSON.stringify(result)]);

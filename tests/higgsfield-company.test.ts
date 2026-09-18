@@ -19,12 +19,12 @@ test('company OAuth, exact spending intent, revocation and uncertain generation 
  process.env.DATABASE_URL=integrationUrl;process.env.DATABASE_POOL_MAX=emulate?'1':'10';process.env.COATRIA_HOSTING_KEYRING=JSON.stringify({activeKeyId:'test',keys:{test:randomBytes(32).toString('base64')}});
  let stop:(()=>Promise<void>)|undefined;
  if(emulate){const {PGlite}=await import('@electric-sql/pglite'),{PGLiteSocketServer}=await import('@electric-sql/pglite-socket'),db=await PGlite.create();for(const file of(await readdir('database')).filter(f=>/^\d.*\.sql$/.test(f)).sort())await db.exec(await readFile('database/'+file,'utf8'));const server=new PGLiteSocketServer({db,host:'127.0.0.1',port:0,maxConnections:1});await server.start();process.env.DATABASE_URL='postgresql://postgres:postgres@'+server.getServerConn()+'/postgres';stop=async()=>{await server.stop();await db.close();};}
- const company=randomUUID(),foreign=randomUUID(),owner=randomUUID(),member=randomUUID(),other=randomUUID(),project=randomUUID();const sessions={owner:randomUUID(),member:randomUUID(),other:randomUUID()};
+ const company=randomUUID(),foreign=randomUUID(),owner=randomUUID(),member=randomUUID(),other=randomUUID(),project=randomUUID(),creativeAgent=randomUUID(),creativeToken='ca_'+randomUUID();const sessions={owner:randomUUID(),member:randomUUID(),other:randomUUID()};
  const prefix=`companies/${company}/higgsfield`,origin='https://coatria.com',access='fixture_'+randomUUID(),refresh='fixture_'+randomUUID();
- let paid=0,exchanges=0,refreshes=0,mode:'ok'|'uncertain'|'tool_error'='ok';
+ let paid=0,estimates=0,exchanges=0,refreshes=0,mode:'ok'|'uncertain'|'tool_error'='ok';
  const issuer='https://clerk.higgsfield.ai',endpoint='https://mcp.higgsfield.ai/mcp',callback=origin+'/api/higgsfield/callback';
  const toolSchema={type:'object',properties:{prompt:{type:'string'}},required:['prompt'],additionalProperties:false};
- const tools=['generate_image','generate_video','generate_audio','balance','models_list','jobs_wait','list_workspaces','workspace_select'].map(name=>({name,description:'Fixture '+name,inputSchema:toolSchema}));
+ const tools:{name:string;description:string;inputSchema:Record<string,unknown>}[]=['generate_image','generate_video','generate_audio','balance','models_list','jobs_wait','list_workspaces','workspace_select'].map(name=>({name,description:'Fixture '+name,inputSchema:toolSchema}));
  globalThis.fetch=async(input,init)=>{
   const url=String(input);assert.equal(init?.redirect,'error');
   if(url==='https://mcp.higgsfield.ai/.well-known/oauth-protected-resource/mcp')return Response.json({resource:endpoint,authorization_servers:[issuer],scopes_supported:['openid','email','offline_access']});
@@ -36,10 +36,10 @@ test('company OAuth, exact spending intent, revocation and uncertain generation 
   let result:unknown;
   if(command.method==='initialize')result={protocolVersion:'2025-11-25',capabilities:{tools:{}}};
   else if(command.method==='tools/list')result={tools};
-  else if(command.method==='tools/call'){if(command.params.name.startsWith('generate_')){paid++;if(mode==='uncertain')throw Error('Synthetic connection loss after submit');result={content:[{type:'text',text:'Fixture provider accepted job'}],...(mode==='tool_error'?{isError:true}:{structuredContent:{job_ids:[randomUUID()],status:'queued'}})};}else result={content:[{type:'text',text:'Fixture read response'}]};}
+  else if(command.method==='tools/call'){if(command.params.name.startsWith('generate_')){if(command.params.arguments.params?.get_cost===true){estimates++;assert.deepEqual(Object.keys(command.params.arguments),['params']);result={content:[],structuredContent:{cost:2,estimate:true}};}else{paid++;if(mode==='uncertain')throw Error('Synthetic connection loss after submit');result={content:[{type:'text',text:'Fixture provider accepted job'}],...(mode==='tool_error'?{isError:true}:{structuredContent:{job_ids:[randomUUID()],status:'queued'}})};}}else result={content:[{type:'text',text:'Fixture read response'}]};}
   else throw Error('Unexpected RPC');return Response.json({jsonrpc:'2.0',id:command.id,result});
  };
- async function call(path:string,method='GET',payload?:unknown,actor:keyof typeof sessions|'none'='owner',expected=200){const headers:Record<string,string>={Origin:origin};if(actor!=='none')headers.Cookie='coatria_session='+sessions[actor];if(payload!==undefined)headers['Content-Type']='application/json';const response=await handleApi(new Request(origin+'/api/'+path,{method,headers,...payload===undefined?{}:{body:JSON.stringify(payload)}}),path.split('?')[0].split('/'));const value=response.status===303?{}:await response.json();assert.equal(response.status,expected,`${method} ${path} returned ${JSON.stringify(value)}`);assert(!JSON.stringify(value).includes(access));assert(!JSON.stringify(value).includes(refresh));return {response,value};}
+ async function call(path:string,method='GET',payload?:unknown,actor:keyof typeof sessions|'none'|'agent'='owner',expected=200){const headers:Record<string,string>={Origin:origin};if(actor==='agent')headers.Authorization='Bearer '+creativeToken;else if(actor!=='none')headers.Cookie='coatria_session='+sessions[actor];if(payload!==undefined)headers['Content-Type']='application/json';const response=await handleApi(new Request(origin+'/api/'+path,{method,headers,...payload===undefined?{}:{body:JSON.stringify(payload)}}),path.split('?')[0].split('/'));const value=response.status===303?{}:await response.json();assert.equal(response.status,expected,`${method} ${path} returned ${JSON.stringify(value)}`);assert(!JSON.stringify(value).includes(access));assert(!JSON.stringify(value).includes(refresh));return {response,value};}
  let proposal:any;
  try{
   for(const[id,name]of [[owner,'owner'],[member,'member'],[other,'other']])await query('INSERT INTO users(id,name,email,password_hash) VALUES($1,$2,$3,$4)',[id,name,id+'@example.invalid','fixture']);
@@ -89,8 +89,101 @@ test('company OAuth, exact spending intent, revocation and uncertain generation 
    const catalog=await transaction(db=>higgsfieldAgentConnection(db,company));assert(catalog.tools.every((item:any)=>!('inputSchema' in item)));
    const schema=await transaction(db=>higgsfieldAgentConnection(db,company,'generate_image'));assert.equal(schema.tools.length,1);assert(schema.tools[0].inputSchema);
   });
+  await t.test('Higgsfield requests pin exact tasks and assignments; stale tasks and reports cannot spend or complete work',async sub=>{
+   mode='ok';const before=paid;
+   const p=(await call(`companies/${company}/studio/projects`,'POST',{clientId:randomUUID(),name:'Task-bound film',clientName:'Internal',brief:'An original concept film with approved sources.',productionPath:'higgsfield',aiPolicy:'allowed',spec:{width:1920,height:1080,fpsNumerator:24,fpsDenominator:1,format:'mp4',colorSpace:'Rec.709'},shots:[{code:'SH010',description:'Original product concept',frameStart:1,frameEnd:120,handles:0,disciplines:['compositing']}]},'owner',201)).value.project;
+   const detail=(await call(`companies/${company}/studio/projects/${p.id}`)).value;
+   const work=detail.workItems.find((w:any)=>w.execution==='creative'),reference=detail.workItems.find((w:any)=>w.stage==='references');assert(work);assert(reference);
+   const input={clientId:randomUUID(),projectId:p.id,projectRevision:p.revision,tool:'generate_video',arguments:{prompt:'An original cream jar'},note:'Task-bound concept'};
+   await call(prefix+'/requests','POST',input,'owner',400);
+   await call(prefix+'/requests','POST',{...input,workItemId:randomUUID()},'owner',404);
+   await call(prefix+'/requests','POST',{...input,workItemId:reference.id},'owner',409);
+   await call(prefix+'/requests','POST',{...input,workItemId:work.id},'owner',409);
+   await query('UPDATE studio_projects SET gates=$2 WHERE id=$1',[p.id,JSON.stringify(Object.fromEntries(['brief','estimate','production'].map(k=>[k,{decision:'approved'}])))]);
+   await call(prefix+'/requests','POST',{...input,workItemId:work.id},'owner',409);
+   await query("UPDATE tasks SET status='done' WHERE id IN (SELECT task_id FROM studio_work_items WHERE company_id=$1 AND project_id=$2 AND stage IN ('estimate','breakdown','references'))",[company,p.id]);
+   const request=(await call(prefix+'/requests','POST',{...input,workItemId:work.id},'owner',201)).value.request;assert.equal(request.workItemId,work.id);assert.equal(request.taskRevision,work.revision);
+   const replay=(await call(prefix+'/requests','POST',{...input,workItemId:work.id},'owner',201)).value;assert.equal(replay.replayed,true);assert.equal(paid,before);
+   await query('UPDATE tasks SET revision=revision+1 WHERE id=$1',[work.taskId]);
+   await call(`${prefix}/requests/${request.id}/execute`,'POST',{requestHash:request.requestHash,creditConsent:true},'owner',409);assert.equal(paid,before);
+   const next=(await call(prefix+'/requests','POST',{...input,clientId:randomUUID(),workItemId:work.id},'owner',201)).value.request;
+   await query("INSERT INTO studio_role_bindings(company_id,role_key,human_id) VALUES($1,'comp',$2) ON CONFLICT(company_id,role_key) DO UPDATE SET human_id=EXCLUDED.human_id",[company,owner]);
+   await call(`${prefix}/requests/${next.id}/execute`,'POST',{requestHash:next.requestHash,creditConsent:true},'owner',409);assert.equal(paid,before);
+   const current=(await call(prefix+'/requests','POST',{...input,clientId:randomUUID(),workItemId:work.id},'owner',201)).value.request;
+   const result=(await call(`${prefix}/requests/${current.id}/execute`,'POST',{requestHash:current.requestHash,creditConsent:true})).value;assert.equal(result.mediaCompleted,false);assert.equal(paid,before+1);
+   assert.equal((await query('SELECT status FROM tasks WHERE id=$1',[work.taskId])).rows[0].status,'todo');
+   await call(`companies/${company}/tasks/${work.taskId}`,'PATCH',{status:'review'},'owner',409);
+   await query("UPDATE tasks SET status='done' WHERE id=$1",[work.taskId]);
+   await call(prefix+'/requests','POST',{...input,clientId:randomUUID(),workItemId:work.id},'owner',409);assert.equal(paid,before+1);
+   // Actual leased agent route: a creative grant is not authority over arbitrary tasks.
+   const capabilities=['studio.read','studio.write','tasks.write','creative.read','creative.write'];
+   await query("INSERT INTO agents(id,company_id,name,harness,token_hash,created_by,invocation_access,capabilities) VALUES($1,$2,'Creative worker','custom',$3,$4,'admins',$5)",[creativeAgent,company,hashToken(creativeToken),owner,JSON.stringify(capabilities)]);
+   const run=(await call(`companies/${company}/conversations/commons/runs`,'POST',{clientId:randomUUID(),agentId:creativeAgent,prompt:'Prepare the assigned generation intent.'},'owner',201)).value.run;
+   const lease=(await call('agent/runs/claim','POST',{workerId:'creative-fixture',claimId:randomUUID()},'agent')).value;
+   const tool=(name:string,args:unknown,expected=200)=>call('agent/tools/'+name,'POST',{runId:run.id,leaseToken:lease.leaseToken,requestId:randomUUID(),arguments:args},'agent',expected);
+   const {clientId:_,...toolInput}=input;
+   await tool('higgsfield_generation_propose',toolInput,400);
+   await query("UPDATE tasks SET status='todo' WHERE id=$1",[work.taskId]);
+   await tool('higgsfield_generation_propose',{...toolInput,workItemId:work.id},403);
+   await query("UPDATE studio_role_bindings SET human_id=NULL,agent_id=$2 WHERE company_id=$1 AND role_key='comp'",[company,creativeAgent]);
+   await tool('higgsfield_generation_propose',{...toolInput,workItemId:work.id},403);
+   const version=(await query('SELECT revision FROM tasks WHERE id=$1',[work.taskId])).rows[0].revision;
+   await tool('tasks_claim',{taskId:work.taskId,revision:version});
+   const proposed=(await tool('higgsfield_generation_propose',{...toolInput,workItemId:work.id})).value.result.request;assert.equal(proposed.workItemId,work.id);assert.equal(paid,before+1);
+   await query("UPDATE agents SET capabilities=capabilities-'creative.write' WHERE id=$1",[creativeAgent]);
+   await tool('higgsfield_generation_propose',{...toolInput,workItemId:work.id},403);
+   await query('UPDATE agents SET capabilities=$2 WHERE id=$1',[creativeAgent,JSON.stringify(capabilities)]);
+   await call(`agent/runs/${run.id}/complete`,'POST',{leaseToken:lease.leaseToken,clientId:randomUUID(),result:'Prepared one exact request. No generation or media completion claimed.'},'agent');
+   await call(`${prefix}/requests/${proposed.id}/execute`,'POST',{requestHash:proposed.requestHash,creditConsent:true});
+   assert.equal(paid,before+2,'An administrator may adopt the exact task-bound proposal after its originating run ends.');
+   assert.equal((await query('SELECT status FROM tasks WHERE id=$1',[work.taskId])).rows[0].status,'doing');
+   await sub.test('real PostgreSQL serializes an approved generation behind a concurrent project/task edit',{skip:emulate},async()=>{
+    const pendingRequest=(await call(prefix+'/requests','POST',{...input,clientId:randomUUID(),workItemId:work.id},'owner',201)).value.request;
+    const editor=await database().connect();let approval:Promise<unknown>|undefined;
+    try{
+     await editor.query('BEGIN');await editor.query('SELECT id FROM studio_projects WHERE id=$1 FOR UPDATE',[p.id]);
+     await editor.query('UPDATE tasks SET revision=revision+1 WHERE id=$1',[work.taskId]);
+     approval=call(`${prefix}/requests/${pendingRequest.id}/execute`,'POST',{requestHash:pendingRequest.requestHash,creditConsent:true},'owner',409);
+     let waiting=false;for(let attempt=0;attempt<80;attempt++){
+      const blocked=(await query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT id,revision,ai_policy,gates,status,production_path FROM studio_projects%' LIMIT 1")).rowCount;
+      if(blocked){waiting=true;break;}await new Promise(resolve=>setTimeout(resolve,25));
+     }
+     assert(waiting,'The approval must actually wait for the concurrent project edit.');
+     await editor.query('COMMIT');await approval;assert.equal(paid,before+2);
+     assert.equal((await query('SELECT status FROM higgsfield_requests WHERE id=$1',[pendingRequest.id])).rows[0].status,'proposed');
+    }finally{await editor.query('ROLLBACK').catch(()=>{});editor.release();await approval?.catch(()=>{});}
+   });
+  });
+  await t.test('authenticated catalog changes are explicit and invalidate unsent proposals without spending',async()=>{
+   const before=paid;
+   await call(prefix+'/catalog','POST',{},'member',403);await call(prefix+'/catalog','POST',{},'other',404);
+   const unchanged=(await call(prefix+'/catalog','POST',{})).value;assert.equal(unchanged.catalogChanged,false);assert.equal(unchanged.revision,1);
+   const pending=(await call(prefix+'/requests','POST',{clientId:randomUUID(),projectId:project,projectRevision:1,tool:'generate_image',arguments:{prompt:'Review against the old catalog'},note:'Catalog drift fixture'},'owner',201)).value.request;
+   await call(prefix+'/read','POST',{tool:'models_explore',arguments:{}},'owner',409);
+   tools.push({name:'models_explore',description:'Read available model constraints',inputSchema:{type:'object',properties:{},required:[],additionalProperties:false}});
+   tools[0].inputSchema={type:'object',required:['params'],properties:{params:{anyOf:[{type:'object',required:['model'],properties:{model:{type:'string'},prompt:{type:'string'},get_cost:{type:'boolean'}}},{type:'string'}]}}};
+   const changed=(await call(prefix+'/catalog','POST',{})).value;assert.equal(changed.catalogChanged,true);assert.equal(changed.existingProposalsNeedReview,true);assert.equal(changed.revision,2);
+   assert(changed.tools.some((x:any)=>x.name==='models_explore'));assert(!changed.tools.some((x:any)=>x.name==='workspace_select'));
+   await call(prefix+'/read','POST',{tool:'models_explore',arguments:{}});
+   await call(`${prefix}/requests/${pending.id}/execute`,'POST',{requestHash:pending.requestHash,creditConsent:true},'owner',409);
+   assert.equal((await call(prefix+'/catalog','POST',{})).value.revision,2);assert.equal(paid,before);
+  });
+  await t.test('exact cost preflight forces the advertised read-only flag and never authorizes generation',async()=>{
+   const before=paid,input={clientId:randomUUID(),projectId:project,projectRevision:1,tool:'generate_image',arguments:{params:{model:'fixture-image',prompt:'An original product concept',get_cost:false},get_cost:false},note:'Cost fixture'};
+   const request=(await call(prefix+'/requests','POST',input,'owner',201)).value.request;
+   await call(`${prefix}/requests/${request.id}/estimate`,'POST',{requestHash:request.requestHash},'member',403);
+   await call(`${prefix}/requests/${request.id}/estimate`,'POST',{requestHash:'b'.repeat(64)},'owner',409);
+   await call(`${prefix}/requests/${request.id}/estimate`,'POST',{requestHash:request.requestHash,arguments:{}},'owner',400);
+   const quote=(await call(`${prefix}/requests/${request.id}/estimate`,'POST',{requestHash:request.requestHash})).value;
+   assert.equal(quote.estimateOnly,true);assert.equal(quote.spendingAuthorized,false);assert.equal(quote.priceGuaranteed,false);assert.equal(quote.result.structuredContent.cost,2);assert.equal(estimates,1);assert.equal(paid,before);
+   const stored=(await query('SELECT arguments,status FROM higgsfield_requests WHERE id=$1',[request.id])).rows[0];assert.deepEqual(stored.arguments,input.arguments);assert.equal(stored.status,'proposed');
+   const serialized=(await call(prefix+'/requests','POST',{...input,clientId:randomUUID(),arguments:{params:JSON.stringify(input.arguments.params)}},'owner',201)).value.request;
+   await call(`${prefix}/requests/${serialized.id}/estimate`,'POST',{requestHash:serialized.requestHash},'owner',409);
+   const unsupported=(await call(prefix+'/requests','POST',{...input,clientId:randomUUID(),tool:'generate_audio'},'owner',201)).value.request;
+   await call(`${prefix}/requests/${unsupported.id}/estimate`,'POST',{requestHash:unsupported.requestHash},'owner',409);assert.equal(estimates,1);assert.equal(paid,before);
+  });
   await t.test('disconnect destroys stored credential and invalidates proposals; exact revision required',async()=>{
-   await call(prefix+'/disconnect','POST',{revision:4},'owner',409);await call(prefix+'/disconnect','POST',{revision:1});
+   await call(prefix+'/disconnect','POST',{revision:1},'owner',409);await call(prefix+'/disconnect','POST',{revision:2});
    assert.equal((await query('SELECT sealed FROM higgsfield_connections WHERE company_id=$1',[company])).rows[0].sealed,null);
    await call(prefix+'/read','POST',{tool:'balance',arguments:{}},'owner',409);assert.equal((await call(prefix)).value.status,'disconnected');
   });

@@ -1,19 +1,32 @@
 import {z} from 'zod';
-import {STUDIO_DISCIPLINES,STUDIO_SKILLS,STUDIO_TEMPLATES} from './studio-protocol';
+import {STUDIO_DISCIPLINES,STUDIO_SKILLS,STUDIO_TEMPLATES,getStudioTemplate} from './studio-protocol';
 import type {PluginRuntimeConfig,AgentCharacter} from './plugin-catalog';
 
 const text=(max:number)=>z.string().trim().min(1).max(max),uuid=z.string().uuid();
 export const STUDIO_STAFFING_CAPABILITIES=['studio.read','studio.write','tasks.write'] as const;
+export const STUDIO_STAFFING_TEMPLATE_IDS=['vfx-boutique','ai-production'] as const;
+export type StudioStaffingTemplateId=typeof STUDIO_STAFFING_TEMPLATE_IDS[number];
+/** These additions are in the immutable administrator-reviewed plan. Existing
+ * identities must already hold them; staffing never changes a bound grant. */
+export function studioStaffingCapabilities(templateId:StudioStaffingTemplateId,roleKeys:readonly string[]):string[]{
+ const grants:string[]=[...STUDIO_STAFFING_CAPABILITIES];
+ if(templateId==='ai-production'){
+  if(roleKeys.includes('ingest'))grants.push('infrastructure.read','creative.read');
+  if(roleKeys.includes('comp'))grants.push('creative.read','creative.write');
+ }
+ return [...new Set(grants)];
+}
 export const STUDIO_PLANNING_REVIEW_CAPABILITIES=['studio.read','studio.review'] as const;
 export const STUDIO_PLANNING_REVIEW_INSTRUCTIONS={key:'planning-review',title:'Planning review instructions',version:1,instructions:'Review only the exact planning submission assigned by a separately approved machine-review policy. First use studio_review_read; compare the pinned contribution to the approved brief, required inputs, assumptions and evidence. Then use studio_review_decide with the returned policy revision and submission hash. Request changes or reject when evidence is missing. Never review your own contribution, create or execute production work, approve media QC, authorize commercial or production gates, or record client acceptance. Metadata is not proof of footage inspection. Report only recorded API decisions. This is machine planning review, not independent human review.'} as const;
 export const STUDIO_STAFFING_MAX_AGENTS=11;
-export const STUDIO_STAFFING_ROLE_KEYS=STUDIO_TEMPLATES[0].roles.filter(role=>role.key!=='qc').map(role=>role.key);
+export const STUDIO_STAFFING_ROLE_KEYS=[...new Set(STUDIO_TEMPLATES.flatMap(template=>template.roles.filter(role=>role.key!=='qc').map(role=>role.key)))];
 const roleKey=z.string().refine(value=>STUDIO_STAFFING_ROLE_KEYS.includes(value),'Choose a curated specialist role; quality review requires a human.');
 export const studioStaffingProviderInput=z.object({
  pluginId:text(80),manifestVersion:text(40),
  runtimeConfig:z.object({providerId:text(80).regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/),modelId:text(160).regex(/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/),maxSteps:z.number().int().min(1).max(20).default(8),maxOutputTokens:z.number().int().min(256).max(8192).default(2048),maxTotalTokens:z.number().int().min(2000).max(100000).default(24000),timeoutSeconds:z.number().int().min(30).max(600).default(180)}).strict().refine(value=>value.maxOutputTokens<=value.maxTotalTokens,'Output token limit cannot exceed the total token limit.'),
 }).strict();
 export const studioStaffingPlanInput=z.object({
+ templateId:z.enum(STUDIO_STAFFING_TEMPLATE_IDS).default('vfx-boutique').describe('Choose the reviewed company role template. Omitted values preserve the legacy VFX plan. AI production uses official Higgsfield proposals and storage-only references, with explicit creative grants and independent human QC.'),
  brief:text(6000),teamSize:z.number().int().min(1).max(STUDIO_STAFFING_MAX_AGENTS),
  disciplines:z.array(z.enum(STUDIO_DISCIPLINES)).min(1).max(7).refine(values=>new Set(values).size===values.length,'Disciplines must be unique.'),
  reviewerHumanId:uuid.nullable().default(null),provider:studioStaffingProviderInput,
@@ -26,18 +39,19 @@ export const studioStaffingRejectInput=z.object({revision:z.number().int().min(1
 export type StudioStaffingDraft=z.infer<typeof studioStaffingPlanInput>;
 export type StudioStaffingExisting={agentId:string;installationId:string;installationRevision:number;name:string;sponsorId:string;status:string;expiresAt:string;invocationAccess:string;conversationAccess:string;capabilities:string[];pluginId:string;manifestVersion:string;runtimeConfig:PluginRuntimeConfig;character:AgentCharacter};
 export type StudioStaffingSpecialist={key:string;name:string;roleKeys:string[];skillKeys:string[];skills:Array<{key:string;title:string;version:number;instructions:string}>;character:AgentCharacter;mode:'create'|'bind';capabilities:string[];invocationAccess:string;conversationAccess:string;provider:z.infer<typeof studioStaffingProviderInput>;existing:StudioStaffingExisting|null};
-export type StudioStaffingPlan={version:1;templateId:'vfx-boutique';templateVersion:1;brief:string;requestedAgentCount:number;actualAgentCount:number;newAgentCount:number;disciplines:string[];reviewer:{humanId:string;name:string;role:'owner'|'admin'}|null;profileRevision:number;specialists:StudioStaffingSpecialist[];planningReviewer?:StudioStaffingSpecialist;unassignedRoleKeys:string[];warnings:string[];startsWorkers:false;startsInference:false;copiesPrivateSkills:false;newIdentityStatus:'paused';credentialDelivery:'not_issued'};
+export type StudioStaffingPlan={version:1;templateId:StudioStaffingTemplateId;templateVersion:1;brief:string;requestedAgentCount:number;actualAgentCount:number;newAgentCount:number;disciplines:string[];reviewer:{humanId:string;name:string;role:'owner'|'admin'}|null;profileRevision:number;specialists:StudioStaffingSpecialist[];planningReviewer?:StudioStaffingSpecialist;unassignedRoleKeys:string[];warnings:string[];startsWorkers:false;startsInference:false;copiesPrivateSkills:false;newIdentityStatus:'paused';credentialDelivery:'not_issued'};
 export type StudioStaffingProposal={id:string;companyId:string;revision:number;status:'pending'|'applied'|'rejected';plan:StudioStaffingPlan;planHash:string;profileRevision:number;createdBy:string;createdAgentId:string|null;runId:string|null;createdAt:string;expiresAt:string;appliedBy:string|null;appliedAt:string|null;result:StudioStaffingApplication|null;rejectionNote:string|null};
 export type StudioStaffingAppliedIdentity={key:string;name:string;roleKeys:string[];agentId:string;installationId:string;mode:'create'|'bind';status:string;connectionState:'unconnected'|'unverified';credentialState:'not_issued'|'existing';capabilities:string[]};
 export type StudioStaffingApplication={proposalId:string;profileRevision:number;specialists:StudioStaffingAppliedIdentity[];planningReviewer?:StudioStaffingAppliedIdentity;reviewerHumanId:string|null;startsWorkers:false;startsInference:false;credentialDelivery:'not_issued'};
 
 /** Pure, deterministic fallback for a harness that has not supplied a custom grouping. */
 export function draftStudioStaffing(input:unknown){
- const data=studioStaffingPlanInput.parse(input),template=STUDIO_TEMPLATES[0];
+ const data=studioStaffingPlanInput.parse(input),template=getStudioTemplate(data.templateId);
+ if(!template)throw new Error('Choose an available studio staffing template.');
  const productionSlots=data.teamSize-(data.planningReviewer?1:0);
  if(productionSlots<1)throw new Error('A separate planning reviewer requires at least two AI team members.');
  const disciplineRole:Record<string,string>={prep:'prep',matchmove:'prep',layout:'cg',animation:'cg',fx:'fx',lighting:'lighting',compositing:'comp'};
- const requiredKeys=new Set(['producer','coordinator','supervisor','ingest','delivery',...data.disciplines.map(discipline=>disciplineRole[discipline])]);
+ const requiredKeys=new Set(data.templateId==='ai-production'?template.roles.filter(role=>role.key!=='qc').map(role=>role.key):['producer','coordinator','supervisor','ingest','delivery',...data.disciplines.map(discipline=>disciplineRole[discipline])]);
  const required=template.roles.filter(role=>requiredKeys.has(role.key));
  let groups=data.specialists;
  if(groups){

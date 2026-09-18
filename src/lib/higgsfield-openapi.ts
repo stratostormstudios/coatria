@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {higgsfieldProposalInput,higgsfieldExecuteInput,higgsfieldReadInput} from './higgsfield-protocol';
+import {higgsfieldProposalInput,higgsfieldExecuteInput,higgsfieldEstimateInput,higgsfieldReadInput} from './higgsfield-protocol';
 import {studioGenerationImportInput,studioStorageReferenceInput} from './studio-creative-assets-protocol';
 const schema=(value:z.ZodType)=>z.toJSONSchema(value,{io:'input',unrepresentable:'any'});
 const parameter=(name:string,where='path',required=true)=>({name,in:where,required,schema:{type:'string',format:'uuid'}});
@@ -9,12 +9,14 @@ function operation(summary:string,parameters:unknown[],input?:z.ZodType,extra:Re
 export const higgsfieldPaths={
  '/api/companies/{companyId}/higgsfield':{get:operation('Official MCP connection status and discovered supported tools; no credentials.',company)},
  '/api/companies/{companyId}/higgsfield/connect':{post:operation('Begin a ten-minute session-bound, single-use PKCE authorization with the official Higgsfield service. Administrator only; no generations.',company,z.object({}).strict())},
+ '/api/companies/{companyId}/higgsfield/catalog':{post:operation('Refresh the official supported tool catalog without generating. Administrator only. A changed catalog advances connection revision and requires new review of unsent proposals.',company,z.object({}).strict())},
  '/api/companies/{companyId}/higgsfield/disconnect':{post:operation('Disconnect local company access and erase encrypted OAuth credentials. Existing provider jobs are not cancelled.',company,z.object({revision:z.number().int().positive()}).strict())},
  '/api/companies/{companyId}/higgsfield/read':{post:operation('Invoke an explicitly allowed discovered read tool using company credentials. Administrator only.',company,higgsfieldReadInput)},
  '/api/companies/{companyId}/higgsfield/requests':{
   get:operation('Page bounded request summaries or requestId for one exact receipt. Follow nextAfter; default 20, maximum 50.',[...company,parameter('projectId','query'),parameter('requestId','query',false),parameter('after','query',false),{name:'limit',in:'query',schema:{type:'integer',minimum:1,maximum:50,default:20}}]),
-  post:operation('Prepare a generation request. Does not spend credits. Pins project revision, connection revision, exact tool and arguments.',company,higgsfieldProposalInput)},
- '/api/companies/{companyId}/higgsfield/requests/{requestId}/execute':{post:operation('Administrator approves the exact argument hash and provider credit charge. Requires current project gates. Dispatch intent is committed before tools/call; returned is not media completion; uncertain is never replayed.',[...company,parameter('requestId')],higgsfieldExecuteInput)},
+  post:operation('Prepare a generation request. Does not spend credits. Pins project revision, connection revision, exact tool and arguments. Higgsfield projects require an exact generation workItemId; the server additionally pins task revision and role assignment.',company,higgsfieldProposalInput)},
+ '/api/companies/{companyId}/higgsfield/requests/{requestId}/execute':{post:operation('Administrator approves the exact argument hash and provider credit charge. Requires current project gates, unchanged task revision and role assignment. Dispatch intent is committed before tools/call; returned is not media completion; uncertain is never replayed.',[...company,parameter('requestId')],higgsfieldExecuteInput)},
+ '/api/companies/{companyId}/higgsfield/requests/{requestId}/estimate':{post:operation('Read-only cost preflight for the exact unsent request. Requires advertised get_cost:boolean support; server forces params.get_cost=true and rejects serialized params. Does not approve spending or guarantee a future price.',[...company,parameter('requestId')],higgsfieldEstimateInput)},
  '/api/higgsfield/callback':{get:operation('Official OAuth GET callback, bound to initiating administrator session and exact state. Codes are exchanged once; redirects to Plugins.',[{name:'state',in:'query',required:true,schema:{type:'string'}},{name:'code',in:'query',schema:{type:'string'}},{name:'iss',in:'query',schema:{type:'string'}},{name:'error',in:'query',schema:{type:'string'}}],undefined,{responses:{'303':{description:'Return to Plugins without exposing tokens.'},...errors}})},
  '/api/companies/{companyId}/studio/projects/{projectId}/creative-assets/generations':{
   get:operation('Page immutable imported generation identities and latest reported observations. Provider existence/media bytes are not verified.',[...project,parameter('after','query',false),{name:'limit',in:'query',schema:{type:'integer',minimum:1,maximum:100,default:25}}]),

@@ -20,6 +20,7 @@ import {studioExecutionSnapshot,studioExecutionJob,studioExecutionInput,submitSt
 import {studioCoordinationGetInput,studioWorkDispatchInput} from './studio-coordination-protocol';
 import {studioCoordinationSnapshot,dispatchStudioWork} from './studio-coordination';
 import {assertRenderFollowupTool} from './studio-render-followups';
+import {assertCreativeFollowupTool} from './studio-creative-followup';
 import {studioReviewPolicyGetInput,studioReviewDispatchInput,studioReviewReadInput,studioReviewDecideInput} from './studio-review-policy-protocol';
 import {studioReviewAgentSnapshot,dispatchStudioReview,readStudioPlanningReview,decideStudioPlanningReview} from './studio-review-policy';
 import {studioClientDeliveryListInput} from './studio-client-delivery-protocol';
@@ -135,9 +136,13 @@ export function studioAgentProject(detail:StudioProjectDetail,{after,limit=50,ar
 export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>,name:string,input:unknown){
  const definition=AGENT_TOOLS[name];if(!definition)fail(404,'Unknown Coatria tool.');
  const command=parse(z.object({runId:uuid,leaseToken:z.string().min(20).max(200),requestId:uuid,arguments:z.unknown()}).strict(),input),args=parse(definition.schema,command.arguments) as Record<string,any>;
- const hash=createHash('sha256').update(canonical({tool:name,runId:command.runId,arguments:args})).digest('hex');
+ // Preserve receipts written before these optional workflow selectors existed.
+ const hashArgs={...args};
+ if(name==='studio_plan'&&hashArgs.productionPath==='vfx')delete hashArgs.productionPath;
+ if(name==='studio_staffing_propose'&&hashArgs.templateId==='vfx-boutique')delete hashArgs.templateId;
+ const hash=createHash('sha256').update(canonical({tool:name,runId:command.runId,arguments:hashArgs})).digest('hex');
  return transaction(async client=>{
-  const context=await authorizeRunTool(client,agent,command.runId,command.leaseToken);await assertRenderFollowupTool(client,context.agent,context.run,name,args);
+  const context=await authorizeRunTool(client,agent,command.runId,command.leaseToken);await assertRenderFollowupTool(client,context.agent,context.run,name,args);await assertCreativeFollowupTool(client,context.agent,context.run,name,args);
   if(!context.capabilities.includes(definition.capability))fail(403,'This run does not have permission for this tool.','AGENT_CAPABILITY_REQUIRED');
   if((['studio.write','studio.execute','studio.review','creative.write'].includes(definition.capability)||name==='studio_staffing_get')&&!['owner','admin'].includes(context.requesterRole))fail(403,'Studio changes, planning review and staffing require a current owner or administrator request.','STUDIO_REQUESTER_ACCESS');
   // All operations on a run are serialized after current authority and lease checks.

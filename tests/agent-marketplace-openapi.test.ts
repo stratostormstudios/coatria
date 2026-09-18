@@ -20,7 +20,7 @@ test('agent identity contract authenticates the token without disclosing credent
 });
 
 test('marketplace and autonomous APIs expose current strict input contracts and cannot accept credentials',()=>{
- assert.equal(spec.info.version,'1.7.0');
+ assert.equal(spec.info.version,'1.8.0');
  for(const[path,method,schema]of[[installations,'post',pluginInstallInput],[installations+'/{installationId}','patch',pluginPatchInput],[missions,'post',missionCreateInput],[missions+'/{missionId}','patch',missionPatchInput]]as const){assert.deepEqual(request(path,method),input(schema));assert.equal(request(path,method).additionalProperties,false);}
  const install=request(installations,'post');assert.equal(install.properties.runtimeConfig.additionalProperties,false);assert.equal(install.properties.character.additionalProperties,false);
  for(const key of['apiKey','token','endpoint','endpointUrl','shell','script'])assert.equal(key in install.properties,false);
