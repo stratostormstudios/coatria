@@ -12,7 +12,7 @@ The implementation is [renderer.mts](../scripts/vfx/renderer.mts), the reviewed 
 | --- | --- |
 | Engine | Blender Cycles, CPU, two render threads |
 | Frames | Inclusive range of at most 24; frame identities 0–10,000,000 |
-| Image dimensions | 16–1,024 pixels on either axis |
+| Image dimensions | 64–1,024 pixels on either axis |
 | Aggregate image size | At most 8,000,000 pixels over the whole requested range |
 | Frame rate | Exact numerator/denominator, effective rate 1–60 fps |
 | Working space | Explicit `Linear Rec.709` or `ACEScg` |

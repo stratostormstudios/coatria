@@ -8,7 +8,8 @@ export const studioCoordinationInput=z.object({
  status:z.enum(['active','paused']),maxRuns:z.number().int().min(1).max(100),maxConcurrentRuns:z.number().int().min(1).max(3),expiresAt:z.string().datetime(),
 }).strict();
 export const studioCoordinationGetInput=z.object({projectId:uuid}).strict();
-export const studioWorkDispatchInput=z.object({projectId:uuid,workItemId:uuid,policyRevision:revision,projectRevision:revision}).strict();
+export const studioWorkDispatchInput=z.object({projectId:uuid,workItemId:uuid,policyRevision:revision,projectRevision:revision,executionJobId:uuid.optional()}).strict();
 export type StudioCoordinationPolicy={projectId:string;coordinatorAgentId:string;allowedRoleKeys:string[];status:'active'|'paused';effectiveStatus:'active'|'paused'|'expired'|'approval_required'|'exhausted';blocker:string|null;revision:number;maxRuns:number;runsStarted:number;remainingRuns:number;maxConcurrentRuns:number;approvedBy:string;expiresAt:string;updatedAt:string;profileRevision:number};
-export type StudioCoordinationDispatch={workItemId:string;parentRunId:string;childRunId:string;coordinatorAgentId:string;specialistAgentId:string;policyRevision:number;createdAt:string;status:string};
-export type StudioCoordinationSnapshot={policy:StudioCoordinationPolicy|null;dispatches:StudioCoordinationDispatch[];budgetUnit:'specialist_runs';budgetScope:'coordinator_dispatched_runs_only';startsWorkers:false;startsInference:false};
+export type StudioCoordinationDispatch={workItemId:string;parentRunId:string;childRunId:string;coordinatorAgentId:string;specialistAgentId:string;policyRevision:number;createdAt:string;status:string;executionJobId?:string|null;sourceChildRunId?:string|null;artifactId?:string|null};
+export type StudioRenderFollowup={projectId:string;workItemId:string;executionJobId:string;sourceChildRunId:string;specialistAgentId:string;taskId:string;roleKey:string;executionManifestSha256:string;artifactId:string;artifactSha256:string};
+export type StudioCoordinationSnapshot={policy:StudioCoordinationPolicy|null;dispatches:StudioCoordinationDispatch[];renderFollowups?:StudioRenderFollowup[];budgetUnit:'specialist_runs';budgetScope:'coordinator_dispatched_runs_only';startsWorkers:false;startsInference:false};

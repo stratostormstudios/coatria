@@ -6,6 +6,8 @@ The Studio workspace connects a client brief to specialist responsibilities, pro
 
 Open **Production studio → Build an AI team**. Describe your production business, choose the disciplines and team size, then inspect the proposed roles, shared skills, model, and permissions. Related responsibilities can share one agent. Apply the proposal to create real paused specialists.
 
+Select **Include a separate AI planning reviewer** to create a dedicated review identity without installing a plugin manually. It uses one slot within the total team size: a team of three becomes two production specialists plus one reviewer. Review its name, working style, exact `studio.read` and `studio.review` grants, versioned role instructions and model limits before applying. The instructions are saved in its installation; they do not create or access a private skill-vault entry. It starts paused with no producing or human QC role. Return to **Agent hosts** to enroll it separately. Staffing creates no review policy, host or compute, and does not change previously saved plans that omit this option.
+
 StratoStorm's initial team uses three specialists:
 
 | Specialist | Responsibilities |
@@ -29,6 +31,8 @@ Keep the one-time host credential in the server's private configuration. After t
 ## Bring in the brief
 
 Choose **New project** and enter the client or internal project name, brief, AI-use policy, shots, exact frame ranges, handles, dimensions, rational frame rate, output format, and color space.
+
+The **Production path** selector defaults to general production for artists or compatible approved connectors. Explicitly select **Controlled Blender turntable pilot** for one lighting shot at frames 1001–1004, no handles, 384 × 384, 24 fps and Linear Rec.709 EXR. This replaces draft shot/specification settings, never the brief or AI-use permission. The review checks dimensions, full frame coverage including handles, aggregate pixels, frame rate, format, color space and discipline against the shipped profile. Unsupported pilot settings must be corrected or moved to the general path. The preset creates fixed original procedural geometry; it does not turn a freeform client brief into custom product footage, approve work or launch a renderer.
 
 Coatria prepares existing tasks in dependency order:
 
@@ -67,7 +71,7 @@ The current Blender profile builds original geometry and produces a native scene
 
 The operator can enable automatic private-media publication on the renderer worker. Completed output then uploads to private storage and is verified by reading and hashing the stored bytes. Interrupted publication keeps a durable retry record and holds new render claims. It never marks an upload as creative approval.
 
-Promote the fully verified sequence to a pending Studio version. An independent reviewer examines the exact version and records technical and creative review; the work board records task acceptance. Changes produce another version rather than overwriting the approved evidence.
+Promote the fully verified sequence to a pending Studio version. For a coordinator-delegated render, the next eligible coordinator cycle can dispatch one bounded follow-up to its original specialist. That run reads the pinned job and artifact evidence, claims the existing task and submits it for review; it cannot start another render, register another artifact, or inspect pixels through metadata tools. The same project lifetime run allowance and current approval gates apply. An independent human reviewer examines the exact version and records technical and creative review; the work board records task acceptance. Changes produce another version rather than overwriting the approved evidence.
 
 ## Prepare delivery
 

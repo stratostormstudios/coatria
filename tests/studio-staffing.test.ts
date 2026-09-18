@@ -4,7 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {readFile,readdir} from 'node:fs/promises';
 import {database,query,transaction} from '../src/lib/db';
 import {hashToken} from '../src/lib/security';
-import {STUDIO_STAFFING_CAPABILITIES,draftStudioStaffing,studioStaffingPlanInput,studioStaffingApplyInput} from '../src/lib/studio-staffing-protocol';
+import {STUDIO_STAFFING_CAPABILITIES,STUDIO_PLANNING_REVIEW_CAPABILITIES,STUDIO_PLANNING_REVIEW_INSTRUCTIONS,draftStudioStaffing,studioStaffingPlanInput,studioStaffingApplyInput} from '../src/lib/studio-staffing-protocol';
 import {proposeStudioStaffing} from '../src/lib/studio-staffing';
 
 const provider={pluginId:'runpod',manifestVersion:'1.0.0',runtimeConfig:{providerId:'runpod',modelId:'Qwen/Qwen3.8-27B-FP8',maxSteps:8,maxOutputTokens:2048,maxTotalTokens:24000,timeoutSeconds:180}};
@@ -30,11 +30,33 @@ test('custom harness staffing cannot duplicate, omit, invent or assign quality r
  assert.throws(()=>draftStudioStaffing(input({teamSize:2,specialists:[{name:'A',roleKeys:['producer'],existingAgentId:'00000000-0000-4000-8000-000000000001'},{name:'B',roleKeys:required.slice(1),existingAgentId:'00000000-0000-4000-8000-000000000001'}]})));
 });
 
+test('optional planning reviewer reserves one distinct slot without changing the production template or default plan',()=>{
+ const ordinary=draftStudioStaffing(input());assert.equal(Object.hasOwn(ordinary.data,'planningReviewer'),false);assert.equal(ordinary.specialists.length,2);
+ const review={name:'Fixture planning reviewer',persona:'Review evidence carefully.'},draft=draftStudioStaffing(input({teamSize:3,planningReviewer:review}));assert.equal(draft.specialists.length,2);assert.deepEqual(draft.specialists.flatMap(person=>person.roleKeys).sort(),[...required].sort());assert.deepEqual(STUDIO_PLANNING_REVIEW_CAPABILITIES,['studio.read','studio.review']);assert.equal(STUDIO_PLANNING_REVIEW_INSTRUCTIONS.version,1);
+ assert.throws(()=>draftStudioStaffing(input({teamSize:1,planningReviewer:review})),/at least two/);
+ assert.throws(()=>draftStudioStaffing(input({planningReviewer:review,specialists:[{name:'A',roleKeys:required.slice(0,3)},{name:'B',roleKeys:required.slice(3)}]})),/separate slot/);
+ assert.throws(()=>draftStudioStaffing(input({planningReviewer:{name:'Studio coordinator'}})),/distinct name/);
+ for(const extra of [{existingAgentId:randomUUID()},{capabilities:['studio.execute']},{roleKeys:['qc']},{persona:'x'.repeat(501)}])assert.equal(studioStaffingPlanInput.safeParse(input({planningReviewer:{...review,...extra}})).success,false);
+ const full=draftStudioStaffing(input({teamSize:11,disciplines:['prep','matchmove','layout','animation','fx','lighting','compositing'],planningReviewer:review}));assert.equal(full.specialists.length,10);assert(full.specialists.every(person=>!person.roleKeys.includes('qc')));
+});
+
 test('staffing schemas reject privilege, private-skill and credential injection',()=>{
  for(const patch of [{teamSize:0},{teamSize:12},{capabilities:['*']},{providerToken:'fixture'},{reviewerAgentId:randomUUID()},{copyPrivateVault:true},{status:'active'},{specialists:[{name:'A',roleKeys:required,capabilities:['studio.execute']}]}])assert.equal(studioStaffingPlanInput.safeParse(input(patch)).success,false);
  const apply={clientId:randomUUID(),revision:1,planHash:'a'.repeat(64),profileRevision:0};assert(studioStaffingApplyInput.safeParse(apply).success);
  for(const patch of [{planHash:'a'},{profileRevision:-1},{approvedCapabilities:['*']},{startWorkers:true},{token:'fixture'},{reviewerHumanId:randomUUID()}])assert.equal(studioStaffingApplyInput.safeParse({...apply,...patch}).success,false);
  assert.deepEqual(STUDIO_STAFFING_CAPABILITIES,['studio.read','studio.write','tasks.write']);
+});
+
+test('staffing human API and generated agent tool schemas describe the same optional reviewer and immutable result',async()=>{
+ const {agentRuntimeOpenApi}=await import('../src/lib/agent-runtime-openapi'),spec:any=agentRuntimeOpenApi;
+ const human=spec.paths['/api/companies/{companyId}/studio/staffing/proposals'].post.requestBody.content['application/json'].schema;
+ const tool=spec.paths['/api/agent/tools/studio_staffing_propose'].post.requestBody.content['application/json'].schema.properties.arguments;
+ for(const schema of [human,tool]){assert(!schema.required.includes('planningReviewer'));const reviewer=schema.properties.planningReviewer;assert.equal(reviewer.additionalProperties,false);assert.deepEqual(reviewer.required,['name']);assert.equal(reviewer.properties.name.minLength,1);assert.equal(reviewer.properties.name.maxLength,80);assert.equal(reviewer.properties.persona.maxLength,500);assert.match(reviewer.description,/separately approved/);for(const key of ['capabilities','existingAgentId','roleKeys','status'])assert.equal(key in reviewer.properties,false);}
+ assert.deepEqual(human.properties.planningReviewer,tool.properties.planningReviewer);
+ const schemas=spec.components.schemas,plan=schemas.StudioStaffingPlan,application=schemas.StudioStaffingApplication;
+ for(const schema of [plan,application]){assert.equal(schema.additionalProperties,false);assert(!schema.required.includes('planningReviewer'));assert(schema.required.includes('specialists'));const pinned=schema.properties.planningReviewer.allOf[1].properties;assert.deepEqual(pinned.roleKeys.const,[]);assert.deepEqual(pinned.capabilities.const,['studio.read','studio.review']);assert.equal(pinned.mode.const,'create');}
+ assert.equal(plan.properties.templateVersion.const,1);assert.equal(application.properties.planningReviewer.allOf[1].properties.status.const,'paused');
+ const apply=spec.paths['/api/companies/{companyId}/studio/staffing/proposals/{proposalId}/apply'].post;assert.deepEqual(apply.security,[{sessionCookie:[]}]);assert.equal(apply.responses['201'].content['application/json'].schema.properties.application.$ref,'#/components/schemas/StudioStaffingApplication');
 });
 
 const emulate=process.env.COATRIA_TEST_EMULATOR==='1',integrationUrl=process.env.COATRIA_INTEGRATION_DATABASE_URL;
@@ -119,6 +141,18 @@ test('staffing uses real authority, reviewed grant snapshots and an atomic idemp
    await call(`agent/runs/${run.id}/complete`,'POST',{leaseToken:lease.leaseToken,clientId:randomUUID(),result:'Synthetic staffing plan awaits human approval. No workers or media processing started.'},'agent');
    const result=await call(`${prefix}/${p.id}/apply`,'POST',approval(p),'owner',201);assert.equal(result.application.specialists.length,2);assert(result.application.specialists.every((s:any)=>s.status==='paused'&&s.credentialState==='not_issued'));assert.equal(await countAgents(),4);assert.equal((await call(`companies/${company}/studio`)).profile.roles.find((r:any)=>r.key==='qc').humanId,null);
    assert.equal(Number((await query("SELECT count(*) FROM agent_runs WHERE company_id=$1 AND status IN ('queued','running')",[company])).rows[0].count),0);
+  });
+  await t.test('a reviewed optional planning reviewer is a distinct paused installation with exact grants and no automatic policy or worker',async()=>{
+   const before=await countAgents(),legacy=(await proposal()).proposal;assert.equal(Object.hasOwn(legacy.plan,'planningReviewer'),false);assert.equal(legacy.plan.templateVersion,1);
+   const data={clientId:randomUUID(),...input({teamSize:3,reviewerHumanId:reviewer,planningReviewer:{name:'Dedicated planning reviewer',persona:'Check assumptions and cite the pinned evidence.'}})};
+   await call(prefix,'POST',data,'member',403);const p=(await call(prefix,'POST',data,'owner',201)).proposal;assert.equal(await countAgents(),before);assert.equal(p.plan.actualAgentCount,3);assert.equal(p.plan.newAgentCount,3);assert.equal(p.plan.specialists.length,2);assert.deepEqual(p.plan.planningReviewer.roleKeys,[]);assert.deepEqual(p.plan.planningReviewer.capabilities,[...STUDIO_PLANNING_REVIEW_CAPABILITIES]);assert(p.plan.warnings.some((warning:string)=>/shared-sponsor/.test(warning)));assert.deepEqual(p.plan.planningReviewer.skills,[STUDIO_PLANNING_REVIEW_INSTRUCTIONS]);
+   const replay=(await call(prefix,'POST',data)).proposal;assert.equal(replay.planHash,p.planHash);await call(prefix,'POST',{...data,planningReviewer:{name:'Changed reviewer'}},'owner',409);
+   const request=approval(p);await call(`${prefix}/${p.id}/apply`,'POST',{...request,planHash:legacy.planHash},'owner',409);assert.equal(await countAgents(),before);
+   const applied=await call(`${prefix}/${p.id}/apply`,'POST',request,'owner',201),identity=applied.application.planningReviewer;assert(identity);assert.equal(applied.application.specialists.length,2);assert.equal(new Set([...applied.application.specialists.map((person:any)=>person.agentId),identity.agentId]).size,3);assert.equal(identity.status,'paused');assert.equal(identity.connectionState,'unconnected');assert.equal(identity.credentialState,'not_issued');assert.deepEqual(identity.roleKeys,[]);assert.deepEqual(identity.capabilities,[...STUDIO_PLANNING_REVIEW_CAPABILITIES]);assert.equal(await countAgents(),before+3);
+   assert.deepEqual((await call(`${prefix}/${p.id}/apply`,'POST',request)).application,applied.application);assert.equal(await countAgents(),before+3);
+   const installed=(await call(`companies/${company}/plugin-installations/${identity.installationId}`)).installation;assert.equal(installed.status,'paused');assert.deepEqual(installed.capabilities,[...STUDIO_PLANNING_REVIEW_CAPABILITIES]);assert.equal(installed.invocationAccess,'admins');assert.match(installed.character.persona,/Role instructions v1/);assert(installed.character.persona.includes(STUDIO_PLANNING_REVIEW_INSTRUCTIONS.instructions));assert.equal(installed.runtimeConfig.modelId,provider.runtimeConfig.modelId);
+   const studio=await call(`companies/${company}/studio`);assert.equal(studio.profile.templateId,'vfx-boutique');assert(studio.profile.roles.every((role:any)=>role.agentId!==identity.agentId));assert.equal(studio.profile.roles.find((role:any)=>role.key==='qc').humanId,reviewer);
+   const counts=(await query('SELECT (SELECT count(*) FROM studio_review_policies WHERE company_id=$1)::int policies,(SELECT count(*) FROM studio_managed_hosts WHERE company_id=$1)::int hosts,(SELECT count(*) FROM studio_host_provisions WHERE company_id=$1)::int provisions,(SELECT count(*) FROM agent_runs WHERE company_id=$1 AND status IN (\'queued\',\'running\'))::int runs',[company])).rows[0];assert.deepEqual(counts,{policies:0,hosts:0,provisions:0,runs:0});assert.doesNotMatch(JSON.stringify(applied),/"token"|token_hash|Bearer |ca_[A-Za-z0-9_-]{30}/);
   });
  }finally{try{await query('DELETE FROM companies WHERE id=ANY($1::uuid[])',[[company,foreign]]);await query('DELETE FROM users WHERE id=ANY($1::uuid[])',[[owner,reviewer,member,outsider]]);}finally{await database().end();delete(globalThis as any).coatriaPool;await stop?.();for(const[key,value]of Object.entries(prior)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}}
 });

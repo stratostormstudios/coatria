@@ -12,6 +12,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  renderer-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container:
+      # Same reviewed Node 24.19.0 bookworm-slim linux/amd64 runtime as the Pod bootstrap.
+      image: node@sha256:e5a8dee7bc1e6a215d224a7ef8206f7e77271bc3cabd5febf2beafac0674f174
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify official Blender and install the isolated locked renderer runtime
+        run: node scripts/hosting/prepare-renderer-canary.mjs
+      - name: Render and decode a small actual procedural EXR sequence
+        working-directory: .devdata/renderer-linux-canary/app
+        env:
+          COATRIA_BLENDER_PATH: ${{ github.workspace }}/.devdata/renderer-linux-canary/blender/blender
+          COATRIA_RENDER_CANARY_OUTPUT: ${{ github.workspace }}/.devdata/renderer-linux-canary/evidence
+        run: node --import tsx scripts/hosting/renderer-linux-canary.mts
+      - name: Preserve synthetic native scene, frames, preview and verification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coatria-linux-renderer-${{ github.run_id }}
+          path: .devdata/renderer-linux-canary/evidence
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: error
   application:
     runs-on: ubuntu-latest
     timeout-minutes: 20
