@@ -1,3 +1,4 @@
+import {managedAgentAuthoritySql,managedAgentAuthorityPrincipals} from './studio-hosting';
 import {createHmac,randomUUID} from 'node:crypto';
 import type {PoolClient} from 'pg';
 import {z} from 'zod';
@@ -24,12 +25,12 @@ async function lockCompany(client:PoolClient,companyId:string){if(!(await client
 async function humanAuthority(client:PoolClient,member:Membership){await lockCompany(client,member.companyId);const role=(await client.query("SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2 AND role<>'removed' FOR SHARE",[member.companyId,member.userId])).rows[0]?.role;if(!role)fail(403,'Your company access has ended.');return role;}
 async function authority(client:PoolClient,identity:AgentRunIdentity,requesterId?:string,exclusive=false,human=false){
  await lockCompany(client,identity.company_id);
- const users=[...new Set([identity.created_by,...(requesterId?[requesterId]:[])])].sort();
+ const users=[...new Set([identity.created_by,...(requesterId?[requesterId]:[]),...await managedAgentAuthorityPrincipals(client,identity.company_id,identity.id)])].sort();
  const members=(await client.query('SELECT user_id,role FROM memberships WHERE company_id=$1 AND user_id=ANY($2::uuid[]) ORDER BY user_id FOR SHARE',[identity.company_id,users])).rows;
  if(!members.some(member=>member.user_id===identity.created_by&&['owner','admin'].includes(member.role)))fail(human?409:401,'Agent sponsor access ended.',human?'AGENT_UNAVAILABLE':undefined);
  const requesterRole=requesterId?members.find(member=>member.user_id===requesterId&&member.role!=='removed')?.role:undefined;
  if(requesterId&&!requesterRole)fail(403,'The requester no longer belongs to this company.','RUN_REQUESTER_ACCESS');
- const agent=(await client.query(`SELECT * FROM agents WHERE id=$1 AND company_id=$2 AND created_by=$3 AND token_hash=$4 AND status='active' AND expires_at>clock_timestamp() FOR ${exclusive?'UPDATE':'SHARE'}`,[identity.id,identity.company_id,identity.created_by,identity.token_hash])).rows[0];
+ const agent=(await client.query(`SELECT * FROM agents WHERE id=$1 AND company_id=$2 AND created_by=$3 AND token_hash=$4 AND status='active' AND expires_at>clock_timestamp() AND ${managedAgentAuthoritySql('agents')} FOR ${exclusive?'UPDATE':'SHARE'}`,[identity.id,identity.company_id,identity.created_by,identity.token_hash])).rows[0];
  if(!agent)fail(human?409:401,'Agent credential is expired, paused, revoked or rotated.',human?'AGENT_UNAVAILABLE':undefined);
  if(agent.invocation_access==='none'||requesterRole&&agent.invocation_access==='admins'&&!['owner','admin'].includes(requesterRole))fail(403,'This agent is not available to this requester.','AGENT_INVOCATION_ACCESS');
  return{agent,requesterRole};

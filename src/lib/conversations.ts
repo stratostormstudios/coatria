@@ -1,3 +1,4 @@
+import {managedAgentAuthoritySql,managedAgentAuthorityPrincipals} from './studio-hosting';
 import {randomUUID} from 'node:crypto';
 import type {PoolClient} from 'pg';
 import {z} from 'zod';
@@ -23,12 +24,13 @@ async function authorized<T>(actor:ConversationActor,run:(context:Context)=>Prom
  id(actor.companyId);id(actor.userId);if(actor.kind==='agent')id(actor.agentId);
  return transaction(async client=>{
   if(!(await client.query('SELECT id FROM companies WHERE id=$1 FOR KEY SHARE',[actor.companyId])).rowCount)fail(404,'Workspace not found.');
-  const member=(await client.query('SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2 FOR SHARE',[actor.companyId,actor.userId])).rows[0];
+  const authorityIds=[...new Set([actor.userId,...actor.kind==='agent'?await managedAgentAuthorityPrincipals(client,actor.companyId,actor.agentId):[]])].sort();
+  const member=(await client.query('SELECT user_id,role FROM memberships WHERE company_id=$1 AND user_id=ANY($2::uuid[]) ORDER BY user_id FOR SHARE',[actor.companyId,authorityIds])).rows.find(row=>row.user_id===actor.userId);
   if(!member||member.role==='removed')fail(403,'Your company access has ended.');
   let view:ConversationActorView;
   if(actor.kind==='agent'){
    if(!['owner','admin'].includes(member.role))fail(401,'Agent sponsor access ended.');
-   const agent=(await client.query("SELECT id,name,conversation_access FROM agents WHERE company_id=$1 AND id=$2 AND created_by=$3 AND token_hash=$4 AND status='active' AND expires_at>clock_timestamp() FOR SHARE",[actor.companyId,actor.agentId,actor.userId,actor.tokenHash])).rows[0];
+   const agent=(await client.query(`SELECT id,name,conversation_access FROM agents WHERE company_id=$1 AND id=$2 AND created_by=$3 AND token_hash=$4 AND status='active' AND expires_at>clock_timestamp() AND ${managedAgentAuthoritySql('agents')} FOR SHARE`,[actor.companyId,actor.agentId,actor.userId,actor.tokenHash])).rows[0];
    if(!agent)fail(401,'Agent access ended.');
    if(agent.conversation_access==='none'||write&&agent.conversation_access!=='write')fail(403,'This agent does not have the required conversation access.','AGENT_CONVERSATION_ACCESS');
    view={kind:'agent',id:agent.id,name:agent.name,avatarColor:null};

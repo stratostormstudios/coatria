@@ -20,7 +20,7 @@ test('agent identity contract authenticates the token without disclosing credent
 });
 
 test('marketplace and autonomous APIs expose current strict input contracts and cannot accept credentials',()=>{
- assert.equal(spec.info.version,'1.2.0');
+ assert.equal(spec.info.version,'1.3.0');
  for(const[path,method,schema]of[[installations,'post',pluginInstallInput],[installations+'/{installationId}','patch',pluginPatchInput],[missions,'post',missionCreateInput],[missions+'/{missionId}','patch',missionPatchInput]]as const){assert.deepEqual(request(path,method),input(schema));assert.equal(request(path,method).additionalProperties,false);}
  const install=request(installations,'post');assert.equal(install.properties.runtimeConfig.additionalProperties,false);assert.equal(install.properties.character.additionalProperties,false);
  for(const key of['apiKey','token','endpoint','endpointUrl','shell','script'])assert.equal(key in install.properties,false);
@@ -49,7 +49,7 @@ test('run context, one-time credentials and nested cycle projections describe nu
  const schemas=spec.components.schemas;
  const contextResponse=spec.paths['/api/agent/runs/{runId}/context'].get.responses['200'].content['application/json'].schema;
  assert.equal(contextResponse.$ref,'#/components/schemas/AgentRunContext');assert(schemas.AgentRunContext.required.includes('installation'));assert.deepEqual(schemas.AgentRunContext.properties.installation.anyOf,[{$ref:'#/components/schemas/RuntimeInstallation'},{type:'null'}]);
- assert.deepEqual(schemas.RuntimeInstallation.required.sort(),['pluginId','manifestVersion','runtimeConfig','character','revision'].sort());assert.equal(schemas.RuntimeInstallation.additionalProperties,false);
+ assert.deepEqual(schemas.RuntimeInstallation.required.sort(),['id','pluginId','manifestVersion','runtimeConfig','character','revision'].sort());assert.equal(schemas.RuntimeInstallation.additionalProperties,false);
  const output=spec.paths[installations].post.responses['201'].content['application/json'].schema;assert(output.required.includes('token'));assert(output.properties.token.anyOf.some((schema:any)=>schema.type==='null'));
  assert(!('token'in schemas.PluginInstallation.properties));assert(!('token_hash'in schemas.PluginInstallation.properties));assert(!('leaseToken'in schemas.AgentRun.properties));
  const cycle=schemas.AgentMissionCycle;assert.equal(cycle.additionalProperties,false);assert.deepEqual(cycle.required,['ordinal','trigger','createdAt','run']);assert.deepEqual(cycle.properties.run.required.sort(),['id','status','agentName','prompt','result','error','createdAt','finishedAt','resultMessageId'].sort());assert.equal(cycle.properties.run.additionalProperties,false);

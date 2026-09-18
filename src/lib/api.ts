@@ -12,6 +12,10 @@ import { randomUUID } from 'node:crypto';
 import {pluginMarketplaceRoute,pluginCatalogResponse} from './plugin-marketplace';
 import {agentMissionRoute} from './agent-missions';
 import {studioRoute} from './studio';
+import {studioExecutionRoute} from './studio-execution';
+import {studioStaffingRoute} from './studio-staffing';
+import {studioHostingRoute} from './studio-hosting';
+import {studioMediaRoute} from './studio-media';
 
 export async function handleApi(request: Request, parts: string[]): Promise<Response> {
   const requestId=randomUUID(),started=performance.now();
@@ -29,7 +33,7 @@ export async function handleApi(request: Request, parts: string[]): Promise<Resp
   };
   try {
     const method=request.method.toUpperCase();
-    const bearerEndpoint=(parts[0]==='agent'||parts[0]==='connector');
+    const bearerEndpoint=(parts[0]==='agent'||parts[0]==='connector'||parts[0]==='execution'||parts[0]==='host');
     if(!['GET','HEAD'].includes(method)&&!bearerEndpoint)assertOrigin(request);
     if(parts.join('/')==='plugins/catalog'&&method==='GET')return finish(pluginCatalogResponse());
     if(!process.env.DATABASE_URL) {
@@ -40,7 +44,7 @@ export async function handleApi(request: Request, parts: string[]): Promise<Resp
     if(!['GET','HEAD'].includes(method)&&!bearerEndpoint&&!['auth'].includes(parts[0])) {
       const user=await currentUser(request);if(user)await rateLimit(`write:${user.id}`,240,60);
     }
-    for(const handler of [identityRoute,pluginMarketplaceRoute,agentMissionRoute,agentRunRoute,agentToolsRoute,agentProposalRoute,studioRoute,conversationRoute,companyRoute,workRoute,integrationRoute,talentRoute]) {
+    for(const handler of [identityRoute,pluginMarketplaceRoute,agentMissionRoute,agentRunRoute,agentToolsRoute,agentProposalRoute,studioMediaRoute,studioExecutionRoute,studioStaffingRoute,studioHostingRoute,studioRoute,conversationRoute,companyRoute,workRoute,integrationRoute,talentRoute]) {
       const result=await handler(request,parts,method);if(result)return finish(result);
     }
     fail(404,'API endpoint not found.');

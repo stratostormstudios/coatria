@@ -16,3 +16,5 @@ playwright-report/
 .runtime-assets/
 __pycache__/
 *.pyc
+
+.env*

@@ -13,7 +13,7 @@ const patterns=[
   ['Runpod token',/\brpa_[A-Za-z0-9_-]{20,}\b/],
   ['Supabase secret',/\b(?:sb_secret_|sbp_)[A-Za-z0-9_-]{20,}\b/],
   ['AWS access key',/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/],
-  ['Coatria scoped token',/\b(?:ca|cd|ci)_[A-Za-z0-9_-]{40,}\b/],
+  ['Coatria scoped token',/\b(?:ca|cd|ci|ce|ch)_[A-Za-z0-9_-]{40,}\b/],
   ['private key',/-----BEGIN (?:(?:RSA|EC|OPENSSH|ENCRYPTED) )?PRIVATE KEY-----|-----BEGIN (?:PGP) PRIVATE KEY BLOCK-----/]
 ];
 

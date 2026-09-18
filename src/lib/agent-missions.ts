@@ -1,3 +1,4 @@
+import {managedAgentAuthoritySql,managedAgentAuthorityPrincipals} from './studio-hosting';
 import {createHash} from 'node:crypto';
 import type {PoolClient} from 'pg';
 import {z} from 'zod';
@@ -15,8 +16,8 @@ const columns=`m.id,m.company_id AS "companyId",m.agent_id AS "agentId",a.name A
 async function project(client:PoolClient,companyId:string,missionId:string){const row=(await client.query(`SELECT ${columns} FROM agent_missions m JOIN agents a ON a.company_id=m.company_id AND a.id=m.agent_id LEFT JOIN agent_runs r ON r.company_id=m.company_id AND r.id=m.last_run_id WHERE m.company_id=$1 AND m.id=$2`,[companyId,missionId])).rows[0];if(!row)fail(404,'Mission not found.');return row;}
 async function lockAgent(client:PoolClient,companyId:string,agentId:string,authorIds:string[]){
  const preview=(await client.query('SELECT created_by FROM agents WHERE company_id=$1 AND id=$2',[companyId,agentId])).rows[0];if(!preview)fail(404,'Agent not found.');
- const users=[...new Set([preview.created_by,...authorIds])].sort(),members=(await client.query('SELECT user_id,role FROM memberships WHERE company_id=$1 AND user_id=ANY($2::uuid[]) ORDER BY user_id FOR SHARE',[companyId,users])).rows;
- const agent=(await client.query('SELECT *,expires_at>clock_timestamp() AS credential_live FROM agents WHERE company_id=$1 AND id=$2 FOR UPDATE',[companyId,agentId])).rows[0];if(!agent)fail(404,'Agent not found.');return{agent,members};
+ const users=[...new Set([preview.created_by,...authorIds,...await managedAgentAuthorityPrincipals(client,companyId,agentId)])].sort(),members=(await client.query('SELECT user_id,role FROM memberships WHERE company_id=$1 AND user_id=ANY($2::uuid[]) ORDER BY user_id FOR SHARE',[companyId,users])).rows;
+ const agent=(await client.query(`SELECT *,expires_at>clock_timestamp() AND ${managedAgentAuthoritySql('agents')} AS credential_live FROM agents WHERE company_id=$1 AND id=$2 FOR UPDATE`,[companyId,agentId])).rows[0];if(!agent)fail(404,'Agent not found.');return{agent,members};
 }
 function authorityReason(agent:Record<string,any>,members:Record<string,any>[],authorId:string){
  if(agent.status!=='active'||!agent.credential_live)return 'The agent is paused, revoked, or its credential has expired.';

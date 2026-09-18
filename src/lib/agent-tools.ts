@@ -1,3 +1,4 @@
+import {managedAgentAuthoritySql,managedAgentAuthorityPrincipals} from './studio-hosting';
 import {createHash} from 'node:crypto';
 import {z} from 'zod';
 import type {PoolClient} from 'pg';
@@ -12,6 +13,10 @@ import {releaseChangedSeats} from './company';
 import type {AgentCapability} from './agent-policy';
 import {STUDIO_TEMPLATES,studioProjectPlanInput,studioArtifactRegisterInput,studioCompanyPlanInput,planStudioCompany,type StudioProjectDetail,type StudioSnapshot} from './studio-protocol';
 import {studioSnapshot,studioProjectDetail,createStudioProject,registerStudioArtifact,assertStudioTaskAction} from './studio';
+import {studioStaffingPlanInput} from './studio-staffing-protocol';
+import {proposeStudioStaffing,getStudioStaffingProposal,listStudioStaffingProposals} from './studio-staffing';
+import {executionPlanInput} from './studio-execution-protocol';
+import {studioExecutionSnapshot,studioExecutionJob,studioExecutionInput,submitStudioExecution} from './studio-execution';
 
 const page=z.object({after:uuid.optional(),limit:z.number().int().min(1).max(100).default(50)}).strict();
 const empty=z.object({}).strict();
@@ -32,6 +37,10 @@ export const AGENT_TOOLS:Record<string,ToolDefinition>={
  studio_templates:{capability:'studio.read',description:'Read curated studio templates and their supported stages. Templates are planning data and never grant permissions.',mutating:false,schema:empty},
  studio_get:{capability:'studio.read',description:'Read paged company project summaries or, with projectId, a compact work-item page and latest artifact summaries. Use after and nextAfter for remaining work. With projectId and workItemId, read the exact assigned work and current dependency summaries directly, without paging. With projectId and artifactId, read one exact full artifact reference. Follow truncation flags; this API does not fetch or verify media.',mutating:false,schema:z.object({projectId:uuid.optional(),workItemId:uuid.optional(),artifactId:uuid.optional(),after:uuid.optional(),limit:z.number().int().min(1).max(100).default(50)}).strict().refine(v=>!(v.artifactId||v.workItemId)||Boolean(v.projectId),'Exact studio detail requires a project.').refine(v=>[v.artifactId,v.workItemId,v.after].filter(Boolean).length<=1,'Choose one exact detail or a work-item page.')},
  studio_company_plan:{capability:'studio.read',description:'Return a company structure blueprint from a curated studio template. Does not create agents, install skills, grant access, schedule work or spend money.',mutating:false,schema:studioCompanyPlanInput},
+ studio_staffing_propose:{capability:'studio.write',description:'Prepare an exact company staffing proposal from the administrator brief, disciplines, team size and curated model settings. Optionally group roles into named specialists. Saves a reviewable plan; a human administrator must apply it before identities or role assignments change. Workers and paid inference remain separate.',mutating:true,schema:studioStaffingPlanInput},
+ studio_staffing_get:{capability:'studio.read',description:'Read saved company staffing proposals for a current administrator requester. Supply proposalId for the exact reviewed role and skill plan. Does not reveal credentials or apply the proposal.',mutating:false,schema:z.object({proposalId:uuid.optional(),after:uuid.optional(),limit:z.number().int().min(1).max(25).default(10)}).strict().refine(v=>!(v.proposalId&&v.after),'Choose an exact proposal or a page.')},
+ studio_execution_get:{capability:'studio.read',description:'Read a company execution page: kind=connectors, inputs, or jobs. Follow page.nextAfter for remaining records. With jobId, read its exact profile, pinned inputs, status and output files, paginated by fileOffset. With inputId read one pinned file reference. Connector file checks are not independent artistic QC. Does not fetch media or return credentials.',mutating:false,schema:z.object({projectId:uuid.optional(),jobId:uuid.optional(),inputId:uuid.optional(),kind:z.enum(['jobs','inputs','connectors']).default('jobs'),after:uuid.optional(),fileOffset:z.number().int().min(0).max(1000).default(0),limit:z.number().int().min(1).max(50).default(25)}).strict().refine(v=>!v.fileOffset||Boolean(v.jobId),'A file offset requires a job.').refine(v=>[v.jobId,v.inputId,v.after].filter(Boolean).length<=1,'Choose an exact resource or a page.')},
+ studio_execution_submit:{capability:'studio.execute',description:'Propose a bounded DCC job for this specialist’s currently reserved production task. Uses an administrator-registered connector, exact profile version, pinned input hashes and current project revision. The job waits for human approval; it cannot provision compute, execute arbitrary code, accept media or deliver files.',mutating:true,schema:executionPlanInput},
  studio_plan:{capability:'studio.write',description:'Create a draft studio project and server-generated production plan for an owner or administrator request. Requires separate human approval; never activates work or approves delivery.',mutating:true,schema:studioProjectPlanInput},
  studio_artifact_register:{capability:'studio.write',description:'Register an immutable external artifact reference against a project revision for an owner or administrator request. Metadata is declared, not independently verified. Does not download, render, approve or deliver files.',mutating:true,schema:studioArtifactRegisterInput.safeExtend({projectId:uuid})},
  office_presence:{capability:'office.write',description:'Move only this agent and set availability. Requires recurring contact; does not start audio, capture a screen, or control a human.',mutating:true,schema:z.object({roomId:uuid.nullable(),x:z.number().min(-20).max(20),z:z.number().min(-20).max(20),status:z.enum(['available','focus','away'])}).strict()},
@@ -104,7 +113,7 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
  return transaction(async client=>{
   const context=await authorizeRunTool(client,agent,command.runId,command.leaseToken);
   if(!context.capabilities.includes(definition.capability))fail(403,'This run does not have permission for this tool.','AGENT_CAPABILITY_REQUIRED');
-  if(definition.capability==='studio.write'&&!['owner','admin'].includes(context.requesterRole))fail(403,'Studio planning and artifact registration require a current owner or administrator request.','STUDIO_REQUESTER_ACCESS');
+  if((['studio.write','studio.execute'].includes(definition.capability)||name==='studio_staffing_get')&&!['owner','admin'].includes(context.requesterRole))fail(403,'Studio changes and staffing require a current owner or administrator request.','STUDIO_REQUESTER_ACCESS');
   // All operations on a run are serialized after current authority and lease checks.
   await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`agent-tool:${agent.company_id}:${agent.id}:${command.requestId}`]);
   const previous=(await client.query('SELECT request_hash,response FROM agent_tool_receipts WHERE company_id=$1 AND agent_id=$2 AND request_id=$3',[agent.company_id,agent.id,command.requestId])).rows[0];
@@ -128,6 +137,19 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
    case 'studio_templates':result={templates:STUDIO_TEMPLATES};break;
    case 'studio_get':result=args.projectId?studioAgentProject(await studioProjectDetail(client,companyId,args.projectId),args):studioAgentSnapshot(await studioSnapshot(client,companyId,args.after,args.limit));break;
    case 'studio_company_plan':result=planStudioCompany(args);break;
+   case 'studio_staffing_propose':result=await proposeStudioStaffing(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id,agentSponsorId:agent.created_by},{...args,clientId:command.requestId});break;
+   case 'studio_staffing_get':{
+    if(args.proposalId)result={proposal:await getStudioStaffingProposal(client,companyId,args.proposalId)};
+    else{const page=await listStudioStaffingProposals(client,companyId,args.after,args.limit);result={...page,proposals:page.proposals.map(proposal=>({id:proposal.id,revision:proposal.revision,status:proposal.status,planHash:proposal.planHash,createdAt:proposal.createdAt,expiresAt:proposal.expiresAt,briefPreview:proposal.plan.brief.slice(0,320),requestedAgentCount:proposal.plan.requestedAgentCount,actualAgentCount:proposal.plan.actualAgentCount,newAgentCount:proposal.plan.newAgentCount,exactPlanAvailable:true})),proposalsAreSummaries:true};}
+    if(jsonBytes(result)>studioAgentPageBytes)fail(413,'The exact staffing plan exceeds its bounded context. Ask an administrator to inspect it.','STUDIO_CONTEXT_LIMIT');break;
+   }
+   case 'studio_execution_get':{
+    if(args.jobId){const job=await studioExecutionJob(client,companyId,args.jobId);if(args.projectId&&job.projectId!==args.projectId)fail(404,'Execution job not found in this project.');const files=job.output?.manifest.files??[],selected=files.slice(args.fileOffset,args.fileOffset+args.limit);result={job:{...job,...job.output?{output:{...job.output,manifest:{...job.output.manifest,files:selected}}}:{}},filePage:{offset:args.fileOffset,total:files.length,hasMore:args.fileOffset+selected.length<files.length,nextOffset:args.fileOffset+selected.length<files.length?args.fileOffset+selected.length:null},contentInspectedByThisResponse:false};}
+    else if(args.inputId){const input=await studioExecutionInput(client,companyId,args.inputId);if(args.projectId&&input.projectId!==args.projectId)fail(404,'Execution input not found in this project.');result={input,contentInspectedByThisResponse:false};}
+    else result={...await studioExecutionSnapshot(client,companyId,args.projectId,{kind:args.kind,after:args.after,limit:args.limit}),contentInspectedByThisResponse:false};
+    if(jsonBytes(result)>studioAgentPageBytes)fail(413,'This execution context exceeds its bounded page. Request an exact job with a smaller limit.','STUDIO_CONTEXT_LIMIT');break;
+   }
+   case 'studio_execution_submit':result=await submitStudioExecution(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id,agentSponsorId:agent.created_by},{...args,clientId:command.requestId});break;
    case 'studio_plan':result=await createStudioProject(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id,agentSponsorId:agent.created_by},{...args,clientId:command.requestId});break;
    case 'studio_artifact_register':{const{projectId,...artifact}=args;result=await registerStudioArtifact(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id,agentSponsorId:agent.created_by},projectId,{...artifact,clientId:command.requestId});break;}
    case 'office_presence':{
@@ -195,7 +217,15 @@ export async function agentProposalRoute(request:Request,parts:string[],method:s
   const desired=parts[4]==='approve'?'applied':'rejected';if(proposal.status===desired)return {proposal:{id:proposal.id,status:proposal.status,result:proposal.result},replayed:true};if(proposal.status!=='pending')fail(409,'This proposal has already been reviewed.');
   let result:unknown=null;
   if(desired==='applied'){
-   const valid=(await client.query("SELECT a.capabilities,r.capabilities AS run_capabilities,r.status FROM agents a JOIN memberships s ON s.company_id=a.company_id AND s.user_id=a.created_by JOIN agent_runs r ON r.company_id=a.company_id AND r.agent_id=a.id JOIN memberships m ON m.company_id=r.company_id AND m.user_id=r.requested_by WHERE a.company_id=$1 AND a.id=$2 AND r.id=$3 AND a.status='active' AND a.expires_at>clock_timestamp() AND s.role IN ('owner','admin') AND m.role<>'removed' AND (a.invocation_access='members' OR (a.invocation_access='admins' AND m.role IN ('owner','admin'))) AND r.status NOT IN ('cancelled','failed')",[member.companyId,proposal.agent_id,proposal.run_id])).rows[0];
+   // Company UPDATE already excludes app lifecycle mutations. Explicit actor
+   // locks also preserve the shared host -> memberships -> agent -> run order.
+   const hostPrincipals=await managedAgentAuthorityPrincipals(client,member.companyId,proposal.agent_id);
+   const actors=(await client.query('SELECT a.created_by,r.requested_by FROM agents a JOIN agent_runs r ON r.company_id=a.company_id AND r.agent_id=a.id WHERE a.company_id=$1 AND a.id=$2 AND r.id=$3',[member.companyId,proposal.agent_id,proposal.run_id])).rows[0];
+   const actorIds=[...new Set([...hostPrincipals,...actors?[actors.created_by,actors.requested_by]:[]])].sort();
+   await client.query('SELECT user_id FROM memberships WHERE company_id=$1 AND user_id=ANY($2::uuid[]) ORDER BY user_id FOR SHARE',[member.companyId,actorIds]);
+   await client.query('SELECT id FROM agents WHERE company_id=$1 AND id=$2 FOR SHARE',[member.companyId,proposal.agent_id]);
+   await client.query('SELECT id FROM agent_runs WHERE company_id=$1 AND id=$2 FOR SHARE',[member.companyId,proposal.run_id]);
+   const valid=(await client.query(`SELECT a.capabilities,r.capabilities AS run_capabilities,r.status FROM agents a JOIN memberships s ON s.company_id=a.company_id AND s.user_id=a.created_by JOIN agent_runs r ON r.company_id=a.company_id AND r.agent_id=a.id JOIN memberships m ON m.company_id=r.company_id AND m.user_id=r.requested_by WHERE a.company_id=$1 AND a.id=$2 AND r.id=$3 AND a.status='active' AND a.expires_at>clock_timestamp() AND ${managedAgentAuthoritySql('a')} AND s.role IN ('owner','admin') AND m.role<>'removed' AND (a.invocation_access='members' OR (a.invocation_access='admins' AND m.role IN ('owner','admin'))) AND r.status NOT IN ('cancelled','failed')`,[member.companyId,proposal.agent_id,proposal.run_id])).rows[0];
    const capability=proposal.kind==='layout'?'layout.propose':proposal.kind==='room'?'rooms.propose':'hiring.propose';
    if(!valid||!valid.capabilities.includes(capability)||!valid.run_capabilities.includes(capability)||new Date(proposal.expires_at).getTime()<=Date.now())fail(409,'This proposal expired or its agent/requester no longer has permission.','PROPOSAL_AUTHORITY_ENDED');
    if(proposal.kind==='layout'){

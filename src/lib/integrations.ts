@@ -1,3 +1,4 @@
+import {managedAgentAuthoritySql} from './studio-hosting';
 import { z } from 'zod';
 import { query, transaction } from './db';
 import { requireMembership } from './auth';
@@ -10,12 +11,12 @@ const capabilityInput=z.array(z.enum(AGENT_CAPABILITIES)).max(AGENT_CAPABILITIES
 type AuthenticatedAgent={id:string;company_id:string;created_by:string;token_hash:string}&Record<string,any>;
 export async function authenticateAgent(request: Request):Promise<AuthenticatedAgent> {
   const token=bearer(request);if(!token.startsWith('ca_'))fail(401,'Invalid agent token.');
-  const agent=(await query<AuthenticatedAgent>(`SELECT a.* FROM agents a JOIN memberships m ON m.company_id=a.company_id AND m.user_id=a.created_by WHERE a.token_hash=$1 AND a.status='active' AND a.expires_at>clock_timestamp() AND m.role IN ('owner','admin')`,[hashToken(token)])).rows[0];
+  const agent=(await query<AuthenticatedAgent>(`SELECT a.* FROM agents a JOIN memberships m ON m.company_id=a.company_id AND m.user_id=a.created_by WHERE a.token_hash=$1 AND a.status='active' AND a.expires_at>clock_timestamp() AND ${managedAgentAuthoritySql('a')} AND m.role IN ('owner','admin')`,[hashToken(token)])).rows[0];
   if(!agent)fail(401,'This agent token is invalid, paused, revoked, or its sponsor lost access.');
   await rateLimit(`agent:${agent.id}`,120,60);
   // Contact metadata is updated before any authority locks, never by upgrading
   // a conversation reader's FOR SHARE lock. Chat-only harnesses appear active too.
-  await query(`UPDATE agents a SET last_seen_at=clock_timestamp() WHERE a.id=$1 AND a.company_id=$2 AND a.token_hash=$3 AND a.status='active' AND a.expires_at>clock_timestamp() AND (a.last_seen_at IS NULL OR a.last_seen_at<now()-interval '60 seconds') AND EXISTS(SELECT 1 FROM memberships m WHERE m.company_id=a.company_id AND m.user_id=a.created_by AND m.role IN ('owner','admin'))`,[agent.id,agent.company_id,agent.token_hash]);
+  await query(`UPDATE agents a SET last_seen_at=clock_timestamp() WHERE a.id=$1 AND a.company_id=$2 AND a.token_hash=$3 AND a.status='active' AND a.expires_at>clock_timestamp() AND ${managedAgentAuthoritySql('a')} AND (a.last_seen_at IS NULL OR a.last_seen_at<now()-interval '60 seconds') AND EXISTS(SELECT 1 FROM memberships m WHERE m.company_id=a.company_id AND m.user_id=a.created_by AND m.role IN ('owner','admin'))`,[agent.id,agent.company_id,agent.token_hash]);
   return agent;
 }
 async function authenticateConnector(request: Request) {

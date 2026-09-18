@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "jobId": "71a550c6-b32d-49df-becd-8d22c8290331",
+  "profile": "coatria-product-turntable-v1",
+  "frameStart": 1,
+  "frameEnd": 4,
+  "width": 384,
+  "height": 384,
+  "fpsNumerator": 24000,
+  "fpsDenominator": 1001,
+  "colorSpace": "ACEScg",
+  "samples": 16,
+  "timeoutSeconds": 180
+}

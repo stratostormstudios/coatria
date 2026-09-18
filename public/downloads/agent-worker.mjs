@@ -55,6 +55,7 @@ export function createRuntimeClient({token=process.env.COATRIA_AGENT_TOKEN,url=p
  const runPath=runId=>{if(!UUID.test(runId))throw new Error('A run UUID is required.');return '/api/agent/runs/'+runId;};
  const post=(path,body,signal)=>request(path,{method:'POST',body,signal});
  return {origin,identity:fingerprint(token),
+  readIdentity:signal=>request('/api/agent/identity',{signal}),
   autonomyTick:signal=>post('/api/agent/autonomy/tick',{},signal),
   claim:(workerId,claimId,signal)=>post('/api/agent/runs/claim',{workerId,claimId},signal),
   heartbeat:(runId,leaseToken,signal)=>post(runPath(runId)+'/heartbeat',{leaseToken},signal),

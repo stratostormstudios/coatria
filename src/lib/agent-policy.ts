@@ -1,5 +1,5 @@
 /** Explicit grants for external workers. Empty grants never inherit sponsor privileges. */
-export const AGENT_CAPABILITIES = ['workspace.read','tasks.write','infrastructure.read','hiring.read','office.write','layout.propose','rooms.propose','hiring.propose','studio.read','studio.write'] as const;
+export const AGENT_CAPABILITIES = ['workspace.read','tasks.write','infrastructure.read','hiring.read','office.write','layout.propose','rooms.propose','hiring.propose','studio.read','studio.write','studio.execute'] as const;
 export type AgentCapability = typeof AGENT_CAPABILITIES[number];
 export const AGENT_CAPABILITY_LABELS:Record<AgentCapability,string>={
  'workspace.read':'Read company workspace, people, rooms, tasks and activity',
@@ -12,4 +12,5 @@ export const AGENT_CAPABILITY_LABELS:Record<AgentCapability,string>={
  'hiring.propose':'Propose draft job openings for administrator review',
  'studio.read':'Read studio templates, project plans and delivery records',
  'studio.write':'Draft studio projects and register external artifact references for administrator requests; no approval or delivery authority',
+ 'studio.execute':'Propose bounded production jobs for an assigned task; a human must approve the exact job before a connector can execute it',
 };

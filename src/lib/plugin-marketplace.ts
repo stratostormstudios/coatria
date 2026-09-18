@@ -61,7 +61,7 @@ export function pluginCatalogResponse(){return json({version:PLUGIN_CATALOG_VERS
 
 /** Called only after authorizeRunTool has locked the company, agent and run. */
 export async function installedRuntimeContext(client:PoolClient,companyId:string,agentId:string){
- const row=(await client.query('SELECT plugin_id AS "pluginId",manifest_version AS "manifestVersion",runtime_config AS "runtimeConfig",character,revision FROM plugin_installations WHERE company_id=$1 AND agent_id=$2',[companyId,agentId])).rows[0];
+ const row=(await client.query('SELECT id,plugin_id AS "pluginId",manifest_version AS "manifestVersion",runtime_config AS "runtimeConfig",character,revision FROM plugin_installations WHERE company_id=$1 AND agent_id=$2',[companyId,agentId])).rows[0];
  if(!row)return null;
  const entry=manifest(row.pluginId,row.manifestVersion),config=runtimeInput.safeParse(row.runtimeConfig),character=characterInput.safeParse(row.character);
  if(!config.success||!character.success)fail(409,'The installed runtime configuration needs administrator review.','PLUGIN_CONFIG_INVALID');

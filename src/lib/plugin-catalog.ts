@@ -1,6 +1,6 @@
 import {AGENT_CAPABILITIES,type AgentCapability} from './agent-policy';
 
-export const PLUGIN_CATALOG_VERSION='2026-09-17.1';
+export const PLUGIN_CATALOG_VERSION='2026-09-17.2';
 export type AgentCharacter={roleTitle:string;persona:string;workStyle:'collaborative'|'independent'|'methodical'};
 export type PluginRuntimeConfig={providerId:string;modelId:string;maxSteps:number;maxOutputTokens:number;maxTotalTokens:number;timeoutSeconds:number};
 export type PluginModel={id:string;label:string;tier:'flagship'|'balanced'|'economy'|'custom';toolSupport:'documented'|'unverified'};
