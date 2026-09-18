@@ -62,6 +62,21 @@ test('two agent slots are independent, bounded and give each approved specialist
  }finally{await f.remove();}
 });
 
+test('explicit inference broker mode runs a hosted specialist without forwarding provider credentials',async()=>{
+ const f=await fixture();let inferenceCalls=0,completed=0,directCalls=0;const configured:any[]=[];
+ try{
+  const clients=clientFactory(f.bundles,item=>{
+   const client=jobClient(item,{complete:async()=>{completed++;f.control.abort();return{run:{status:'succeeded'}};}});
+   return{...client,listTools:async()=>({tools:[]}),submitInference:async(runId:string,payload:any)=>{
+    inferenceCalls++;assert.deepEqual(Object.keys(payload).sort(),['leaseToken','requestId','step']);
+    return{inference:{id:randomUUID(),runId,step:payload.step,status:'succeeded',deadlineAt:new Date(Date.now()+60000).toISOString(),output:{usage:{prompt_tokens:100,completion_tokens:30},choices:[{finish_reason:'stop',message:{role:'assistant',content:'Synthetic server-brokered result.'}}]}}};
+   }};
+  });
+  const result=await runStudioHost({...f.options,settings:{...settings,COATRIA_INFERENCE_MODE:'coatria_broker_v1'},clientFactory:clients,executorFactory:({settings:explicit}:any)=>{configured.push(explicit);return createProviderExecutor({settings:explicit,fetch:(async()=>{directCalls++;throw Error('No direct provider transport');}) as typeof fetch});}});
+  assert.equal(result.cleanupComplete,true);assert.equal(inferenceCalls,1);assert.equal(completed,1);assert.equal(directCalls,0);assert.equal(configured[0].COATRIA_INFERENCE_MODE,'coatria_broker_v1');assert(Object.isFrozen(configured[0]));assert(!('RUNPOD_API_KEY'in configured[0]));assert(!('COATRIA_RUNPOD_ENDPOINT_ID'in configured[0]));assert(!JSON.stringify(f.events).includes(settings.RUNPOD_API_KEY));
+ }finally{await f.remove();}
+});
+
 test('failed broker renewal aborts inference and keeps the uncertain journal without duplicate execution',async()=>{
  const f=await fixture();let renewals=0,executions=0;const original=f.broker.credentials;
  f.broker.credentials=async(body:any)=>{if(++renewals>1&&executions>0)throw new RuntimeError(401,'HOST_UNAVAILABLE');return original(body);};

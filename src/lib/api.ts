@@ -20,6 +20,7 @@ import {studioCoordinationRoute} from './studio-coordination';
 import {studioReviewPolicyRoute} from './studio-review-policy';
 import {studioClientDeliveryRoute} from './studio-client-delivery';
 import {studioHostProvisioningRoute} from './studio-host-provisioning-api';
+import {studioInferenceRoute} from './studio-inference';
 
 export async function handleApi(request: Request, parts: string[]): Promise<Response> {
   const requestId=randomUUID(),started=performance.now();
@@ -48,7 +49,7 @@ export async function handleApi(request: Request, parts: string[]): Promise<Resp
     if(!['GET','HEAD'].includes(method)&&!bearerEndpoint&&!['auth'].includes(parts[0])) {
       const user=await currentUser(request);if(user)await rateLimit(`write:${user.id}`,240,60);
     }
-    for(const handler of [identityRoute,pluginMarketplaceRoute,agentMissionRoute,agentRunRoute,agentToolsRoute,agentProposalRoute,studioMediaRoute,studioExecutionRoute,studioStaffingRoute,studioHostingRoute,studioHostProvisioningRoute,studioCoordinationRoute,studioReviewPolicyRoute,studioClientDeliveryRoute,studioRoute,conversationRoute,companyRoute,workRoute,integrationRoute,talentRoute]) {
+    for(const handler of [identityRoute,pluginMarketplaceRoute,agentMissionRoute,studioInferenceRoute,agentRunRoute,agentToolsRoute,agentProposalRoute,studioMediaRoute,studioExecutionRoute,studioStaffingRoute,studioHostingRoute,studioHostProvisioningRoute,studioCoordinationRoute,studioReviewPolicyRoute,studioClientDeliveryRoute,studioRoute,conversationRoute,companyRoute,workRoute,integrationRoute,talentRoute]) {
       const result=await handler(request,parts,method);if(result)return finish(result);
     }
     fail(404,'API endpoint not found.');

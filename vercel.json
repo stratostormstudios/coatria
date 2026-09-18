@@ -4,6 +4,7 @@
   "regions": ["iad1"],
   "crons": [
     { "path": "/api/internal/managed-pilot/reap", "schedule": "* * * * *" },
-    { "path": "/api/internal/studio-hosts/reconcile", "schedule": "* * * * *" }
+    { "path": "/api/internal/studio-hosts/reconcile", "schedule": "* * * * *" },
+    { "path": "/api/internal/studio-inference/reconcile", "schedule": "* * * * *" }
   ]
 }

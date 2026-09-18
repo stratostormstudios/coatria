@@ -65,7 +65,8 @@ export async function runStudioHost({directory,companyId,hostId,deadlineMs,model
  const stop=(why,failure=false)=>{if(!control.signal.aborted){reason=why;if(failure)exitCode=1;control.abort(Error('Studio host stopped.'));emit('host-stopping');}};
  const externalStop=()=>stop('operator_stop'),processStop=()=>stop('signal');
  const armDeadline=()=>{clearTimeout(deadlineTimer);deadlineTimer=setTimeout(()=>stop('deadline'),Math.max(0,deadlineMs-Date.now()));};
- const providerSettings=Object.freeze(Object.fromEntries(['RUNPOD_API_KEY','COATRIA_RUNPOD_ENDPOINT_ID','COATRIA_MAX_STEPS','COATRIA_MAX_OUTPUT_TOKENS','COATRIA_MAX_TOTAL_TOKENS','COATRIA_TIMEOUT_SECONDS'].filter(key=>settings[key]!==undefined).map(key=>[key,settings[key]])));
+ const providerKeys=['COATRIA_INFERENCE_MODE','COATRIA_MAX_STEPS','COATRIA_MAX_OUTPUT_TOKENS','COATRIA_MAX_TOTAL_TOKENS','COATRIA_TIMEOUT_SECONDS',...(settings.COATRIA_INFERENCE_MODE==='coatria_broker_v1'?[]:['RUNPOD_API_KEY','COATRIA_RUNPOD_ENDPOINT_ID'])];
+ const providerSettings=Object.freeze(Object.fromEntries(providerKeys.filter(key=>settings[key]!==undefined).map(key=>[key,settings[key]])));
  function verifyHost(host){
   const expiry=utc(host?.expiresAt);
   if(host?.id!==hostId||host.companyId!==companyId||host.status!=='active'||!integer(host.revision,1,2147483647)||host.revision<hostRevision||!integer(host.maxAgents,1,11)||!Array.isArray(host.providerIds)||host.providerIds.length!==1||host.providerIds[0]!=='runpod'||!Number.isFinite(expiry)||expiry<=Date.now()||expiry>deadlineMs)throw Error('Host scope or expiry changed.');

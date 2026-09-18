@@ -72,7 +72,7 @@ test('runtime role supports accounts and durable conversations without verificat
     for(const table of['agent_runs','agent_run_claims','agent_run_receipts','agent_tool_receipts','agent_proposals','agent_presence','plugin_installations','agent_missions','agent_mission_cycles'])assert.equal((await client.query(`SELECT count(*)::int AS count FROM ${table} WHERE company_id=$1`,[company.id])).rows[0].count,1);
     // Exercise the production role, including immutable planning, compute-cost,
     // and client receipts. Empty statements still require real SQL privileges.
-    const immutableStudioTables=['studio_planning_reviews','studio_planning_review_reads','studio_planning_review_decisions','studio_host_compute_reservations','studio_host_provision_requests','studio_client_delivery_files','studio_client_delivery_receipts','studio_client_delivery_requests'];
+    const immutableStudioTables=['studio_planning_reviews','studio_planning_review_reads','studio_planning_review_decisions','studio_host_compute_reservations','studio_host_provision_requests','studio_client_delivery_files','studio_client_delivery_receipts','studio_client_delivery_requests','studio_inference_reservations','studio_inference_tool_receipts'];
     for(const table of immutableStudioTables){
       assert.deepEqual((await client.query("SELECT has_table_privilege(current_user,$1,'SELECT') AS read,has_table_privilege(current_user,$1,'INSERT') AS append,has_any_column_privilege(current_user,$1,'UPDATE') AS edit,has_table_privilege(current_user,$1,'DELETE') AS remove",[table])).rows[0],{read:true,append:true,edit:false,remove:false},table);
       await client.query(`SELECT company_id FROM ${table} WHERE false`);
@@ -85,6 +85,9 @@ test('runtime role supports accounts and durable conversations without verificat
     await client.query('SELECT company_id FROM studio_client_deliveries WHERE false FOR SHARE');
     await client.query('UPDATE studio_client_deliveries SET status=status,revision=revision,revoked_at=revoked_at WHERE false');
     for(const column of ['recipient_user_id','package_hash','package_snapshot','expires_at'])assert.equal((await client.query("SELECT has_column_privilege(current_user,'studio_client_deliveries',$1,'UPDATE') AS allowed",[column])).rows[0].allowed,false,column);
+    await client.query('SELECT id FROM studio_inference_jobs WHERE false FOR UPDATE');
+    await client.query('UPDATE studio_inference_jobs SET status=status,provider_job_id=provider_job_id,submitted_at=submitted_at,cancel_requested_at=cancel_requested_at,cancel_request_id=cancel_request_id,output=output,model_calls=model_calls,used_tokens=used_tokens,error_code=error_code,poll_lease_id=poll_lease_id,poll_lease_expires_at=poll_lease_expires_at,last_reconciled_at=last_reconciled_at,updated_at=updated_at WHERE false');
+    for(const column of ['company_id','agent_id','run_id','host_id','provision_id','request_id','step','request_hash','agent_sponsor_id','agent_token_hash','lease_token_hash','installation_id','installation_revision','preset_hash','endpoint_id','model_id','limits','request_body','reserved_tokens','deadline_at','created_at'])assert.equal((await client.query("SELECT has_column_privilege(current_user,'studio_inference_jobs',$1,'UPDATE') AS allowed",[column])).rows[0].allowed,false,column);
     const options=(await client.query('SELECT rolcreaterole,rolcreatedb,rolbypassrls FROM pg_roles WHERE rolname=current_user')).rows[0];
     assert.deepEqual(options,{rolcreaterole:false,rolcreatedb:false,rolbypassrls:false});
     for(const [sql,values] of [
@@ -93,6 +96,10 @@ test('runtime role supports accounts and durable conversations without verificat
       ['UPDATE studio_client_deliveries SET recipient_user_id=recipient_user_id WHERE false',[]],
       ['UPDATE studio_client_deliveries SET package_snapshot=package_snapshot WHERE false',[]],
       ['DELETE FROM studio_client_deliveries WHERE false',[]],
+      ['UPDATE studio_inference_jobs SET endpoint_id=endpoint_id WHERE false',[]],
+      ['UPDATE studio_inference_jobs SET request_body=request_body WHERE false',[]],
+      ['UPDATE studio_inference_jobs SET deadline_at=deadline_at WHERE false',[]],
+      ['DELETE FROM studio_inference_jobs WHERE false',[]],
       ["INSERT INTO users(name,email,password_hash,email_verified_at) VALUES('Forbidden','forbidden@example.invalid','test',now())",[]],
       ['CREATE TABLE public.unauthorized_test(id int)',[]],
       ['TRUNCATE users CASCADE',[]],

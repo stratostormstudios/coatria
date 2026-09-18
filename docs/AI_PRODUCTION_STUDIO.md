@@ -30,7 +30,7 @@ Plans expire, carry exact profile/installation snapshots, and use immutable appl
 
 The [managed host broker](STUDIO_HOSTING.md) binds a supervisor to one company and up to eleven reviewed agents. Registrations expire within 24 hours; the pilot allows up to three active registrations per company. A one-time host secret is stored only as a hash. Agent credentials are encrypted at rest, bound to host/company/agent/configuration/epoch, and returned only to the current host lease. Manual plugin rotation, pause, configuration changes, sponsor loss, host revocation, and expiry remain authoritative.
 
-The shipped supervisor is Runpod-specific: it uses one operator-pinned model/endpoint, defaults to one concurrent inference run, and caps concurrency at two. It persists per-agent receipt journals privately and stops on lost broker authority. The HTTP worker does not receive arbitrary shell commands or executable plugin code from the model. CLI Codex/Claude Code hosting requires a different reviewed runtime; their presence elsewhere in the plugin catalog does not make this supervisor a CLI host.
+The shipped supervisor is Runpod-specific: it uses one operator-pinned model/endpoint, defaults to one concurrent inference run, and caps concurrency at two. It persists per-agent receipt journals privately and stops on lost broker authority. An explicitly reviewed `coatria_broker_v1` CPU preset keeps Runpod credentials on the server; each numbered inference step is built from authoritative context and immutable tool receipts, with durable submission fencing, cancellation and separate finite token/job/monetary admission limits. Direct-worker presets retain their restricted-key requirement. The HTTP worker does not receive arbitrary shell commands or executable plugin code from the model. CLI Codex/Claude Code hosting requires a different reviewed runtime; their presence elsewhere in the plugin catalog does not make this supervisor a CLI host.
 
 Studio can create a paused coordinator mission using the existing bounded mission engine. The human reviews and activates it; connected workers advance only their approved missions and assigned work. Cycles, cadence, run leases, task revisions, and per-run inference bounds are enforced. Agent messages and task context cannot grant permissions, change provider budgets, hire identities, or start paid hosts. Only a distinct authorized reviewer run can accept an exact planning submission; final media and business approvals remain human.
 
@@ -65,6 +65,7 @@ The application documents the current contracts in its [runtime OpenAPI implemen
 | Studio template, company, projects, gates, versions, review, delivery | `/api/companies/{companyId}/studio/...` |
 | Reviewed staffing plans | `/api/companies/{companyId}/studio/staffing/proposals/...` |
 | Managed host administration | `/api/companies/{companyId}/studio/hosts/...` |
+| Server-owned managed inference | `POST /api/agent/runs/{runId}/inference`, leased status and cancellation |
 | Leased host credential delivery | `/api/host/identity`, `/api/host/credentials` |
 | Connector profiles, input references, renderer jobs | `/api/companies/{companyId}/studio/execution/...` |
 | Renderer claims, heartbeats, evidence, upload and verification | `/api/execution/...` |
@@ -76,6 +77,8 @@ The agent surface includes staffing proposal/read tools, Studio context and plan
 ## Deployment and evidence
 
 Project delegation adds [017 coordination](../database/017_studio_coordination.sql), with an administrator-approved coordinator, exact agent/role snapshots, a finite expiry, persistent specialist run allowance and immutable parent/child handoff receipts. The `studio_coordination_get` and `studio_work_dispatch` tools expose the same controls to external harnesses. Policy changes fence queued/running children; terminal receipt replay remains available to an authorized worker. A child has one attempt and cannot delegate again. The allowance excludes coordinator cycles and manually created runs; it is not a monetary ledger. See the [operator guide](STUDIO_OPERATOR_GUIDE.md).
+
+Migration [021 inference](../database/021_studio_inference.sql) adds durable model steps, retained monetary reservations and immutable tool-result evidence. Runtime updates are restricted to reconciliation state; approved request bodies, destinations, authority and limits cannot be rewritten.
 
 The earlier schema changes are [013 execution](../database/013_studio_execution.sql), [014 staffing](../database/014_studio_staffing.sql), [015 hosting](../database/015_studio_hosting.sql), and [016 media](../database/016_studio_media.sql), following the Studio schema in migration012. Apply the reviewed runtime permission file in the same controlled deployment. Immutable artifacts, reviews, manifests, staffing application receipts, and private-media evidence have append-only runtime privileges; a delivery's acknowledgement status is the only updatable delivery field.
 

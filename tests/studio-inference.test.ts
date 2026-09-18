@@ -1,0 +1,132 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {readFile,readdir} from 'node:fs/promises';
+import {database,query,transaction} from '../src/lib/db';
+import {hashToken} from '../src/lib/security';
+import {studioInferenceSubmitInput,studioInferenceCancelInput} from '../src/lib/studio-inference-protocol';
+import {submitStudioInference,readStudioInference,cancelStudioInference,reconcileStudioInferenceJob,studioInferenceReserved,recordStudioInferenceToolReceipt} from '../src/lib/studio-inference';
+import {stableRequestId,createRunInferenceClient} from '../public/downloads/agent-worker.mjs';
+import {createProviderExecutor} from '../public/downloads/provider-adapter.mjs';
+
+test('inference transport accepts only a leased step and rejects model/context/secret overrides',()=>{
+ const request={leaseToken:'fixture-lease-proof-that-is-long',requestId:randomUUID(),step:0};assert(studioInferenceSubmitInput.safeParse(request).success);
+ for(const patch of [{model:'other'},{messages:[]},{tools:[]},{endpoint:'other'},{apiKey:'fixture'},{step:20},{step:-1},{context:{}},{output:{}}])assert(!studioInferenceSubmitInput.safeParse({...request,...patch}).success);
+ assert(studioInferenceCancelInput.safeParse({leaseToken:request.leaseToken,requestId:request.requestId}).success);
+});
+const emulate=process.env.COATRIA_TEST_EMULATOR==='1',integrationUrl=process.env.COATRIA_INTEGRATION_DATABASE_URL;
+test('broker runs real leased API and receipt transactions against isolated provider fixtures',{skip:!emulate&&!integrationUrl,timeout:180000},async t=>{
+ const {handleApi}=await import('../src/lib/api');
+ const before={DATABASE_URL:process.env.DATABASE_URL,DATABASE_POOL_MAX:process.env.DATABASE_POOL_MAX,COATRIA_HOSTING_KEYRING:process.env.COATRIA_HOSTING_KEYRING,MANAGED_RUNPOD_API_KEY:process.env.MANAGED_RUNPOD_API_KEY},realFetch=globalThis.fetch;
+ process.env.DATABASE_URL=integrationUrl;process.env.DATABASE_POOL_MAX=emulate?'1':'10';process.env.COATRIA_HOSTING_KEYRING=JSON.stringify({activeKeyId:'fixture',keys:{fixture:Buffer.alloc(32,6).toString('base64')}});process.env.MANAGED_RUNPOD_API_KEY='fixture-server-lifecycle-key';let stop:(()=>Promise<void>)|undefined;
+ if(emulate){const {PGlite}=await import('@electric-sql/pglite'),{PGLiteSocketServer}=await import('@electric-sql/pglite-socket'),db=await PGlite.create();for(const file of(await readdir('database')).filter(f=>/^\d.*\.sql$/.test(f)).sort())await db.exec(await readFile('database/'+file,'utf8'));const socket=new PGLiteSocketServer({db,host:'127.0.0.1',port:0,maxConnections:1});await socket.start();const url=new URL('postgresql://'+socket.getServerConn()+'/postgres');url.username='postgres';url.password='postgres';process.env.DATABASE_URL=url.href;stop=async()=>{await socket.stop();await db.close();};}
+ const origin='http://localhost:4180',companies:string[]=[],users:string[]=[],runtimeConfig={providerId:'runpod',modelId:'Qwen/Qwen3.8-27B-FP8',maxSteps:8,maxOutputTokens:2048,maxTotalTokens:80000,timeoutSeconds:600};
+ async function fixture(options:{maxJobs?:number;money?:number;tokens?:number}={}){
+  const company=randomUUID(),user=randomUUID(),session=randomUUID();companies.push(company);users.push(user);
+  await query('INSERT INTO users(id,name,email,password_hash) VALUES($1,$2,$3,$4)',[user,'Inference owner',user+'@example.invalid','fixture']);await query("INSERT INTO companies(id,name,slug,template) VALUES($1,'Inference fixture',$2,'blank')",[company,company]);await query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'owner')",[company,user]);await query("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,clock_timestamp()+interval '1 hour')",[hashToken(session),user]);
+  let agentToken='',hostToken='';
+  async function call(path:string,method='GET',payload?:unknown,actor='owner',expected=200,extra:Record<string,string>={}){const headers:Record<string,string>={...extra,...actor==='owner'?{Cookie:'coatria_session='+session,Origin:origin}:actor==='agent'?{Authorization:'Bearer '+agentToken}:actor==='host'?{Authorization:'Bearer '+hostToken}:{}};if(payload!==undefined)headers['Content-Type']='application/json';const response=await handleApi(new Request(origin+'/api/'+path,{method,headers,...payload===undefined?{}:{body:JSON.stringify(payload)}}),path.split('/'));const result=await response.json();assert.equal(response.status,expected,`${method} ${path}: ${JSON.stringify(result)}`);return result;}
+  const installation=(await call(`companies/${company}/plugin-installations`,'POST',{clientId:randomUUID(),pluginId:'runpod',manifestVersion:'1.0.0',name:'Avery producer',invocationAccess:'admins',capabilities:['workspace.read','tasks.write'],runtimeConfig,character:{roleTitle:'Studio producer',persona:'Prepare drafts for independent human review. Never approve your own work.',workStyle:'methodical'}},'owner',201)).installation;
+  const registration=await call(`companies/${company}/studio/hosts`,'POST',{clientId:randomUUID(),name:'Broker fixture',maxAgents:1,expiresAt:new Date(Date.now()+1200000).toISOString()},'owner',201);hostToken=registration.hostToken;
+  const host=(await call(`companies/${company}/studio/hosts/${registration.host.id}/enroll`,'POST',{clientId:randomUUID(),revision:registration.host.revision,activateAgents:true,installations:[{installationId:installation.id,revision:installation.revision}]},'owner',201)).host;
+  const bundle=await call('host/credentials','POST',{supervisorId:randomUUID()},'host');agentToken=bundle.credentials[0].agentToken;
+  const preset={id:'broker-fixture',endpointId:'fixture-endpoint',modelId:runtimeConfig.modelId,maxSteps:8,maxOutputTokens:2048,maxTotalTokens:options.tokens??80000,timeoutSeconds:600,inference:{mode:'coatria_broker_v1',maxJobs:options.maxJobs??12,maxHourlyMicrousd:600000,lifetimeAllowanceMicrousd:options.money??2000000}},provision=randomUUID();
+  await query("INSERT INTO studio_host_provisions(id,company_id,created_by,client_id,request_hash,plan,plan_hash,preset,phase,host_id,pod_name,expires_at) VALUES($1,$2,$3,$4,$5,'{}',$5,$6,'running',$7,$8,$9)",[provision,company,user,randomUUID(),'a'.repeat(64),JSON.stringify(preset),host.id,'fixture-'+provision,host.expiresAt]);
+  const run=(await call(`companies/${company}/conversations/commons/runs`,'POST',{clientId:randomUUID(),agentId:installation.agentId,prompt:'Create a producer estimate draft and submit it for human review. Do not approve work.'},'owner',201)).run;
+  const lease=await call('agent/runs/claim','POST',{workerId:'broker-fixture',claimId:randomUUID()},'agent');assert.equal(lease.run.id,run.id);
+  const identity={id:installation.agentId,company_id:company,created_by:user,token_hash:hashToken(agentToken)},input=(step=0)=>({leaseToken:lease.leaseToken,requestId:randomUUID(),step});
+  return{company,user,installation,host,provision,run,lease,identity,input,call,agentToken};
+ }
+ function providerFixture(outputs:any[]=[]){const calls:Array<{method:string;url:string;body:any}>=[];const jobPrefix='fixture-'+randomUUID();let lost=false,status='COMPLETED',index=0;const transport:typeof fetch=async(url,init)=>{assert(String(url).startsWith('https://api.runpod.ai/v2/fixture-endpoint/'));assert.equal((init?.headers as any).Authorization,'Bearer fixture-server-lifecycle-key');assert.equal(init?.redirect,'error');const body=init?.body?JSON.parse(String(init.body)):null;calls.push({method:init?.method??'GET',url:String(url),body});if(String(url).endsWith('/run')){index++;if(lost)throw Error('Simulated lost response');return Response.json({id:jobPrefix+'-'+index,status,output:status==='COMPLETED'?[outputs[index-1]??final('Ready for review')]:undefined});}if(String(url).includes('/cancel/')){status='CANCELLED';return Response.json({id:jobPrefix+'-'+index,status});}return Response.json({id:jobPrefix+'-'+index,status,output:status==='COMPLETED'?[outputs[index-1]??final('Ready for review')]:undefined});};return{transport,calls,setLost:(v:boolean)=>lost=v,setStatus:(v:string)=>status=v,creates:()=>calls.filter(c=>c.url.endsWith('/run')).length};}
+ function final(text:string){return{choices:[{finish_reason:'stop',message:{role:'assistant',content:text}}],usage:{prompt_tokens:400,completion_tokens:40}};}
+ function tool(name:string,args:unknown,callId='call-one'){return{choices:[{finish_reason:'tool_calls',message:{role:'assistant',content:null,tool_calls:[{id:callId,type:'function',function:{name,arguments:JSON.stringify(args)}}]}}],usage:{prompt_tokens:400,completion_tokens:40}};}
+ try{
+  await t.test('actual API pins persona, context and tools; accepts only authentic tool receipts and preserves independent task review',async()=>{
+   const f=await fixture(),provider=providerFixture([tool('tasks_create',{title:'Producer estimate draft'},'create'),final('Estimate drafted for human review.')]);globalThis.fetch=provider.transport;
+   const request=f.input(),first=await f.call(`agent/runs/${f.run.id}/inference`,'POST',request,'agent',201);assert.equal(first.inference.status,'succeeded');assert(!JSON.stringify(first).includes('fixture-server-lifecycle-key'));
+   const sent=provider.calls[0].body.input.openai_input;assert.equal(sent.model,runtimeConfig.modelId);assert(sent.messages[0].content.includes('Studio producer'));assert(sent.messages[0].content.includes('untrusted'));assert(!sent.tools.some((v:any)=>v.function.name==='studio_review'));assert.equal(sent.max_tokens,2048);
+   const replay=await f.call(`agent/runs/${f.run.id}/inference`,'POST',request,'agent');assert.equal(replay.inference.id,first.inference.id);assert.equal(provider.creates(),1);
+   await f.call(`agent/runs/${f.run.id}/inference`,'POST',{...f.input(1),messages:[]},'agent',400);
+   await assert.rejects(submitStudioInference(f.identity,f.run.id,f.input(1)),/exact model-requested tool/);
+   const key=stableRequestId(f.run.id,'provider:0:create');await f.call('agent/tools/tasks_create','POST',{runId:f.run.id,leaseToken:f.lease.leaseToken,requestId:key,arguments:{title:'Wrong title'}},'agent',409);assert.equal(Number((await query('SELECT count(*) FROM tasks WHERE company_id=$1',[f.company])).rows[0].count),0);
+   const taskResult=await f.call('agent/tools/tasks_create','POST',{runId:f.run.id,leaseToken:f.lease.leaseToken,requestId:key,arguments:{title:'Producer estimate draft'}},'agent');assert(taskResult.result.id);
+   const second=await f.call(`agent/runs/${f.run.id}/inference`,'POST',f.input(1),'agent',201);assert.equal(second.inference.status,'succeeded');assert.equal(provider.calls[1].body.input.openai_input.messages.at(-1).role,'tool');assert.equal(JSON.parse(provider.calls[1].body.input.openai_input.messages.at(-1).content).id,taskResult.result.id);
+   await assert.rejects(submitStudioInference(f.identity,f.run.id,f.input(2)),/not requested more tools/);
+   assert.equal((await query('SELECT status FROM tasks WHERE id=$1',[taskResult.result.id])).rows[0].status,'todo');assert.equal(Number((await query('SELECT count(*) FROM studio_inference_tool_receipts WHERE company_id=$1',[f.company])).rows[0].count),1);
+   assert.equal(Number((await query('SELECT count(*) FROM agent_tool_receipts WHERE company_id=$1',[f.company])).rows[0].count),1);
+   await f.call(`agent/runs/${f.run.id}/inference/${first.inference.id}`,'GET',undefined,'agent',200,{'X-Coatria-Run-Lease':f.lease.leaseToken});
+   await f.call(`agent/runs/${f.run.id}/inference/${first.inference.id}`,'GET',undefined,'agent',400);
+   await assert.rejects(readStudioInference({...f.identity,company_id:randomUUID()},f.run.id,first.inference.id,f.lease.leaseToken),/not found|unavailable/);
+  });
+  await t.test('lost submissions remain uncertain and never retry paid POST; deadline expires without refund',async()=>{
+   const f=await fixture(),p=providerFixture();p.setLost(true);const job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;
+   await reconcileStudioInferenceJob(job.id,{fetch:p.transport});await reconcileStudioInferenceJob(job.id,{fetch:p.transport});assert.equal(p.creates(),1);assert.equal((await readStudioInference(f.identity,f.run.id,job.id,f.lease.leaseToken)).inference.status,'uncertain');
+   const reserved=await transaction(c=>studioInferenceReserved(c,f.company));assert(reserved>0);await query("UPDATE studio_inference_jobs SET deadline_at=clock_timestamp()-interval '1 second' WHERE id=$1",[job.id]);await reconcileStudioInferenceJob(job.id,{fetch:p.transport});assert.equal((await query('SELECT status FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0].status,'expired');assert.equal(await transaction(c=>studioInferenceReserved(c,f.company)),reserved);assert.equal(p.creates(),1);
+  });
+  await t.test('stop and revocation deny cached inference authority and independently cancel known paid jobs',async()=>{
+   const f=await fixture(),p=providerFixture();p.setStatus('IN_QUEUE');const job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;await reconcileStudioInferenceJob(job.id,{fetch:p.transport});await query('UPDATE studio_host_provisions SET stop_requested_at=clock_timestamp() WHERE id=$1',[f.provision]);await assert.rejects(readStudioInference(f.identity,f.run.id,job.id,f.lease.leaseToken),/no approved inference/);await reconcileStudioInferenceJob(job.id,{fetch:p.transport});assert.equal((await query('SELECT status FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0].status,'cancelled');assert.equal(p.creates(),1);assert(p.calls.some(c=>c.url.includes('/cancel/')));
+   const g=await fixture(),q=providerFixture();q.setStatus('IN_QUEUE');const second=(await submitStudioInference(g.identity,g.run.id,g.input())).inference;await reconcileStudioInferenceJob(second.id,{fetch:q.transport});await query("UPDATE studio_managed_hosts SET status='revoked' WHERE id=$1",[g.host.id]);await reconcileStudioInferenceJob(second.id,{fetch:q.transport});assert.equal((await query('SELECT status FROM studio_inference_jobs WHERE id=$1',[second.id])).rows[0].status,'cancelled');
+  });
+  await t.test('money, token and job bounds deny submission before provider calls; valid usage settles tokens only',async()=>{
+   const insufficient=await fixture({money:1});await assert.rejects(submitStudioInference(insufficient.identity,insufficient.run.id,insufficient.input()),/company inference allowance/);assert.equal(Number((await query('SELECT count(*) FROM studio_inference_jobs WHERE company_id=$1',[insufficient.company])).rows[0].count),0);
+   const small=await fixture({tokens:100});await assert.rejects(submitStudioInference(small.identity,small.run.id,small.input()),/token allowance/);
+   const f=await fixture({maxJobs:1}),p=providerFixture([tool('workspace_get',{})]);const job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;await reconcileStudioInferenceJob(job.id,{fetch:p.transport});await f.call('agent/tools/workspace_get','POST',{runId:f.run.id,leaseToken:f.lease.leaseToken,requestId:stableRequestId(f.run.id,'provider:0:call-one'),arguments:{}},'agent');await assert.rejects(submitStudioInference(f.identity,f.run.id,f.input(1)),/job limit/);assert.equal(p.creates(),1);
+   const row=(await query('SELECT used_tokens,reserved_tokens FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0];assert.equal(row.used_tokens,440);assert(row.reserved_tokens>row.used_tokens);
+  });
+  await t.test('projected workspace receipts preserve full API geometry and reject fabricated argument changes',async()=>{
+   const f=await fixture(),p=providerFixture([tool('workspace_get',{})]),job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;await reconcileStudioInferenceJob(job.id,{fetch:p.transport});const raw={company:{id:f.company},floor:{width:50,depth:50,revision:7,items:Array.from({length:3000},(_,i)=>({id:i,geometry:'x'.repeat(120)}))}},key=stableRequestId(f.run.id,'provider:0:call-one');const result=await transaction(c=>recordStudioInferenceToolReceipt(c,f.identity,f.run.id,key,'workspace_get',{},raw));assert.deepEqual(result,raw);const saved=(await query('SELECT response FROM studio_inference_tool_receipts WHERE company_id=$1',[f.company])).rows[0].response;assert.equal(saved.floor.itemCount,3000);assert.equal(saved.floor.itemsOmitted,true);assert(!saved.floor.items);assert.equal(saved.floor.revision,7);
+   const next=await submitStudioInference(f.identity,f.run.id,f.input(1));assert(next.inference.id);await assert.rejects(transaction(c=>recordStudioInferenceToolReceipt(c,f.identity,f.run.id,key,'workspace_get',{invented:true},raw)),/does not match/);
+  });
+  await t.test('malformed or over-budget completions retain job identity and unsettled reservation for cleanup',async()=>{
+   const f=await fixture(),bad=final('No valid usage');delete (bad as any).usage;const p=providerFixture([bad]),job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;await reconcileStudioInferenceJob(job.id,{fetch:p.transport});const row=(await query('SELECT * FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0];assert.equal(row.status,'uncertain');assert.match(row.provider_job_id,/^fixture-/);assert.equal(row.used_tokens,null);assert.equal(row.output,null);await cancelStudioInference(f.identity,f.run.id,job.id,{leaseToken:f.lease.leaseToken,requestId:randomUUID()});await reconcileStudioInferenceJob(job.id,{fetch:p.transport});assert.equal((await query('SELECT status FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0].status,'cancelled');
+  });
+  await t.test('downloadable worker adapter executes three real broker steps and leaves the task in independent human review',async()=>{
+   const f=await fixture({tokens:20000}),sent:any[]=[];
+   globalThis.fetch=async(url,init)=>{assert(String(url).endsWith('/fixture-endpoint/run'));const request=JSON.parse(String(init?.body));sent.push(request);const last=request.input.openai_input.messages.at(-1);let output:any;
+    if(sent.length===1)output=tool('tasks_create',{title:'Actual worker estimate draft'},'create-draft');
+    else if(sent.length===2){const created=JSON.parse(last.content);assert(created.id);output=tool('tasks_submit',{taskId:created.id,revision:created.revision,summary:'Draft estimate prepared; independent human review required.'},'submit-draft');}
+    else{assert.equal(JSON.parse(last.content).status,'review');output=final('Estimate submitted for independent human review.');}
+    return Response.json({id:'worker-'+randomUUID(),status:'COMPLETED',output:[output]});
+   };
+   const context=await f.call(`agent/runs/${f.run.id}/context`,'GET',undefined,'agent',200,{'X-Coatria-Run-Lease':f.lease.leaseToken});
+   const client={submitInference:(runId:string,body:unknown)=>f.call(`agent/runs/${runId}/inference`,'POST',body,'agent',201),readInference:(runId:string,id:string,leaseToken:string)=>f.call(`agent/runs/${runId}/inference/${id}`,'GET',undefined,'agent',200,{'X-Coatria-Run-Lease':leaseToken}),cancelInference:(runId:string,id:string,body:unknown)=>f.call(`agent/runs/${runId}/inference/${id}/cancel`,'POST',body,'agent')};
+   const tools={key:(key:string)=>stableRequestId(f.run.id,key),list:()=>f.call('agent/tools','GET',undefined,'agent'),call:async(name:string,args:unknown,{requestId}:{requestId:string})=>(await f.call('agent/tools/'+name,'POST',{runId:f.run.id,leaseToken:f.lease.leaseToken,requestId,arguments:args},'agent')).result};
+   const execute=createProviderExecutor({settings:{NODE_ENV:'test',COATRIA_INFERENCE_MODE:'coatria_broker_v1'}}),inference=createRunInferenceClient({client,runId:f.run.id,leaseToken:f.lease.leaseToken,pollMs:0});
+   const result=await execute({run:context.run,context,tools,inference});assert(result.result.includes('independent human review'));assert.equal(sent.length,3);
+   await f.call(`agent/runs/${f.run.id}/complete`,'POST',{leaseToken:f.lease.leaseToken,clientId:randomUUID(),result:result.result},'agent');
+   const tasks=(await query('SELECT status,approved_by FROM tasks WHERE company_id=$1',[f.company])).rows;assert.deepEqual(tasks,[{status:'review',approved_by:null}]);
+   const accounting=(await query('SELECT sum(used_tokens)::int AS used,sum(reserved_tokens)::int AS reserved FROM studio_inference_jobs WHERE company_id=$1',[f.company])).rows[0];assert.equal(accounting.used,1320);assert(accounting.reserved>20000,'Successful measured usage releases only the token reservation needed for later steps');
+   assert.equal(Number((await query('SELECT count(*) FROM agent_tool_receipts WHERE company_id=$1',[f.company])).rows[0].count),2);
+  });
+  await t.test('committed cancellation, deadline and host stop defeat a late completed provider reply',async()=>{
+   for(const action of ['cancel','stop','expiry']){
+    const f=await fixture(),job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;let release!:(value:Response)=>void,started!:()=>void;const ready=new Promise<void>(resolve=>started=resolve),pending=new Promise<Response>(resolve=>release=resolve);
+    const reconciliation=reconcileStudioInferenceJob(job.id,{fetch:async()=>{started();return pending;}});await ready;
+    if(action==='cancel'){const request={leaseToken:f.lease.leaseToken,requestId:randomUUID()};await cancelStudioInference(f.identity,f.run.id,job.id,request);assert.equal((await cancelStudioInference(f.identity,f.run.id,job.id,request)).replayed,true);}
+    else if(action==='stop')await query('UPDATE studio_host_provisions SET stop_requested_at=clock_timestamp() WHERE id=$1',[f.provision]);
+    else await query("UPDATE studio_inference_jobs SET deadline_at=clock_timestamp()-interval '1 second' WHERE id=$1",[job.id]);
+    release(Response.json({id:'late-'+randomUUID(),status:'COMPLETED',output:[tool('tasks_create',{title:'Never apply this late result'})]}));await reconciliation;
+    const saved=(await query('SELECT status,output,model_calls,provider_job_id FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0];assert.equal(saved.status,'cancelled');assert.equal(saved.output,null);assert.deepEqual(saved.model_calls,[]);assert(saved.provider_job_id);
+    await assert.rejects(submitStudioInference(f.identity,f.run.id,f.input(1)));assert.equal(Number((await query('SELECT count(*) FROM tasks WHERE company_id=$1',[f.company])).rows[0].count),0);
+   }
+  });
+  await t.test('uncooperative transport and body streams stop at the deadline without another provider submission',async()=>{
+   for(const mode of ['transport','body']){
+    const f=await fixture(),job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;
+    let calls=0,cancelled=false,transportStarted=0,transportAborted=0;
+    await reconcileStudioInferenceJob(job.id,{requestTimeoutMs:20,reconcileTimeoutMs:5000,fetch:async(_url,init)=>{
+     calls++;transportStarted=performance.now();init?.signal?.addEventListener('abort',()=>{transportAborted=performance.now();},{once:true});
+     if(mode==='transport')return new Promise<Response>(()=>{});
+     return new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('{'));},cancel(){cancelled=true;}}));
+    }});
+    assert.equal(calls,1);assert(transportAborted>=transportStarted);assert(transportAborted-transportStarted<1000,'The request timeout bounds the actual stalled transport independently of database authorization and result persistence.');
+    const result=(await readStudioInference(f.identity,f.run.id,job.id,f.lease.leaseToken)).inference;assert.equal(result.status,'uncertain');if(mode==='body')assert(cancelled);
+    await reconcileStudioInferenceJob(job.id,{fetch:async()=>{calls++;throw Error('A second submit is forbidden');}});assert.equal(calls,1);
+   }
+  });
+  await t.test('strict provider identity and error fields are rejected; transient status reads preserve a known pending job',async()=>{
+   for(const bad of [{status:'COMPLETED',output:final('No ID')},{id:12,status:'COMPLETED',output:final('Numeric ID')},{id:'error-'+randomUUID(),status:'COMPLETED',output:{...final('Conflicting error'),error:'synthetic'}}]){const f=await fixture(),job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;await reconcileStudioInferenceJob(job.id,{fetch:async()=>Response.json(bad)});const row=(await query('SELECT status,output FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0];assert.equal(row.status,'uncertain');assert.equal(row.output,null);}
+   const f=await fixture(),p=providerFixture();p.setStatus('IN_QUEUE');const job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;await reconcileStudioInferenceJob(job.id,{fetch:p.transport});await reconcileStudioInferenceJob(job.id,{fetch:async()=>Response.json({error:'Temporary read failure'},{status:503})});assert.equal((await readStudioInference(f.identity,f.run.id,job.id,f.lease.leaseToken)).inference.status,'queued');assert.equal(p.creates(),1);let statusTimeoutCalls=0;await reconcileStudioInferenceJob(job.id,{requestTimeoutMs:20,reconcileTimeoutMs:5000,fetch:async()=>{statusTimeoutCalls++;return new Promise<Response>(()=>{});}});assert.equal(statusTimeoutCalls,1);assert.equal((await readStudioInference(f.identity,f.run.id,job.id,f.lease.leaseToken)).inference.status,'queued');p.setStatus('COMPLETED');await reconcileStudioInferenceJob(job.id,{fetch:p.transport});assert.equal((await readStudioInference(f.identity,f.run.id,job.id,f.lease.leaseToken)).inference.status,'succeeded');
+  });
+ }finally{globalThis.fetch=realFetch;for(const company of companies)await query('DELETE FROM companies WHERE id=$1',[company]);for(const user of users)await query('DELETE FROM users WHERE id=$1',[user]);await database().end();delete (globalThis as any).coatriaPool;await stop?.();for(const[key,value]of Object.entries(before))if(value===undefined)delete process.env[key];else process.env[key]=value;}
+});

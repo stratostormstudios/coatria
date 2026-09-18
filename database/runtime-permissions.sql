@@ -29,6 +29,8 @@ GRANT SELECT,INSERT ON studio_planning_reviews,studio_planning_review_reads,stud
 GRANT SELECT,INSERT ON studio_client_deliveries,studio_client_delivery_files,studio_client_delivery_receipts,studio_client_delivery_requests TO coatria_runtime_v1;
 GRANT UPDATE(status,revision,revoked_at) ON studio_client_deliveries TO coatria_runtime_v1;
 GRANT UPDATE(status) ON studio_deliveries TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON studio_inference_jobs,studio_inference_reservations,studio_inference_tool_receipts TO coatria_runtime_v1;
+GRANT UPDATE(status,provider_job_id,submitted_at,cancel_requested_at,cancel_request_id,output,model_calls,used_tokens,error_code,poll_lease_id,poll_lease_expires_at,last_reconciled_at,updated_at) ON studio_inference_jobs TO coatria_runtime_v1;
 GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO coatria_runtime_v1;
 ALTER ROLE coatria_runtime_v1 SET statement_timeout='15s';
 ALTER ROLE coatria_runtime_v1 SET idle_in_transaction_session_timeout='20s';

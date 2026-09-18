@@ -23,6 +23,7 @@ import {studioReviewPolicyGetInput,studioReviewDispatchInput,studioReviewReadInp
 import {studioReviewAgentSnapshot,dispatchStudioReview,readStudioPlanningReview,decideStudioPlanningReview} from './studio-review-policy';
 import {studioClientDeliveryListInput} from './studio-client-delivery-protocol';
 import {studioClientDeliveryList} from './studio-client-delivery';
+import {recordStudioInferenceToolReceipt} from './studio-inference';
 
 const page=z.object({after:uuid.optional(),limit:z.number().int().min(1).max(100).default(50)}).strict();
 const empty=z.object({}).strict();
@@ -130,7 +131,7 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
   // All operations on a run are serialized after current authority and lease checks.
   await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`agent-tool:${agent.company_id}:${agent.id}:${command.requestId}`]);
   const previous=(await client.query('SELECT request_hash,response FROM agent_tool_receipts WHERE company_id=$1 AND agent_id=$2 AND request_id=$3',[agent.company_id,agent.id,command.requestId])).rows[0];
-  if(previous){if(previous.request_hash!==hash)fail(409,'This tool request ID was used for different arguments.','IDEMPOTENCY_CONFLICT');return {result:previous.response,replayed:true};}
+  if(previous){if(previous.request_hash!==hash)fail(409,'This tool request ID was used for different arguments.','IDEMPOTENCY_CONFLICT');return {result:await recordStudioInferenceToolReceipt(client,context.agent,command.runId,command.requestId,name,command.arguments,previous.response),replayed:true};}
   if(definition.mutating&&Number((await client.query('SELECT count(*) FROM agent_tool_receipts WHERE company_id=$1 AND run_id=$2',[agent.company_id,command.runId])).rows[0].count)>=200)fail(409,'This run reached its limit of 200 committed tool actions. Start a new reviewed request.','AGENT_TOOL_BUDGET');
   const run=context.run,companyId=agent.company_id,limit=args.limit||50,values=[companyId,args.after||null,limit+1];let result:unknown;
   switch(name){
@@ -207,6 +208,7 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
     result=(await client.query('INSERT INTO agent_proposals(company_id,agent_id,run_id,requested_by,kind,data) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,kind,status,expires_at AS "expiresAt"',[companyId,agent.id,run.id,run.requested_by,kind,JSON.stringify(args)])).rows[0];break;
    }
   }
+  result=await recordStudioInferenceToolReceipt(client,context.agent,command.runId,command.requestId,name,command.arguments,result);
   if(definition.mutating){
    await client.query('INSERT INTO agent_tool_receipts(company_id,agent_id,run_id,request_id,tool,request_hash,response) VALUES($1,$2,$3,$4,$5,$6,$7)',[companyId,agent.id,run.id,command.requestId,name,hash,JSON.stringify(result)]);
    await client.query("INSERT INTO activity(company_id,kind,description) VALUES($1,'agent.tool_used',$2)",[companyId,`${agent.name} used ${name} in run ${run.id}.`]);

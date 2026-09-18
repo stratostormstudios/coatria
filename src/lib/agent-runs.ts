@@ -56,6 +56,14 @@ function requireLease(run:Record<string,any>,leaseToken:string){
 /** Caller owns the transaction. Locks company -> sorted memberships -> agent -> run. */
 export async function authorizeRunTool(client:PoolClient,identity:AgentRunIdentity,runId:string,leaseToken:string){const access=await lockedRun(client,identity,runId);requireLease(access.run,leaseToken);return access as{run:Record<string,any>;capabilities:string[];requesterRole:string;agent:Record<string,any>};}
 
+/** Internal reconciliation only. A stored hash is never accepted as a public lease proof. */
+export async function authorizeStoredAgentRun(client:PoolClient,identity:AgentRunIdentity,runId:string,leaseTokenHash:string){
+ if(!/^[a-f0-9]{64}$/.test(leaseTokenHash))fail(409,'The stored run authority is unavailable.','RUN_LEASE_LOST');
+ const access=await lockedRun(client,identity,runId);if(access.run.status==='cancelled')fail(409,'This request was cancelled.','RUN_CANCELLED');
+ if(access.run.status!=='running'||!access.run.lease_live||access.run.lease_token_hash!==leaseTokenHash)fail(409,'This worker no longer owns a live lease.','RUN_LEASE_LOST');
+ return access as{run:Record<string,any>;capabilities:string[];requesterRole:string;agent:Record<string,any>};
+}
+
 export async function createAgentRun(member:Membership,channel:string,input:unknown,options:{purpose?:'task'|'connection_test'}={}){
  return transaction(client=>createAgentRunInTransaction(client,member,channel,input,options));
 }

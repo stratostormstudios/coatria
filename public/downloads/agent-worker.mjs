@@ -25,9 +25,14 @@ export class RuntimeError extends Error{
  constructor(status,code,retryAfter=0){super('Coatria request failed'+(status?' ('+status+')':'')+'.');this.status=status;this.code=typeof code==='string'&&/^[A-Z0-9_]{1,80}$/.test(code)?code:'REQUEST_FAILED';this.retryAfter=retryAfter;}
 }
 export function pause(ms,signal){return new Promise((resolvePause,reject)=>{if(signal?.aborted)return reject(signal.reason);const abort=()=>{clearTimeout(timer);reject(signal.reason);};const timer=setTimeout(()=>{signal?.removeEventListener('abort',abort);resolvePause();},ms);signal?.addEventListener('abort',abort,{once:true});});}
-async function boundedJson(response){
+async function untilStopped(operation,signal){
+ signal.throwIfAborted();let abort;
+ const stopped=new Promise((_,reject)=>{abort=()=>reject(signal.reason);signal.addEventListener('abort',abort,{once:true});});
+ try{return await Promise.race([Promise.resolve().then(()=>{signal.throwIfAborted();return operation();}),stopped]);}finally{signal.removeEventListener('abort',abort);}
+}
+async function boundedJson(response,signal){
  const reader=response.body?.getReader();if(!reader)throw new RuntimeError(502,'INVALID_RESPONSE');let size=0;const chunks=[];
- while(true){const chunk=await reader.read();if(chunk.done)break;size+=chunk.value.byteLength;if(size>1024*1024){await reader.cancel();throw new RuntimeError(502,'RESPONSE_TOO_LARGE');}chunks.push(chunk.value);}
+ try{while(true){const chunk=await untilStopped(()=>reader.read(),signal);if(chunk.done)break;size+=chunk.value.byteLength;if(size>1024*1024)throw new RuntimeError(502,'RESPONSE_TOO_LARGE');chunks.push(chunk.value);}}catch(error){void reader.cancel().catch(()=>{});throw error;}
  let value;try{value=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw new RuntimeError(502,'INVALID_RESPONSE');}
  if(!value||typeof value!=='object'||Array.isArray(value))throw new RuntimeError(502,'INVALID_RESPONSE');return value;
 }
@@ -42,8 +47,8 @@ export function createRuntimeClient({token=process.env.COATRIA_AGENT_TOKEN,url=p
   for(let attempt=0;;attempt++){
    signal?.throwIfAborted();let error;
    try{
-    const deadline=AbortSignal.timeout(timeoutMs),response=await transport(target,{method,redirect:'error',headers:{...headers,Authorization:'Bearer '+token,...(encoded===undefined?{}:{'Content-Type':'application/json'})},body:encoded,signal:signal?AbortSignal.any([signal,deadline]):deadline});
-    const data=await boundedJson(response);
+    const deadline=AbortSignal.timeout(timeoutMs),active=signal?AbortSignal.any([signal,deadline]):deadline,response=await untilStopped(()=>transport(target,{method,redirect:'error',headers:{...headers,Authorization:'Bearer '+token,...(encoded===undefined?{}:{'Content-Type':'application/json'})},body:encoded,signal:active}),active);
+    const data=await boundedJson(response,active);
     if(response.ok)return data;
     const retry=Number(response.headers.get('retry-after'));throw new RuntimeError(response.status,data.code,Number.isFinite(retry)&&retry>0?retry:0);
    }catch(caught){if(signal?.aborted)throw signal.reason;error=caught instanceof RuntimeError?caught:new RuntimeError(0,'NETWORK_ERROR');}
@@ -60,6 +65,9 @@ export function createRuntimeClient({token=process.env.COATRIA_AGENT_TOKEN,url=p
   claim:(workerId,claimId,signal)=>post('/api/agent/runs/claim',{workerId,claimId},signal),
   heartbeat:(runId,leaseToken,signal)=>post(runPath(runId)+'/heartbeat',{leaseToken},signal),
   context:(runId,leaseToken,signal)=>request(runPath(runId)+'/context',{headers:{'X-Coatria-Run-Lease':leaseToken},signal}),
+  submitInference:(runId,{leaseToken,requestId,step},signal)=>{if(!UUID.test(requestId)||!Number.isSafeInteger(step)||step<0||step>19)throw new Error('A stable inference request UUID and bounded step are required.');return post(runPath(runId)+'/inference',{leaseToken,requestId,step},signal);},
+  readInference:(runId,inferenceId,leaseToken,signal)=>{if(!UUID.test(inferenceId))throw new Error('An inference UUID is required.');return request(runPath(runId)+'/inference/'+inferenceId,{headers:{'X-Coatria-Run-Lease':leaseToken},signal});},
+  cancelInference:(runId,inferenceId,{leaseToken,requestId},signal)=>{if(!UUID.test(inferenceId)||!UUID.test(requestId))throw new Error('Inference and cancellation UUIDs are required.');return post(runPath(runId)+'/inference/'+inferenceId+'/cancel',{leaseToken,requestId},signal);},
   complete:(runId,payload,signal)=>post(runPath(runId)+'/complete',payload,signal),
   fail:(runId,payload,signal)=>post(runPath(runId)+'/fail',payload,signal),
   listTools:signal=>request('/api/agent/tools',{signal}),
@@ -67,6 +75,38 @@ export function createRuntimeClient({token=process.env.COATRIA_AGENT_TOKEN,url=p
    if(typeof name!=='string'||!/^[-a-zA-Z0-9_]{1,80}$/.test(name)||!UUID.test(runId)||!UUID.test(requestId)||!args||typeof args!=='object'||Array.isArray(args))throw new Error('A named tool, run UUID, request UUID and arguments object are required.');
    return post('/api/agent/tools/'+encodeURIComponent(name),{runId,leaseToken,requestId,arguments:args},signal);
   }};
+}
+
+/** A trusted adapter facility, never a model tool or provider configuration.
+ * Only run identity, its live lease, the stable step key and step reach Coatria.
+ * The server reconstructs all messages, tools, model settings and receipts.
+ * @param {{client:any,runId:string,leaseToken:string,signal?:AbortSignal,pollMs?:number,cancelTimeoutMs?:number}} options
+ */
+export function createRunInferenceClient({client,runId,leaseToken,signal,pollMs=1000,cancelTimeoutMs=3000}){
+ if(!UUID.test(runId)||typeof leaseToken!=='string'||!leaseToken||!Number.isSafeInteger(pollMs)||pollMs<0||pollMs>10000||!Number.isSafeInteger(cancelTimeoutMs)||cancelTimeoutMs<1||cancelTimeoutMs>3000)throw new Error('Invalid trusted inference client configuration.');
+ return {
+ /** @param {{step:number,requestId:string,signal?:AbortSignal,timeoutMs?:number}} options */
+ async complete({step,requestId,signal:extra,timeoutMs=180000}){
+  if(!Number.isSafeInteger(step)||step<0||step>19||requestId!==stableRequestId(runId,'inference:'+step)||!Number.isSafeInteger(timeoutMs)||timeoutMs<1||timeoutMs>600000)throw new Error('Use the exact stable inference step key and bounded deadline.');
+  const active=AbortSignal.any([AbortSignal.timeout(timeoutMs),...[signal,extra].filter(Boolean)]);let inferenceId,terminal=false;
+  function inspect(value){
+   const item=value?.inference;
+   if(!item||!UUID.test(item.id)||item.runId!==runId||item.step!==step||inferenceId&&item.id!==inferenceId||!Number.isFinite(Date.parse(item.deadlineAt)))throw new RuntimeError(502,'INVALID_INFERENCE_RESPONSE');
+   inferenceId=item.id;
+   if(item.status==='succeeded'){terminal=true;if(!item.output||typeof item.output!=='object'||Array.isArray(item.output))throw new RuntimeError(502,'INVALID_INFERENCE_OUTPUT');return item.output;}
+   if(['failed','cancelled','expired'].includes(item.status)){terminal=true;throw new RuntimeError(409,'INFERENCE_'+item.status.toUpperCase());}
+   if(item.status==='uncertain')throw new RuntimeError(409,'INFERENCE_UNCERTAIN');
+   if(!['submitting','queued','running','cancel_requested'].includes(item.status)||Object.hasOwn(item,'output'))throw new RuntimeError(502,'INVALID_INFERENCE_RESPONSE');
+   if(Date.parse(item.deadlineAt)<=Date.now())throw new RuntimeError(409,'INFERENCE_EXPIRED');
+   return null;
+  }
+  try{
+   let output=inspect(await untilStopped(()=>client.submitInference(runId,{leaseToken,requestId,step},active),active));if(output)return output;
+   while(true){await pause(pollMs,active);output=inspect(await untilStopped(()=>client.readInference(runId,inferenceId,leaseToken,active),active));if(output)return output;}
+  }finally{
+   if(inferenceId&&!terminal){const cancellation=AbortSignal.timeout(cancelTimeoutMs);try{await untilStopped(()=>client.cancelInference(runId,inferenceId,{leaseToken,requestId:stableRequestId(runId,'inference-cancel:'+step)},cancellation),cancellation);}catch{/* Server deadlines/reconciliation also bound jobs when cancellation cannot be confirmed. */}}
+  }
+ }};
 }
 
 /** Private state stores lease credentials. Use one state file per worker. */
@@ -127,9 +167,10 @@ export async function workOnce({client,state,execute,signal,heartbeatMs=15000,lo
    // detach it from lease cancellation. Aborted writes still require reconciliation.
    const toolSignal=extra=>extra?AbortSignal.any([control.signal,extra]):control.signal;
    const tools={key:key=>stableRequestId(job.run.id,key),list:({signal:extra}={})=>{const signal=toolSignal(extra);signal.throwIfAborted();return client.listTools(signal);},call:async(name,args,{requestId,signal:extra}={})=>{const signal=toolSignal(extra);signal.throwIfAborted();if(!UUID.test(requestId||''))throw new Error('Pass a stable requestId, for example tools.key("logical-step").');const response=await client.callTool(name,{runId:job.run.id,leaseToken:job.leaseToken,requestId,arguments:args},signal);return response.result;}};
+   const inference=createRunInferenceClient({client,runId:job.run.id,leaseToken:job.leaseToken,signal:control.signal});
    // Trusted adapter configuration is separate from model-visible run context.
    const mcpEnvironment={COATRIA_URL:client.origin,COATRIA_RUN_ID:job.run.id,COATRIA_RUN_LEASE:job.leaseToken};
-   const execution=Promise.resolve().then(()=>{control.signal.throwIfAborted();return execute({run:context.run||job.run,context,tools,signal:control.signal,recovering,mcpEnvironment});});
+   const execution=Promise.resolve().then(()=>{control.signal.throwIfAborted();return execute({run:context.run||job.run,context,tools,inference,signal:control.signal,recovering,mcpEnvironment});});
    let abortHandler;const aborted=new Promise((_,reject)=>{abortHandler=()=>reject(control.signal.reason);if(control.signal.aborted)abortHandler();else control.signal.addEventListener('abort',abortHandler,{once:true});});
    try{
     const result=await Promise.race([execution,aborted]);control.signal.throwIfAborted();
@@ -149,7 +190,7 @@ export async function workOnce({client,state,execute,signal,heartbeatMs=15000,lo
 
 async function main(){
  const {values}=parseArgs({options:{adapter:{type:'string'},state:{type:'string'},url:{type:'string'},once:{type:'boolean',default:false},help:{type:'boolean',default:false}}});
- if(values.help){console.log('Usage: node agent-worker.mjs --adapter ./approved-adapter.mjs [--state PRIVATE_PATH] [--url https://coatria.com] [--once]\nSet COATRIA_AGENT_TOKEN privately. Adapter exports execute({run,context,tools,signal,recovering}) and returns {result,artifactUrl?}. No provider is installed or selected automatically.');return;}
+ if(values.help){console.log('Usage: node agent-worker.mjs --adapter ./approved-adapter.mjs [--state PRIVATE_PATH] [--url https://coatria.com] [--once]\nSet COATRIA_AGENT_TOKEN privately. Adapter exports execute({run,context,tools,inference,signal,recovering}) and returns {result,artifactUrl?}. The trusted inference client uses server-approved model settings; it is never a model tool. No provider is installed or selected automatically.');return;}
  if(!values.adapter)throw new Error('Pass --adapter with an operator-approved local JavaScript module.');
  const client=createRuntimeClient({url:values.url});
  const path=values.state||join(homedir(),'.coatria','workers',fingerprint(client.origin+client.identity).slice(0,24)+'.json'),state=await openWorkerState(path,client),controller=new AbortController();

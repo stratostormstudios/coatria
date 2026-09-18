@@ -9,6 +9,7 @@ export type StudioHostProvisionReadiness={ready:boolean;reasons:string[]};
 export type StudioHostProvisionPlan={
  version:1;companyId:string;durationMinutes:number;reviewExpiresAt:string;
  installations:Array<{installationId:string;revision:number;agentId:string;name:string;pluginId:string;manifestVersion:string;capabilities:string[];invocationAccess:string;conversationAccess:unknown;runtimeConfig:Record<string,unknown>;character:Record<string,unknown>}>;
+ inference?:{mode:'coatria_broker_v1';maxJobs:number;maxHourlyMicrousd:number;lifetimeAllowanceMicrousd:number;previouslyReservedMicrousd:number;billingVerified:false};
  preset:{id:string;hash:string;releaseCommit:string;bootstrapHash:string;image:string;cpuTypeId:'cpu3c';vcpuCount:2;memoryGb:4;dataCenterId:string;volumeId:string;concurrency:1;modelId:string;maxHourlyMicrousd:number};
  reservation:{cpuMicrousd:number;companyLifetimeAllowanceMicrousd:number;previouslyReservedMicrousd:number;inferenceIncluded:false;storageIncluded:false;billingCapGuaranteed:false};
  effects:{activateAgents:true;rotateCredentials:true;cancelPreviousRuns:true;startCpu:true;startGpu:false;independentHumanReviewPreserved:true};

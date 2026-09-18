@@ -56,9 +56,9 @@ try {
   const bytes=Buffer.concat(chunks);if(createHash('sha256').update(bytes).digest('hex')!==entry.sha256)throw Error('SOURCE_INTEGRITY');
   await mkdir(dirname(target),{recursive:true,mode:0o755});await writeFile(target,bytes,{flag:'wx',mode:0o444});
  }
- const allowed=['COATRIA_HOST_TOKEN','COATRIA_URL','COATRIA_HOST_ID','COATRIA_HOST_COMPANY_ID','COATRIA_HOST_MODEL_ID','COATRIA_HOST_CONCURRENCY','COATRIA_HOST_EXPIRES_AT','RUNPOD_API_KEY','COATRIA_RUNPOD_ENDPOINT_ID','COATRIA_MAX_STEPS','COATRIA_MAX_OUTPUT_TOKENS','COATRIA_MAX_TOTAL_TOKENS','COATRIA_TIMEOUT_SECONDS'];
+ const allowed=['COATRIA_HOST_TOKEN','COATRIA_URL','COATRIA_HOST_ID','COATRIA_HOST_COMPANY_ID','COATRIA_HOST_MODEL_ID','COATRIA_HOST_CONCURRENCY','COATRIA_HOST_EXPIRES_AT','RUNPOD_API_KEY','COATRIA_RUNPOD_ENDPOINT_ID','COATRIA_MAX_STEPS','COATRIA_MAX_OUTPUT_TOKENS','COATRIA_MAX_TOTAL_TOKENS','COATRIA_TIMEOUT_SECONDS','COATRIA_INFERENCE_MODE'];
  const env={PATH:'/usr/local/bin:/usr/bin:/bin',HOME:'/home/node',COATRIA_HOST_STATE_DIR:directory};
- for(const key of allowed)if(process.env[key])env[key]=process.env[key];
+ for(const key of allowed)if(process.env[key]&&!(process.env.COATRIA_INFERENCE_MODE==='coatria_broker_v1'&&['RUNPOD_API_KEY','COATRIA_RUNPOD_ENDPOINT_ID'].includes(key)))env[key]=process.env[key];
  process.setgroups([]);
  const child=spawn('/usr/local/bin/node',[release+'/scripts/hosting/run-studio-host.mjs'],{env,uid:1000,gid:1000,stdio:['ignore','inherit','inherit']});
  for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>child.kill(signal));
