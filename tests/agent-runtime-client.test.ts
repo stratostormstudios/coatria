@@ -82,7 +82,7 @@ test('uncertain completion survives worker restart and expired local lease witho
  await workOnce({client,state:restarted,execute,signal:controller().signal});assert.equal(executions,1);assert.deepEqual(payloads[1],payloads[0]);assert.equal(restarted.data.job,null);
 });
 
-for(const code of ['RUN_CANCELLED','COORDINATION_AUTHORITY_ENDED'])test(`${code} aborts an uncooperative adapter and prevents later tools or completion`,async()=>{
+for(const code of ['RUN_CANCELLED','COORDINATION_AUTHORITY_ENDED','STUDIO_REVIEW_AUTHORITY_ENDED'])test(`${code} aborts an uncooperative adapter and prevents later tools or completion`,async()=>{
  const state=memoryState();let calls=0,completed=0,tools:any,adapterSignal:AbortSignal|undefined;
  const client=fakeClient({heartbeat:async()=>{throw new RuntimeError(409,code);},callTool:async()=>{calls++;return {result:{}};},complete:async()=>{completed++;return {};}});
  const execute=({signal,tools:boundTools}:any)=>{adapterSignal=signal;tools=boundTools;return new Promise(()=>{});};

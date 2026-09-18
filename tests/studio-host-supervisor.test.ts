@@ -1,13 +1,13 @@
 import nodeTest from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,readFile,readdir,rm} from 'node:fs/promises';
-import {join,relative,isAbsolute} from 'node:path';
+import {join,relative,isAbsolute,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash,randomUUID} from 'node:crypto';
 import {studioHostConfiguration,createHostBroker,runStudioHost} from '../scripts/hosting/run-studio-host.mjs';
 import {RuntimeError} from '../public/downloads/agent-worker.mjs';
 import {createProviderExecutor} from '../public/downloads/provider-adapter.mjs';
-import {buildStudioBootstrap} from '../scripts/hosting/build-studio-bootstrap.mjs';
+import {buildStudioBootstrap,studioHostStateDirectory} from '../scripts/hosting/build-studio-bootstrap.mjs';
 import {fileURLToPath} from 'node:url';
 
 const companyId=randomUUID(),hostId=randomUUID(),modelId='Qwen/Qwen3.8-27B-FP8';
@@ -139,4 +139,11 @@ test('bootstrap pins source hashes and image, drops privileges and excludes agen
  const built=await buildStudioBootstrap({commit:'a'.repeat(40),root});assert.match(built.image,/^node@sha256:[a-f0-9]{64}$/);assert.equal(built.manifest.length,3);assert(built.manifest.every((entry:any)=>/^[a-f0-9]{64}$/.test(entry.sha256)));
  const encoded=built.args.match(/base64,([A-Za-z0-9+/=]+)/)?.[1];assert(encoded);const source=Buffer.from(encoded,'base64').toString('utf8');
  assert(source.includes("uid:1000,gid:1000"));assert(source.includes("'/state/studio'"));assert(source.includes("'COATRIA_HOST_TOKEN'"));assert(!source.includes('COATRIA_AGENT_TOKEN'));assert(!source.includes(settings.RUNPOD_API_KEY));assert(source.includes("redirect:'error'"));
+});
+
+test('renewed host identities have separate stable journal namespaces and preserve prior host paths',()=>{
+ const first=studioHostStateDirectory(companyId,hostId),second=studioHostStateDirectory(companyId,randomUUID()),foreign=studioHostStateDirectory(randomUUID(),hostId);
+ assert.equal(first,`/state/studio/${companyId}/${hostId}`);assert.notEqual(first,second);assert.notEqual(first,foreign);assert.equal(studioHostStateDirectory(companyId.toUpperCase(),hostId.toUpperCase()),first);
+ for(const bad of ['../other','',hostId+'/other'])assert.throws(()=>studioHostStateDirectory(companyId,bad));
+ const config=studioHostConfiguration({COATRIA_HOST_COMPANY_ID:companyId,COATRIA_HOST_ID:hostId,COATRIA_HOST_MODEL_ID:modelId,COATRIA_HOST_EXPIRES_AT:new Date(Date.now()+60000).toISOString()});assert.equal(config.directory,resolve(first));
 });

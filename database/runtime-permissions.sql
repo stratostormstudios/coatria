@@ -24,6 +24,10 @@ GRANT SELECT,INSERT ON studio_media_files,studio_media_verifications,studio_medi
 GRANT SELECT,INSERT ON studio_deliveries TO coatria_runtime_v1;
 GRANT SELECT,INSERT,UPDATE ON studio_coordination_policies TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON studio_coordination_dispatches TO coatria_runtime_v1;
+GRANT SELECT,INSERT,UPDATE ON studio_review_policies,studio_host_provisions TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON studio_planning_reviews,studio_planning_review_reads,studio_planning_review_decisions,studio_host_compute_reservations,studio_host_provision_requests TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON studio_client_deliveries,studio_client_delivery_files,studio_client_delivery_receipts,studio_client_delivery_requests TO coatria_runtime_v1;
+GRANT UPDATE(status,revision,revoked_at) ON studio_client_deliveries TO coatria_runtime_v1;
 GRANT UPDATE(status) ON studio_deliveries TO coatria_runtime_v1;
 GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO coatria_runtime_v1;
 ALTER ROLE coatria_runtime_v1 SET statement_timeout='15s';

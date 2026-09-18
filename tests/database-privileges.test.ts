@@ -70,10 +70,29 @@ test('runtime role supports accounts and durable conversations without verificat
     await client.query("INSERT INTO agent_mission_cycles(company_id,mission_id,ordinal,run_id,client_id,trigger) VALUES($1,$2,1,$3,$4,'scheduled')",[company.id,mission.id,run.id,randomUUID()]);
     await client.query('UPDATE agent_missions SET revision=revision+1 WHERE id=$1',[mission.id]);
     for(const table of['agent_runs','agent_run_claims','agent_run_receipts','agent_tool_receipts','agent_proposals','agent_presence','plugin_installations','agent_missions','agent_mission_cycles'])assert.equal((await client.query(`SELECT count(*)::int AS count FROM ${table} WHERE company_id=$1`,[company.id])).rows[0].count,1);
+    // Exercise the production role, including immutable planning, compute-cost,
+    // and client receipts. Empty statements still require real SQL privileges.
+    const immutableStudioTables=['studio_planning_reviews','studio_planning_review_reads','studio_planning_review_decisions','studio_host_compute_reservations','studio_host_provision_requests','studio_client_delivery_files','studio_client_delivery_receipts','studio_client_delivery_requests'];
+    for(const table of immutableStudioTables){
+      assert.deepEqual((await client.query("SELECT has_table_privilege(current_user,$1,'SELECT') AS read,has_table_privilege(current_user,$1,'INSERT') AS append,has_any_column_privilege(current_user,$1,'UPDATE') AS edit,has_table_privilege(current_user,$1,'DELETE') AS remove",[table])).rows[0],{read:true,append:true,edit:false,remove:false},table);
+      await client.query(`SELECT company_id FROM ${table} WHERE false`);
+    }
+    for(const table of ['studio_review_policies','studio_host_provisions']){
+      await client.query(`SELECT company_id FROM ${table} WHERE false FOR UPDATE`);
+      await client.query(`UPDATE ${table} SET revision=revision+1 WHERE false`);
+      assert.equal((await client.query("SELECT has_table_privilege(current_user,$1,'DELETE') AS allowed",[table])).rows[0].allowed,false);
+    }
+    await client.query('SELECT company_id FROM studio_client_deliveries WHERE false FOR SHARE');
+    await client.query('UPDATE studio_client_deliveries SET status=status,revision=revision,revoked_at=revoked_at WHERE false');
+    for(const column of ['recipient_user_id','package_hash','package_snapshot','expires_at'])assert.equal((await client.query("SELECT has_column_privilege(current_user,'studio_client_deliveries',$1,'UPDATE') AS allowed",[column])).rows[0].allowed,false,column);
     const options=(await client.query('SELECT rolcreaterole,rolcreatedb,rolbypassrls FROM pg_roles WHERE rolname=current_user')).rows[0];
     assert.deepEqual(options,{rolcreaterole:false,rolcreatedb:false,rolbypassrls:false});
     for(const [sql,values] of [
       ['UPDATE users SET email_verified_at=now() WHERE id=$1',[user.id]],
+      ...immutableStudioTables.flatMap(table=>[[`UPDATE ${table} SET company_id=company_id WHERE false`,[]],[`DELETE FROM ${table} WHERE false`,[]]]),
+      ['UPDATE studio_client_deliveries SET recipient_user_id=recipient_user_id WHERE false',[]],
+      ['UPDATE studio_client_deliveries SET package_snapshot=package_snapshot WHERE false',[]],
+      ['DELETE FROM studio_client_deliveries WHERE false',[]],
       ["INSERT INTO users(name,email,password_hash,email_verified_at) VALUES('Forbidden','forbidden@example.invalid','test',now())",[]],
       ['CREATE TABLE public.unauthorized_test(id int)',[]],
       ['TRUNCATE users CASCADE',[]],

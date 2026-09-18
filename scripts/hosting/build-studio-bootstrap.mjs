@@ -4,6 +4,14 @@ import {resolve} from 'node:path';
 import {nodeImage} from './build-runpod-bootstrap.mjs';
 
 const paths=['public/downloads/agent-worker.mjs','public/downloads/provider-adapter.mjs','scripts/hosting/run-studio-host.mjs'];
+const uuidPattern=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export function studioHostStateDirectory(companyId,hostId){
+ if(![companyId,hostId].every(id=>typeof id==='string'&&uuidPattern.test(id)))throw Error('Pinned company and host UUIDs are required.');
+ return '/state/studio/'+companyId.toLowerCase()+'/'+hostId.toLowerCase();
+}
+// A source literal keeps the reviewed hash identical under native Node and
+// TypeScript loaders; Function#toString would reflect loader transformations.
+const stateDirectorySource=`function studioHostStateDirectory(companyId,hostId){if(![companyId,hostId].every(id=>typeof id==='string'&&${uuidPattern}.test(id)))throw Error('Pinned company and host UUIDs are required.');return '/state/studio/'+companyId.toLowerCase()+'/'+hostId.toLowerCase();}`;
 
 /** Produces a reviewed immutable bootstrap, never a model-supplied command.
  * The caller provisions CPU/durable storage separately; this builder spends nothing.
@@ -17,15 +25,21 @@ import {mkdir,readFile,writeFile,stat,lstat,chown,chmod} from 'node:fs/promises'
 import {dirname} from 'node:path';
 import {spawn} from 'node:child_process';
 const manifest=${JSON.stringify(manifest)},commit=${JSON.stringify(commit)};
-const release='/opt/coatria/releases/'+commit,directory='/state/studio';
+const release='/opt/coatria/releases/'+commit;
+const studioHostStateDirectory=${stateDirectorySource};
 try {
+ const directory=studioHostStateDirectory(process.env.COATRIA_HOST_COMPANY_ID,process.env.COATRIA_HOST_ID);
  const expires=Date.parse(process.env.COATRIA_HOST_EXPIRES_AT||'');
  if(!Number.isFinite(expires)||expires<=Date.now()||expires-Date.now()>86400000)throw Error('INVALID_EXPIRY');
  const mount=await lstat('/state');
  if(!mount.isDirectory()||mount.isSymbolicLink()||mount.dev===(await stat('/')).dev)throw Error('PERSISTENT_MOUNT_REQUIRED');
- await mkdir(directory,{recursive:true,mode:0o700});
- const info=await lstat(directory);if(!info.isDirectory()||info.isSymbolicLink())throw Error('PRIVATE_STATE_REQUIRED');
- await chown(directory,1000,1000);await chmod(directory,0o700);
+ // Each reviewed host receives a new namespace. Old expired-host journals,
+ // including the historical /state/studio root journal, remain untouched.
+ for(const folder of ['/state/studio',dirname(directory),directory]){
+  await mkdir(folder,{mode:0o700}).catch(error=>{if(error.code!=='EEXIST')throw error;});
+  const info=await lstat(folder);if(!info.isDirectory()||info.isSymbolicLink())throw Error('PRIVATE_STATE_REQUIRED');
+  await chown(folder,1000,1000);await chmod(folder,0o700);
+ }
  for(const entry of manifest){
   const target=release+'/'+entry.path;
   try{

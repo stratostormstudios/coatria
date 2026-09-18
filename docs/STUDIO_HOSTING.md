@@ -2,7 +2,7 @@
 
 Coatria can enroll reviewed Studio agent installations into a company-scoped credential broker. The broker issues encrypted, revocable credentials to one leased supervisor. The companion `scripts/hosting/run-studio-host.mjs` runs the existing HTTP agent harness for those identities on a Runpod CPU Pod; its inference requests use the separately configured Runpod GPU endpoint.
 
-Registering a host or enrolling identities does not create a Pod, start a worker, or call an inference provider. Starting the supervisor is a separate operator deployment. Once a supervisor is running, approved active missions and queued runs can consume inference under their existing limits. This is a bounded pilot, not an automatically provisioned production fleet.
+Registering a host or enrolling identities does not create a Pod, start a worker, or call an inference provider. Starting the supervisor uses either a separate operator deployment or the administrator-reviewed [managed CPU provisioning lifecycle](STUDIO_CPU_PROVISIONING.md). The latter requires an installed release, private company volume, separate restricted inference credential and CPU allowance; its explicit start operation performs real provider reconciliation. Once a supervisor is running, approved active missions and queued runs can consume inference under their existing limits. This remains a bounded pilot.
 
 ## Supported scope
 

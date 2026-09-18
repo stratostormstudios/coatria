@@ -24,7 +24,7 @@ export function studioHostConfiguration(settings=process.env,now=Date.now()){
  if(!UUID.test(companyId||'')||!UUID.test(hostId||'')||!Number.isFinite(deadlineMs)||deadlineMs>now+86400000||!integer(concurrency,1,2))throw Error('Pin the company, host, absolute UTC deadline and concurrency (1 or 2).');
  const modelId=settings.COATRIA_HOST_MODEL_ID;
  if(typeof modelId!=='string'||!/^[-A-Za-z0-9][A-Za-z0-9._/-]{0,159}$/.test(modelId)||modelId.includes('..'))throw Error('Pin the approved hosted model.');
- return{directory:directoryPath(settings.COATRIA_HOST_STATE_DIR||'/state/studio'),companyId,hostId,deadlineMs,concurrency,modelId};
+ return{directory:directoryPath(settings.COATRIA_HOST_STATE_DIR||'/state/studio/'+companyId.toLowerCase()+'/'+hostId.toLowerCase()),companyId,hostId,deadlineMs,concurrency,modelId};
 }
 
 /** No broker retries: an uncertain or rejected renewal stops the local fleet.

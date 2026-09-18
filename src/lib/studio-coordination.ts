@@ -66,7 +66,7 @@ export async function saveStudioCoordination(client:PoolClient,member:Membership
 /** Called only inside the existing authenticated, leased tool transaction. */
 export async function dispatchStudioWork(client:PoolClient,agent:Row,run:Row,input:unknown){
  const data=studioWorkDispatchInput.parse(input),companyId=agent.company_id;
- if((await client.query('SELECT child_run_id FROM studio_coordination_dispatches WHERE company_id=$1 AND child_run_id=$2',[companyId,run.id])).rowCount)fail(403,'A delegated specialist cannot delegate further work. Use the separately approved coordinator mission.','COORDINATION_NESTED_DISPATCH');
+ if((await client.query('SELECT child_run_id FROM studio_coordination_dispatches WHERE company_id=$1 AND child_run_id=$2 UNION ALL SELECT reviewer_run_id FROM studio_planning_reviews WHERE company_id=$1 AND reviewer_run_id=$2',[companyId,run.id])).rowCount)fail(403,'A delegated specialist cannot delegate further work. Use the separately approved coordinator mission.','COORDINATION_NESTED_DISPATCH');
  const preview=await policyRow(client,companyId,data.projectId);if(!preview)fail(404,'Project coordination policy not found.');
  if(preview.coordinatorAgentId!==agent.id)fail(403,'Only the approved coordinator can delegate project work.','COORDINATION_AGENT_REQUIRED');
  await client.query('SELECT user_id FROM memberships WHERE company_id=$1 AND user_id=$2 FOR SHARE',[companyId,preview.approvedBy]);

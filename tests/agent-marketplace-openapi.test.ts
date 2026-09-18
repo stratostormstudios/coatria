@@ -20,14 +20,14 @@ test('agent identity contract authenticates the token without disclosing credent
 });
 
 test('marketplace and autonomous APIs expose current strict input contracts and cannot accept credentials',()=>{
- assert.equal(spec.info.version,'1.3.1');
+ assert.equal(spec.info.version,'1.4.0');
  for(const[path,method,schema]of[[installations,'post',pluginInstallInput],[installations+'/{installationId}','patch',pluginPatchInput],[missions,'post',missionCreateInput],[missions+'/{missionId}','patch',missionPatchInput]]as const){assert.deepEqual(request(path,method),input(schema));assert.equal(request(path,method).additionalProperties,false);}
  const install=request(installations,'post');assert.equal(install.properties.runtimeConfig.additionalProperties,false);assert.equal(install.properties.character.additionalProperties,false);
  for(const key of['apiKey','token','endpoint','endpointUrl','shell','script'])assert.equal(key in install.properties,false);
  const limits=install.properties.runtimeConfig.properties;assert.equal(limits.maxSteps.maximum,20);assert.equal(limits.maxTotalTokens.maximum,100000);assert.equal(limits.timeoutSeconds.maximum,600);
  const create=request(missions,'post');assert.equal(create.properties.status.default,'paused');assert.equal(create.properties.intervalMinutes.minimum,15);assert.equal(create.properties.maxCycles.maximum,100);
  const runSchema=input(runInput)as any;assert.equal(runSchema.additionalProperties,false);assert.equal('purpose'in runSchema.properties,false);
- assert.deepEqual(spec.components.schemas.AgentRun.properties.purpose.enum,['task','connection_test']);assert.equal(spec.components.schemas.AgentRun.properties.maxAttempts.const,3);
+ assert.deepEqual(spec.components.schemas.AgentRun.properties.purpose.enum,['task','connection_test']);assert.equal(spec.components.schemas.AgentRun.properties.maxAttempts.minimum,1);assert.equal(spec.components.schemas.AgentRun.properties.maxAttempts.maximum,3);
 });
 
 test('human administration and agent scheduling use different documented authentication boundaries',()=>{

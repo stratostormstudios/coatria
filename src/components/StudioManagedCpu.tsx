@@ -1,0 +1,55 @@
+'use client';
+import {useEffect,useState} from 'react';
+import {ArrowLeft,Check,RefreshCw,Server,Square} from 'lucide-react';
+import type {WorkspaceProps} from '@/app/page';
+import type {StudioHostProvision,StudioHostProvisionReadiness} from '@/lib/studio-host-provisioning-protocol';
+import type {PluginRuntimeConfig} from '@/lib/plugin-catalog';
+import {Field,Loading} from './ui';
+import {useStudioMutation,useStudioResource} from './studio-hooks';
+import s from './StudioWorkspace.module.css';
+
+type Installation={id:string;revision:number;name:string;status:string;runtimeConfig:PluginRuntimeConfig;capabilities:string[]};
+const money=(value:number)=>(value/1_000_000).toLocaleString(undefined,{style:'currency',currency:'USD',minimumFractionDigits:3,maximumFractionDigits:3});
+const terminal=new Set(['planned','stopped','failed']);
+
+export function StudioManagedCpu({p,onBack}:{p:WorkspaceProps;onBack:()=>void}){
+ const base=`/api/companies/${p.company.id}/studio/host-provisions`;
+ const resource=useStudioResource<{provisions:StudioHostProvision[];readiness:StudioHostProvisionReadiness}>(base),installed=useStudioResource<{installations:Installation[]}>(`/api/companies/${p.company.id}/plugin-installations?limit=100`),mutation=useStudioMutation(55_000);
+ const [selected,setSelected]=useState<Installation[]>([]),[duration,setDuration]=useState(20),[review,setReview]=useState<StudioHostProvision|null>(null),[confirmedPlan,setConfirmedPlan]=useState<string|null>(null),[refreshing,setRefreshing]=useState(false);
+ const candidates=(installed.data?.installations||[]).filter(item=>item.status!=='revoked'&&item.runtimeConfig.providerId==='runpod');
+ const stale=selected.some(item=>!candidates.some(current=>current.id===item.id&&current.revision===item.revision));
+ const reload=async()=>{setRefreshing(true);try{await Promise.all([resource.reload(),installed.reload(),p.refresh()]);}finally{setRefreshing(false);}};
+ const current=review&&(resource.data?.provisions.find(item=>item.id===review.id)||review);
+ const confirmationKey=current?current.id+':'+current.planHash:null;
+ const confirmed=confirmationKey!==null&&confirmedPlan===confirmationKey;
+ const reviewedPlanStale=Boolean(current&&installed.data&&current.plan.installations.some(expected=>!candidates.some(candidate=>candidate.id===expected.installationId&&candidate.revision===expected.revision)));
+ const installationsUnavailable=installed.loading||!installed.data||Boolean(installed.error);
+ // Consent belongs to the displayed immutable plan, never a previous plan or a
+ // selection that happens to contain the same agent names.
+ useEffect(()=>{setConfirmedPlan(null);},[confirmationKey,reviewedPlanStale]);
+ return <div className={s.formSection}>
+  <button className={s.back} disabled={mutation.busy} onClick={onBack}><ArrowLeft size={14}/> All agent hosts</button>
+  <div className={s.heading}><div><h3>Run your team on a managed CPU host.</h3><p>A cloud supervisor runs your selected agents for a bounded session. Model inference remains a separate service.</p></div><button className="icon-button" aria-label="Refresh managed CPU hosts" disabled={mutation.busy} onClick={()=>void reload()}><RefreshCw size={16}/></button></div>
+  {resource.loading?<Loading label="Loading managed CPU availability"/>:<>
+   {!resource.data?.readiness.ready&&<div className={s.notice}><div><strong>Managed hosting needs operator setup</strong><ul>{resource.data?.readiness.reasons.map(reason=><li key={reason}>{reason}</li>)}</ul></div></div>}
+   {current?.phase==='planned'?<section className={s.section}>
+    <h3>Review this exact host plan</h3>
+    <dl className={s.summaryRows}><div><dt>Host</dt><dd>2 vCPU · 4 GB RAM · concurrency 1</dd></div><div><dt>Lifetime</dt><dd>{current.plan.durationMinutes} minutes</dd></div><div><dt>CPU hourly ceiling</dt><dd>{money(current.plan.preset.maxHourlyMicrousd)} / hour</dd></div><div><dt>CPU allowance reserved</dt><dd>{money(current.plan.reservation.cpuMicrousd)}</dd></div><div><dt>Company lifetime allowance</dt><dd>{money(current.plan.reservation.companyLifetimeAllowanceMicrousd)} · {money(current.plan.reservation.previouslyReservedMicrousd)} previously reserved</dd></div><div><dt>Model</dt><dd>{current.plan.preset.modelId}</dd></div><div><dt>Review valid until</dt><dd>{new Date(current.plan.reviewExpiresAt).toLocaleString()}</dd></div></dl>
+    {current.plan.installations.map(agent=><details key={agent.installationId} className={s.section}><summary>{agent.name} · installation r{agent.revision}</summary><p>{agent.capabilities.join(', ')}</p><p>{String(agent.character.roleTitle||'Company specialist')} · {String(agent.character.workStyle||'collaborative')}</p><p>{String(agent.character.persona||'Uses the company role instructions.')}</p><p>Up to {Number(agent.runtimeConfig.maxSteps)} steps, {Number(agent.runtimeConfig.maxOutputTokens).toLocaleString()} output tokens per step, {Number(agent.runtimeConfig.maxTotalTokens).toLocaleString()} total tokens, and {Number(agent.runtimeConfig.timeoutSeconds)} seconds per request.</p></details>)}
+    <p className={s.notice}>Starting activates these agents, rotates their credentials, and cancels their previous pending requests. This starts a CPU Pod and can incur charges. Inference and retained storage are billed separately; the CPU allowance is a reservation, not a guaranteed billing cap. Existing inference capacity must be available.</p>
+    <p className={s.muted}>The reviewed release and company volume are fixed by the operator. The supervisor expires at the session deadline; a separate server job requests and verifies compute shutdown. Stopping compute preserves the private workspace.</p>
+    {reviewedPlanStale&&<p className="error-message" role="alert">An agent in this plan changed or is no longer available. Prepare a new plan using the current installation versions.</p>}
+    {installationsUnavailable&&<p className={s.notice}>Refresh the agent installations before starting this reviewed plan.</p>}
+    <label className={s.checkbox}><input type="checkbox" disabled={mutation.busy||refreshing||reviewedPlanStale||installationsUnavailable} checked={confirmed} onChange={event=>setConfirmedPlan(event.target.checked?confirmationKey:null)}/>I reviewed this plan and authorize activation, credential rotation, cancellation of prior requests, and the CPU charges shown above.</label>
+    <div className={s.actions}><button className="button secondary" disabled={mutation.busy} onClick={()=>{setReview(null);setConfirmedPlan(null);if(reviewedPlanStale)setSelected([]);}}>{reviewedPlanStale?'Prepare a new plan':'Back to selection'}</button><button className="button primary" disabled={mutation.busy||refreshing||!confirmed||reviewedPlanStale||installationsUnavailable||Boolean(resource.error)||!current.readiness.ready||Date.parse(current.plan.reviewExpiresAt)<=Date.now()} onClick={()=>void mutation.mutate<{provision:StudioHostProvision}>(`${base}/${current.id}/start`,{revision:current.revision,planHash:current.planHash,acknowledgeCharges:true,activateAgents:true},async result=>{setReview(null);setConfirmedPlan(null);setSelected([]);await reload();p.notify(`Managed CPU request: ${result.provision.phase.replaceAll('_',' ')}. Check the host and agent connections below.`);})}><Check size={15}/>{mutation.busy?'Starting reviewed host…':'Start reviewed CPU host'}</button></div>
+   </section>:<form className="form" onSubmit={event=>{event.preventDefault();void mutation.mutate<{provision:StudioHostProvision}>(base,{durationMinutes:duration,installations:selected.map(item=>({installationId:item.id,revision:item.revision}))},async result=>{setReview(result.provision);setConfirmedPlan(null);await resource.reload();});}}><fieldset disabled={mutation.busy||!resource.data?.readiness.ready}>
+    <Field label="Session lifetime"><select value={duration} onChange={event=>setDuration(Number(event.target.value))}>{[15,20,30,60].map(value=><option key={value} value={value}>{value} minutes</option>)}</select></Field>
+    <fieldset><legend>Agents to run on this host</legend>{candidates.map(agent=><label className={s.assignment} key={agent.id}><span><strong>{agent.name}</strong><p>{agent.runtimeConfig.modelId} · r{agent.revision}</p><p>{agent.capabilities.join(', ')}</p></span><input type="checkbox" checked={selected.some(item=>item.id===agent.id)} onChange={event=>setSelected(event.target.checked?[...selected,agent]:selected.filter(item=>item.id!==agent.id))}/></label>)}{!candidates.length&&<p>Create Runpod specialists in the staffing planner or Plugins first.</p>}</fieldset>
+    {stale&&<p className="error-message" role="alert">A selected installation changed. Select its current version again.</p>}
+    <button className="button secondary" disabled={!selected.length||selected.length>11||stale}><Server size={15}/>{mutation.busy?'Preparing exact plan…':'Prepare host plan'}</button>
+   </fieldset></form>}
+   <section className={s.section}><h3>Managed compute history</h3>{!resource.data?.provisions.length?<p className={s.muted}>No managed CPU requests yet. Preparing a plan starts no compute.</p>:resource.data.provisions.map(provision=><div className={s.section} key={provision.id}><div className={s.heading}><strong>CPU host · {provision.id.slice(0,8)}</strong><span className={s.status}>{provision.phase.replaceAll('_',' ')}</span></div><p>{provision.plan.installations.map(agent=>agent.name).join(', ')} · {provision.plan.durationMinutes} minutes</p><p>{provision.expiresAt?`Expires ${new Date(provision.expiresAt).toLocaleString()}`:'Plan only; no CPU submitted'}{provision.providerStatus?` · Provider: ${provision.providerStatus}`:''}</p>{provision.errorCode&&<p className={s.notice}>Needs reconciliation: {provision.errorCode}. An uncertain create is never automatically submitted twice.</p>}{provision.computeStopped&&<p>Compute stopped. Retained storage remains; credential revocation is a separate host action.</p>}<div className={s.actions}>{provision.phase==='planned'&&<button className="button secondary small" disabled={mutation.busy} onClick={()=>{setReview(provision);setConfirmedPlan(null);}}>Review this plan</button>}{!terminal.has(provision.phase)&&<><button className="button secondary small" disabled={mutation.busy} onClick={()=>void mutation.mutate(`${base}/${provision.id}/reconcile`,{},reload)}><RefreshCw size={13}/> Check provider</button><button className="button secondary small" disabled={mutation.busy||!!provision.stopRequestedAt} onClick={()=>void mutation.mutate(`${base}/${provision.id}/stop`,{revision:provision.revision},async()=>{await reload();p.notify('Compute stop requested. Provider confirmation appears in this record.');})}><Square size={13}/>{provision.stopRequestedAt?'Stop requested':'Stop compute'}</button></>}</div></div>)}</section>
+  </>}
+  {(resource.error||installed.error||mutation.error)&&<p className="error-message" role="alert">{resource.error||installed.error||mutation.error} If a start response was interrupted, refresh the record before any new plan; the existing request may already have committed.</p>}
+ </div>;
+}

@@ -1,9 +1,9 @@
 /** Explicit grants for external workers. Empty grants never inherit sponsor privileges. */
-export const AGENT_CAPABILITIES = ['workspace.read','tasks.write','infrastructure.read','hiring.read','office.write','layout.propose','rooms.propose','hiring.propose','studio.read','studio.write','studio.execute'] as const;
+export const AGENT_CAPABILITIES = ['workspace.read','tasks.write','infrastructure.read','hiring.read','office.write','layout.propose','rooms.propose','hiring.propose','studio.read','studio.write','studio.execute','studio.review'] as const;
 export type AgentCapability = typeof AGENT_CAPABILITIES[number];
 export const AGENT_CAPABILITY_LABELS:Record<AgentCapability,string>={
  'workspace.read':'Read company workspace, people, rooms, tasks and activity',
- 'tasks.write':'Create and prepare tasks for independent human review',
+ 'tasks.write':'Create and prepare tasks for review; acceptance requires a separate authorized reviewer',
  'infrastructure.read':'Read shared drive metadata, without original files or credentials',
  'hiring.read':'Read company openings, without applicant personal information',
  'office.write':'Move this agent and set its office availability',
@@ -13,4 +13,5 @@ export const AGENT_CAPABILITY_LABELS:Record<AgentCapability,string>={
  'studio.read':'Read studio templates, project plans and delivery records',
  'studio.write':'Draft studio projects and register external artifact references for administrator requests; no approval or delivery authority',
  'studio.execute':'Propose bounded production jobs for an assigned task; a human must approve the exact job before a connector can execute it',
+ 'studio.review':'Review another agent’s exact planning submission under an administrator-approved project policy; no media, business or client approval authority',
 };

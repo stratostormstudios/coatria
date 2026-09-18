@@ -1,6 +1,6 @@
 # Running an AI production studio in Coatria
 
-The Studio workspace connects a client brief to specialist responsibilities, production tasks, real output evidence, review, and a delivery manifest. The current renderer is a controlled Blender product-turntable profile. Other VFX applications and client footage need additional approved connectors.
+The Studio workspace connects a client brief to specialist responsibilities, production tasks, real output evidence, review, a private client delivery portal, and authenticated acceptance. The current renderer is a controlled Blender product-turntable profile. Other VFX applications and client footage need additional approved connectors.
 
 ## Set up the company
 
@@ -14,13 +14,15 @@ StratoStorm's initial team uses three specialists:
 | VFX supervisor & team | Creative supervision, media provenance, CG and animation |
 | Lighting & render specialist & team | Lighting, rendering, compositing and finishing |
 
-Independent quality review stays with a suitable human administrator. A person who produced or sponsored a version cannot independently approve it. A studio with one administrator can set up its team and generate draft work, but the first agent-produced scope and estimate must remain in review until a different administrator who did not perform or sponsor that work accepts it. This blocks the dependent breakdown, ingest, and production tasks.
+Final media quality review stays with a suitable human administrator. A person who produced or sponsored a version cannot independently approve it. For routine planning, a company can explicitly authorize a different reviewer agent in **Coordination → Set planning review policy**. Give that dedicated agent only the required `studio.read` and `studio.review` grants. The optional shared-sponsor setting permits a sole administrator to sponsor distinct producer and planning-reviewer agents; acceptance is always labeled **machine planning review**. This accepts the planning contribution, not the commercial estimate or production gate. Without that policy, the existing independent human acceptance rules apply.
 
 ## Connect the workers
 
 **Agent hosts** registers a bounded company host and enrolls selected specialists. The default pilot lifetime is 20 minutes. Review each installation's model, permissions, and execution limits before enrollment.
 
-Registration is an access record. A Runpod CPU Pod running the Coatria supervisor must also be provisioned and configured by the operator. The CPU supervisor calls the separate model inference service; it does not run a large Qwen model or Blender itself. The current operator workflow uses an absolute expiry, a durable private state volume, and a server-side compute cutoff. Leaving a browser tab open is not required.
+**Agent hosts → Managed CPU hosting** prepares a reviewed server plan from selected exact installation versions. An operator first installs the pinned release, a company-specific retained volume, a server-only lifecycle key, a separate endpoint-restricted inference key, and a finite CPU reservation allowance. Choose a 15, 20, 30 or 60 minute session, inspect agent permissions and limits, and start the reviewed plan. The server enrolls those agents, checks the current CPU price and inference access, and submits one fixed 2-vCPU / 4-GB Runpod Pod. An uncertain create is discovered rather than submitted twice. The CPU supervisor calls the separate inference service; it does not run a large Qwen model or Blender itself. A separate server reconciliation job requests and verifies shutdown at expiry. Leaving a browser tab open is not required.
+
+**Stop compute** is independent of credential revocation and preserves retained state. Each host receives its own private journal directory on the company volume. Failed and cancelled starts remain counted in the CPU reservation allowance until an operator reviews actual charges; this is not a provider billing cap. Inference and storage are separate costs. A provider reporting RUNNING proves Pod state, not successful model output; verify actual agent requests and tool receipts.
 
 Keep the one-time host credential in the server's private configuration. After the supervisor first connects, refresh the installation state before approving project delegation. Enrollment and supervisor takeover rotate credentials and invalidate a previously reviewed delegation snapshot.
 
@@ -49,7 +51,7 @@ The saved **Studio pilot · Original product turntable** is an internal StratoSt
 
 In the project's **Coordination** tab, review the coordinator, allowed specialist roles, total specialist run allowance, concurrency, expiry, and policy state. Only an administrator can save this policy. It cannot add agent permissions or change a model's existing limits.
 
-Use **Schedule coordinator** to prepare a recurring mission. The mission starts paused; review and activate it in **Company autopilot** when the worker is connected. The coordinator is instructed to inspect the actual project each cycle, then handle its own ready planning task or hand one ready task to an allowed specialist.
+Use **Schedule coordinator** to prepare a recurring mission. The mission starts paused; review and activate it in **Company autopilot** when the worker is connected. The coordinator is instructed to inspect the actual project each cycle, then request an eligible exact planning review, handle its own ready planning task, or hand one ready task to an allowed specialist. The review policy has a separate finite reviewer-run allowance, expires within 24 hours, and pins the distinct reviewer and coordinator configurations.
 
 Activation schedules the next eligible cycle after the configured interval. For the first test, use **Run next cycle now** after activation to queue a cycle immediately; it counts toward the existing cycle limit.
 
@@ -71,10 +73,14 @@ Promote the fully verified sequence to a pending Studio version. An independent 
 
 After all required production work and independent reviews are accepted, open **Review & delivery** and prepare a manifest containing the latest approved final version of every shot. This preserves versions, checksums, specification, and review receipts.
 
-The manifest is marked **not transferred**. The current platform does not automatically send media, invoice the client, or obtain a client acknowledgement. Use an authorized delivery process, then record actual acceptance and its evidence against that exact package. Never use the client-acceptance action merely to complete a test.
+The prepared manifest alone is **not transferred**. For server-verified private image sequences, use the client-delivery panel to bind the exact package to a designated external Coatria account. The client can sign in at `/delivery` without joining your company and give you its account ID through your existing trusted communication channel. Confirm that identity out of band, review the package and access expiry, then create the invitation. Coatria does not send it automatically; share the link through an authorized client channel.
+
+The portal issues temporary access only to the included verified files. It records portal opens, download access issuance, and the designated client’s acknowledgement or change request separately. Issuing a link does not prove bytes were received. Authenticated acknowledgement rechecks the current approved package, records exact client identity and package checksum, and closes that production. External artifact URLs alone cannot use this private-file portal. No billing or invoice is sent. Never impersonate a real client to complete a test.
 
 ## External harness access
 
 The REST contract is published at [Coatria agent OpenAPI](https://coatria.com/api/agent/openapi). A connected harness discovers allowed tools through `/api/agent/tools`. Its tools use the same project state, role assignments, permissions, leases, and approval gates as the interface.
 
-Company structure and task evidence are shared company records. Personal employee skill vaults remain separate. The implemented pilot does not establish unrestricted VFX execution, automatic fleet provisioning, a company-wide dollar ledger, client transport, or million-user capacity.
+Company structure and task evidence are shared company records. Personal employee skill vaults remain separate. The implemented pilot remains bounded: approved procedural Blender work, a company-allowlisted CPU host preset, private image-sequence delivery, and explicit human final review. It does not establish arbitrary client-footage processing in Nuke/Houdini, unrestricted fleet provisioning, a company-wide dollar ledger, or million-user capacity. Rejected planning work needs a reviewed new producer pass; specialist coordination does not automatically retry uncertain or failed work.
+
+Operational detail: [machine planning review](STUDIO_MACHINE_REVIEW.md), [managed CPU hosting](STUDIO_CPU_PROVISIONING.md), and [client delivery](STUDIO_CLIENT_DELIVERY.md).
