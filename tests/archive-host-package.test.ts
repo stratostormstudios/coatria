@@ -9,6 +9,7 @@ import {ARCHIVE_HOST_SOURCE_FILES,buildArchiveHostBundle} from '../scripts/hosti
 import {archiveHostUnit,inspectArchiveHostBundle} from '../scripts/hosting/install-archive-host.mjs';
 import {createArchiveHostCiCommand,ArchiveHostCiCommandError} from '../scripts/hosting/archive-host-ci-command.mjs';
 import {createArchiveNpmEnvironment,ArchiveRuntimeExportError} from '../scripts/hosting/export-archive-host-runtime.mjs';
+import {ArchiveHostRunError,archiveHostCanarySummary,archiveHostJournalFailure} from '../scripts/hosting/archive-host-diagnostics.mjs';
 
 const git=(cwd:string,args:string[])=>{const result=spawnSync('git',['-c','core.autocrlf=false','-c','user.name=Archive Fixture','-c','user.email=archive-fixture@example.invalid','-C',cwd,...args],{encoding:'utf8',timeout:10000,maxBuffer:1024*1024});assert.equal(result.status,0,result.stderr);return result.stdout.trim();};
 async function fixture(){
@@ -82,4 +83,19 @@ test('runtime export failures disclose only allowlisted stage and command outcom
  const privateText='synthetic-private-path-and-output';const error=new ArchiveRuntimeExportError('npm_install',{code:'ENOENT',message:privateText,stderr:privateText},'npm_ci_offline',1);
  assert.deepEqual(error.diagnostic,{stage:'npm_install',code:'COMMAND_FAILED',operation:'npm_ci_offline',status:1,errorCode:'ENOENT'});assert.ok(!JSON.stringify(error).includes(privateText));
  const unknown=new ArchiveRuntimeExportError(privateText,{code:privateText,message:privateText},privateText,999);assert.deepEqual(unknown.diagnostic,{stage:'unknown_stage',code:'COMMAND_FAILED',operation:'unknown_operation',status:null,errorCode:'UNKNOWN'});
+});
+test('host startup failures preserve only static stages, known error codes and bounded canary counts',()=>{
+ const privateText='synthetic-private-path-and-output';const summary=archiveHostCanarySummary({qualified:false,failureCode:'PROCESS_FAILED',tests:[{passed:true,name:privateText},{passed:false}],realFormats:[{path:privateText}],privateText});
+ const error=new ArchiveHostRunError('qualification_canary',{code:'EACCES',message:privateText,stderr:privateText},summary);
+ assert.deepEqual(error.diagnostic,{event:'archive-host-failed',code:'ARCHIVE_HOST_PRECONDITION_OR_QUALIFICATION_FAILED',stage:'qualification_canary',errorCode:'EACCES',canary:{failureCode:'PROCESS_FAILED',testsPassed:1,formatsPassed:1}});assert.ok(!JSON.stringify(error).includes(privateText));
+ assert.equal(new ArchiveHostRunError('delegation_cpu_limit',{message:'ARCHIVE_HOST_PACKAGE_REJECTED'}).diagnostic.errorCode,'CHECK_FAILED');
+ assert.equal(new ArchiveHostRunError(privateText,{code:privateText,message:privateText}).diagnostic.stage,'unknown_stage');assert.equal(new ArchiveHostRunError('host_identity',{code:privateText}).diagnostic.errorCode,'UNKNOWN');
+ assert.equal(archiveHostCanarySummary({qualified:false,tests:Array(11).fill({passed:true}),realFormats:[]}),null);assert.equal(archiveHostCanarySummary({qualified:true,tests:[],realFormats:[]}),null);
+});
+test('CI failure evidence accepts fixed JSON only from the latest service invocation',()=>{
+ const current='a'.repeat(32),previous='b'.repeat(32),privateText='synthetic-private-journal-material';const diagnostic=new ArchiveHostRunError('delegation_enable',{code:'EPERM'}).diagnostic;
+ const row=(id:string,message:unknown)=>JSON.stringify({_SYSTEMD_INVOCATION_ID:id,MESSAGE:typeof message==='string'?message:JSON.stringify(message),unrelated:privateText});
+ const journal=[row(previous,new ArchiveHostRunError('host_identity',{code:'EACCES'}).diagnostic),row(current,privateText),row(current,{...diagnostic,privateText}),row(current,{...diagnostic,stage:privateText})].join('\n');
+ assert.deepEqual(archiveHostJournalFailure(journal,current),diagnostic);assert.ok(!JSON.stringify(archiveHostJournalFailure(journal,current)).includes(privateText));assert.equal(archiveHostJournalFailure(row(previous,diagnostic),current),null);assert.equal(archiveHostJournalFailure(journal,privateText),null);
+ const calls:unknown[][]=[];const command=createArchiveHostCiCommand(((...args:unknown[])=>{calls.push(args);return {status:0,stdout:journal};}) as unknown as typeof spawnSync);assert.equal(command('read_qualifier_diagnostics',['--no-pager']),journal);assert.equal(calls[0][0],'/usr/bin/journalctl');
 });
