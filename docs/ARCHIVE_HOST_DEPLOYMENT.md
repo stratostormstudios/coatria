@@ -1,10 +1,11 @@
 # Archive host deployment
 
-Updated 2026-09-20. This is the operating contract for the new host packaging
-candidate. Its new systemd qualification lane has not yet been observed passing;
-no production archive host is qualified by this document. The earlier decoder CI
-proof applies to its tested VM and code. Consult [release status](RELEASE_STATUS.md)
-and the [media storage rollout record](MEDIA_STORAGE_ROLLOUT.md) for current evidence.
+Updated 2026-09-20. This is the operating contract for the host packaging
+candidate. Check the exact candidate's systemd qualification result in
+[PR #1](https://github.com/stratostormstudios/coatria/pull/1); this document does
+not qualify a production archive host. CI proof applies to its tested VM and
+code. Consult [release status](RELEASE_STATUS.md) and the
+[media storage rollout record](MEDIA_STORAGE_ROLLOUT.md) for deployment evidence.
 
 The archive host is a separate Linux CPU service. Vercel serves the application;
 the storage gateway and selected Runpod S3 volume have their own deployment and
@@ -206,6 +207,6 @@ and configuration; the current installer intentionally refuses silent upgrades.
 The new [CI host qualifier](../scripts/hosting/qualify-archive-host-ci.mjs) is designed
 to exercise actual systemd install-disabled behavior, two qualification runs,
 receipt replacement, stale-boot rejection and the absent-marker start gate.
-Its passing result is still pending. A synthetic stale boot is not a physical
-reboot test; this lane has no database/provider credentials and proves neither
+Require a passing result for the exact candidate. A synthetic stale boot is not
+a physical reboot test; this lane has no database/provider credentials and proves neither
 live preflight nor S3 transfer, production capacity, recovery or client delivery.

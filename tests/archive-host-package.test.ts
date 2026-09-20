@@ -7,6 +7,7 @@ import test from 'node:test';
 import {ARCHIVE_HOST_PINS,archiveHostHash,parseArchiveRuntime,parseArchiveBundle,verifyArchiveTree,archiveHostProfiles,archiveHostReceiptCurrent,archiveHostDelegatedPath} from '../scripts/hosting/archive-host-package.mjs';
 import {ARCHIVE_HOST_SOURCE_FILES,buildArchiveHostBundle} from '../scripts/hosting/build-archive-host-bundle.mjs';
 import {archiveHostUnit,inspectArchiveHostBundle} from '../scripts/hosting/install-archive-host.mjs';
+import {createArchiveHostCiCommand,ArchiveHostCiCommandError} from '../scripts/hosting/archive-host-ci-command.mjs';
 
 const git=(cwd:string,args:string[])=>{const result=spawnSync('git',['-c','core.autocrlf=false','-c','user.name=Archive Fixture','-c','user.email=archive-fixture@example.invalid','-C',cwd,...args],{encoding:'utf8',timeout:10000,maxBuffer:1024*1024});assert.equal(result.status,0,result.stderr);return result.stdout.trim();};
 async function fixture(){
@@ -58,4 +59,16 @@ test('disabled systemd service delegates only its own subtree with bounded resou
  const p=archiveHostDelegatedPath('0::/system.slice/coatria-archive-qualify.service/supervisor\n','qualify');assert.equal(p.cgroupRoot,'/sys/fs/cgroup/system.slice/coatria-archive-qualify.service/decoders');
  for(const value of ['0::/','0::/system.slice/other.service/supervisor','0::/system.slice/coatria-archive-worker.service/supervisor','0::/system.slice/../coatria-archive-qualify.service/supervisor'])assert.throws(()=>archiveHostDelegatedPath(value,'qualify'));
  const receipt={version:1,bundleSha256:sha,bootId:'current-boot'};assert.equal(archiveHostReceiptCurrent(receipt,sha,'current-boot'),true);assert.equal(archiveHostReceiptCurrent(receipt,sha,'new-boot'),false);assert.equal(archiveHostReceiptCurrent(receipt,'b'.repeat(64),'current-boot'),false);
+});
+test('CI account setup uses the Ubuntu administrative executable and reports only bounded failure facts',()=>{
+ const calls:unknown[][]=[],privateText='synthetic-private-command-material';
+ const command=createArchiveHostCiCommand(((...args:unknown[])=>{calls.push(args);return {status:null,error:{code:'ENOENT',message:privateText},stdout:privateText,stderr:privateText};}) as unknown as typeof spawnSync);
+ assert.throws(()=>command('create_service_user',[privateText]),(error:unknown)=>{assert.ok(error instanceof ArchiveHostCiCommandError);assert.deepEqual(error.diagnostic,{operation:'create_service_user',status:null,errorCode:'ENOENT'});assert.equal(error.message,'ARCHIVE_HOST_CI_COMMAND_FAILED');assert.ok(!JSON.stringify(error).includes(privateText));return true;});
+ assert.equal(calls[0][0],'/usr/sbin/useradd');assert.equal((calls[0][2] as {shell:boolean}).shell,false);
+ assert.throws(()=>command(privateText,[]));assert.equal(calls.length,1,'unknown operation must not spawn');
+});
+test('CI command diagnostics retain numeric status and redact unknown error codes',()=>{
+ const command=createArchiveHostCiCommand((()=>({status:12,error:{code:'synthetic-private-errno'},stdout:'private',stderr:'private'})) as unknown as typeof spawnSync);
+ assert.throws(()=>command('install_acl',[]),(error:unknown)=>{assert.ok(error instanceof ArchiveHostCiCommandError);assert.deepEqual(error.diagnostic,{operation:'install_acl',status:12,errorCode:'UNKNOWN'});return true;});
+ const success=createArchiveHostCiCommand((()=>({status:0,stdout:' inactive\n'})) as unknown as typeof spawnSync);assert.equal(success('read_unit_state',[]),'inactive');
 });

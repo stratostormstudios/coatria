@@ -1,5 +1,4 @@
 /** Disposable Ubuntu VM integration. No provider or database credentials. */
-import {spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {mkdir,readdir,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
@@ -7,34 +6,34 @@ import {ARCHIVE_HOST_PINS,archiveHostHash,archiveHostNoExtendedAcls,archiveHostR
 import {exportArchiveHostRuntime} from './export-archive-host-runtime.mjs';
 import {buildArchiveHostBundle} from './build-archive-host-bundle.mjs';
 import {installArchiveHost,acceptArchiveHostQualification} from './install-archive-host.mjs';
+import {createArchiveHostCiCommand,ArchiveHostCiCommandError} from './archive-host-ci-command.mjs';
 
-const env={PATH:'/usr/sbin:/usr/bin:/sbin:/bin',LANG:'C',LC_ALL:'C',DEBIAN_FRONTEND:'noninteractive'};
-function command(binary,args,timeout=120000){const r=spawnSync(binary,args,{shell:false,env,encoding:'utf8',timeout,maxBuffer:2*1024**2});if(r.status!==0||r.error)throw Error('ARCHIVE_HOST_CI_COMMAND_FAILED');return r.stdout.trim();}
+const command=createArchiveHostCiCommand();
 if(process.platform!=='linux'||process.arch!=='x64'||process.getuid?.()!==0||process.env.CI!=='true'||!/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA??''))throw Error('Explicit root disposable Linux CI required.');
 const repo=process.cwd(),output=resolve('.devdata/media-sandbox-linux/evidence'),base='/var/lib/coatria-archive-build-'+randomUUID(),configPath=process.env.COATRIA_MEDIA_QUALIFICATION;
 if(!configPath||!process.env.COATRIA_NPM_CACHE)throw Error('Pinned CI preparation and cache required.');const config=JSON.parse(await archiveHostRead(configPath));await mkdir(base,{mode:0o755});
 const report={qualified:false,noProviderCalls:true,noCredentials:true,phase:'prerequisites'},exports=new Map();let failed=false;
 async function latestEvidence(){
- const invocationId=command('/usr/bin/systemctl',['show','coatria-archive-qualify.service','--property=InvocationID','--value']),names=await readdir('/var/lib/coatria-archive-state');if(names.length>1000)throw Error('ARCHIVE_HOST_CI_EVIDENCE_LIMIT');
+ const invocationId=command('read_invocation',['show','coatria-archive-qualify.service','--property=InvocationID','--value']),names=await readdir('/var/lib/coatria-archive-state');if(names.length>1000)throw Error('ARCHIVE_HOST_CI_EVIDENCE_LIMIT');
  for(const name of names.filter(n=>/^qualification-[a-f0-9-]{36}$/.test(n))){const path=join('/var/lib/coatria-archive-state',name,'host-evidence.json');let raw;try{raw=await archiveHostRead(path,32768);}catch(error){if(error.code==='ENOENT')continue;throw error;}const host=JSON.parse(raw);if(host.invocationId===invocationId){const proof=await archiveHostRead(join('/var/lib/coatria-archive-state',name,'qualification.json'));if(archiveHostHash(proof)!==host.qualificationSha256)throw Error('ARCHIVE_HOST_CI_EVIDENCE_CHANGED');return {path,raw,host,proof};}}
  throw Error('ARCHIVE_HOST_CI_EVIDENCE_MISSING');
 }
 try{
- command('/usr/bin/apt-get',['install','-y','--no-install-recommends','acl']);command('/usr/bin/useradd',['--system','--user-group','--no-create-home','--home-dir','/nonexistent','--shell','/usr/sbin/nologin','coatria-archive']);
+ command('install_acl',['install','-y','--no-install-recommends','acl']);command('create_service_user',['--system','--user-group','--no-create-home','--home-dir','/nonexistent','--shell','/usr/sbin/nologin','coatria-archive']);
  report.phase='offline-runtime-export';const runtime=await exportArchiveHostRuntime({sourceRoot:repo,qualificationPath:configPath,npmCache:process.env.COATRIA_NPM_CACHE,output:join(base,'prepared-runtime')});
  report.phase='exact-source-bundle';const build=await buildArchiveHostBundle({sourceRoot:repo,commit:process.env.GITHUB_SHA,runtimeRoot:runtime.output,runtimeManifestSha256:runtime.runtimeManifestSha256,output:join(base,'bundle')});
- const aclCanary=join(base,'acl-rejection-control');await writeFile(aclCanary,'original synthetic ACL control',{mode:0o444});command('/usr/bin/setfacl',['-m','u:coatria-archive:r',aclCanary]);let aclRejected=false;try{archiveHostNoExtendedAcls([aclCanary]);}catch{aclRejected=true;}if(!aclRejected)throw Error('ARCHIVE_HOST_CI_ACL_GUARD_FAILED');
- report.phase='install-disabled';const plan=await installArchiveHost(build.output,build.bundleSha256);command('/usr/bin/systemctl',['daemon-reload']);
- for(const unit of plan.units)if(command('/usr/bin/systemctl',['show',unit.name,'--property=ActiveState','--value'])!=='inactive')throw Error('ARCHIVE_HOST_CI_EAGER_START');
- if(command('/usr/bin/systemctl',['show','coatria-archive-worker.service','--property=UnitFileState','--value'])!=='static')throw Error('ARCHIVE_HOST_CI_ENABLED_UNIT');
- report.phase='systemd-first-qualification';command('/usr/bin/systemctl',['start','coatria-archive-qualify.service'],210000);const first=await latestEvidence();await acceptArchiveHostQualification(first.path,archiveHostHash(first.raw));
+ const aclCanary=join(base,'acl-rejection-control');await writeFile(aclCanary,'original synthetic ACL control',{mode:0o444});command('set_acl_control',['-m','u:coatria-archive:r',aclCanary]);let aclRejected=false;try{archiveHostNoExtendedAcls([aclCanary]);}catch{aclRejected=true;}if(!aclRejected)throw Error('ARCHIVE_HOST_CI_ACL_GUARD_FAILED');
+ report.phase='install-disabled';const plan=await installArchiveHost(build.output,build.bundleSha256);command('reload_units',['daemon-reload']);
+ for(const unit of plan.units)if(command('read_unit_state',['show',unit.name,'--property=ActiveState','--value'])!=='inactive')throw Error('ARCHIVE_HOST_CI_EAGER_START');
+ if(command('read_unit_install_state',['show','coatria-archive-worker.service','--property=UnitFileState','--value'])!=='static')throw Error('ARCHIVE_HOST_CI_ENABLED_UNIT');
+ report.phase='systemd-first-qualification';command('start_qualifier',['start','coatria-archive-qualify.service'],210000);const first=await latestEvidence();await acceptArchiveHostQualification(first.path,archiveHostHash(first.raw));
  const previous=await archiveHostRead('/etc/coatria-archive/qualified.json');
- report.phase='systemd-repeat-qualification';command('/usr/bin/systemctl',['start','coatria-archive-qualify.service'],210000);const second=await latestEvidence();if(first.path===second.path)throw Error('ARCHIVE_HOST_CI_ATTEMPT_REUSED');
+ report.phase='systemd-repeat-qualification';command('start_qualifier',['start','coatria-archive-qualify.service'],210000);const second=await latestEvidence();if(first.path===second.path)throw Error('ARCHIVE_HOST_CI_ATTEMPT_REUSED');
  let wrongCas=false;try{await acceptArchiveHostQualification(second.path,archiveHostHash(second.raw),'0'.repeat(64));}catch{wrongCas=true;}if(!wrongCas||archiveHostHash(await archiveHostRead('/etc/coatria-archive/qualified.json'))!==archiveHostHash(previous))throw Error('ARCHIVE_HOST_CI_REVIEW_CAS_FAILED');
  await acceptArchiveHostQualification(second.path,archiveHostHash(second.raw),archiveHostHash(previous));const receipt=JSON.parse(await archiveHostRead('/etc/coatria-archive/qualified.json'));if(archiveHostReceiptCurrent(receipt,build.bundleSha256,'synthetic-different-boot'))throw Error('ARCHIVE_HOST_CI_STALE_BOOT_ACCEPTED');
- report.phase='worker-remains-disabled';command('/usr/bin/systemctl',['start','coatria-archive-worker.service']);if(command('/usr/bin/systemctl',['show','coatria-archive-worker.service','--property=ActiveState','--value'])!=='inactive')throw Error('ARCHIVE_HOST_CI_UNAPPROVED_WORKER_START');
- const unit=await archiveHostRead('/etc/systemd/system/coatria-archive-qualify.service');Object.assign(report,{qualified:true,phase:'complete',commit:build.commit,tree:build.tree,bundleSha256:build.bundleSha256,runtimeManifestSha256:runtime.runtimeManifestSha256,nodeVersion:ARCHIVE_HOST_PINS.nodeVersion,unitSha256:archiveHostHash(unit),aclGuardProved:true,workerRemainedInactive:true,repeatQualificationPassed:true,receiptCasProved:true,staleBootRejected:true,systemd:command('/usr/bin/systemctl',['--version']).split('\n')[0],first:first.host,second:second.host});exports.set('archive-host-qualification.json',second.proof);
-}catch{failed=true;report.failureCode='ARCHIVE_HOST_CI_FAILED';try{report.unitStatus=command('/usr/bin/systemctl',['show','coatria-archive-qualify.service','--property=ActiveState,Result,ExecMainStatus']);}catch{report.unitStatus='unavailable';}}
+ report.phase='worker-remains-disabled';command('start_disabled_worker',['start','coatria-archive-worker.service']);if(command('read_unit_state',['show','coatria-archive-worker.service','--property=ActiveState','--value'])!=='inactive')throw Error('ARCHIVE_HOST_CI_UNAPPROVED_WORKER_START');
+ const unit=await archiveHostRead('/etc/systemd/system/coatria-archive-qualify.service');Object.assign(report,{qualified:true,phase:'complete',commit:build.commit,tree:build.tree,bundleSha256:build.bundleSha256,runtimeManifestSha256:runtime.runtimeManifestSha256,nodeVersion:ARCHIVE_HOST_PINS.nodeVersion,unitSha256:archiveHostHash(unit),aclGuardProved:true,workerRemainedInactive:true,repeatQualificationPassed:true,receiptCasProved:true,staleBootRejected:true,systemd:command('read_systemd_version',['--version']).split('\n')[0],first:first.host,second:second.host});exports.set('archive-host-qualification.json',second.proof);
+}catch(error){failed=true;report.failureCode='ARCHIVE_HOST_CI_FAILED';if(error instanceof ArchiveHostCiCommandError)report.commandFailure=error.diagnostic;try{report.unitStatus=command('read_failure_state',['show','coatria-archive-qualify.service','--property=ActiveState,Result,ExecMainStatus']);}catch{report.unitStatus='unavailable';}}
 finally{
  exports.set('archive-host-bundle.json',Buffer.from(JSON.stringify(report,null,2)+'\n'));
  // Root never follows a workspace or service-owned destination. First preserve
