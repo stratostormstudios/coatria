@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Readable} from 'node:stream';
+import {createServer} from 'node:http';
+import {createHash} from 'node:crypto';
 import {createRunpodProjectStorage,runpodProjectRoot,runpodProjectObjectKey,runpodStorageEndpoint,RUNPOD_STORAGE_REGIONS,RunpodStorageError,type RunpodProjectStorageConfig} from '../src/lib/project-storage-runpod';
 
 const companyId='00000000-0000-4000-8000-000000000001',projectId='00000000-0000-4000-8000-000000000002',versionId='00000000-0000-4000-8000-000000000003',otherId='00000000-0000-4000-8000-000000000004';
@@ -61,6 +63,14 @@ test('multipart upload streams bounded parts through signed SDK requests and com
  const bodies:Buffer[]=[];const f=fixture(async({url,init})=>{if(url.searchParams.has('uploads'))return created();if(init.method==='PUT'){bodies.push(Buffer.from(await new Response(init.body).arrayBuffer()));return new Response(null,{headers:{ETag:'"part-'+url.searchParams.get('partNumber')+'"'}});}assert.equal(init.method,'POST');assert.match(String(init.body),/<PartNumber>1<\/PartNumber>/);return completed();});
  try{const upload=await multipart(f);assert.equal(upload.bytes,6);assert.equal(upload.partBytes,4);const first=await f.storage.uploadPart({upload,partNumber:1,body:bytes('abcd')}),last=await f.storage.uploadPart({upload,partNumber:2,body:Buffer.from('ef')});assert.deepEqual(bodies,[Buffer.from('abcd'),Buffer.from('ef')]);const result=await f.storage.completeMultipart({upload,parts:[first,last]});assert.deepEqual(result,{versionId,etag:'"complete-etag"'});assert.equal(f.calls.length,4);for(const call of f.calls)assert.equal(call.url.pathname,'/'+config.volumeId+'/'+key);assert.equal(f.calls[1].url.searchParams.get('uploadId'),'opaque+upload/id');assert.equal(new Headers(f.calls[1].init.headers).get('content-length'),'4');assert(f.calls[1].init.body instanceof Readable);
  }finally{f.storage.close();}
+});
+
+test('real SDK uploads a five MiB byte buffer and Node stream through native fetch without Expect', {timeout:10000},async t=>{
+ const size=5*1024**2,body=Buffer.alloc(size,90),expected=createHash('sha256').update(body).digest('hex'),received:Array<{bytes:number;sha256:string;expect:string|undefined;length:string|undefined}>=[];
+ const server=createServer(async(request,response)=>{const hash=createHash('sha256');let bytes=0;for await(const chunk of request){bytes+=chunk.length;hash.update(chunk);}received.push({bytes,sha256:hash.digest('hex'),expect:request.headers.expect,length:request.headers['content-length']});response.writeHead(200,{ETag:'"native-part"'});response.end();});
+ await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));const address=server.address();assert(address&&typeof address!=='string');
+ const f=fixture(async({url,init})=>{if(url.searchParams.has('uploads'))return created();try{return await fetch(`http://127.0.0.1:${address.port}/sdk-upload`,init);}catch(error){const code=(error as {cause?:{code?:unknown}}).cause?.code;t.diagnostic('Native fetch rejection: '+(typeof code==='string'&&/^[A-Z_]+$/.test(code)?code:'unclassified'));throw error;}},{partBytes:size,maxObjectBytes:size,timeoutMs:5000});
+ try{for(const input of[body,Readable.from([body.subarray(0,1024**2),body.subarray(1024**2)])]){const upload=await multipart(f,size),part=await f.storage.uploadPart({upload,partNumber:1,body:input});assert.equal(part.bytes,size);assert.equal(part.etag,'"native-part"');}assert.deepEqual(received,[{bytes:size,sha256:expected,expect:undefined,length:String(size)},{bytes:size,sha256:expected,expect:undefined,length:String(size)}]);assert.equal(f.calls.length,4);}finally{f.storage.close();server.closeAllConnections();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));}
 });
 
 test('multipart rejects foreign handles, invalid part lengths and incomplete/duplicate/out-of-order receipts before I/O',async()=>{
