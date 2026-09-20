@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {chmod,link,mkdir,mkdtemp,readFile,readdir,rm,writeFile} from 'node:fs/promises';
+import {chmod,link,lstat,mkdir,mkdtemp,readFile,readdir,rm,rmdir,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
 import test from 'node:test';
-import {ARCHIVE_HOST_PINS,archiveHostHash,parseArchiveRuntime,parseArchiveBundle,verifyArchiveTree,archiveHostProfiles,archiveHostReceiptCurrent,archiveHostDelegatedPath} from '../scripts/hosting/archive-host-package.mjs';
+import {ARCHIVE_HOST_PINS,ARCHIVE_RUNTIME_EMPTY_DIRECTORIES,archiveHostHash,parseArchiveRuntime,parseArchiveBundle,verifyArchiveTree,archiveHostProfiles,archiveHostReceiptCurrent,archiveHostDelegatedPath,copyArchiveFiles,createArchiveEmptyDirectories} from '../scripts/hosting/archive-host-package.mjs';
 import {ARCHIVE_HOST_SOURCE_FILES,buildArchiveHostBundle} from '../scripts/hosting/build-archive-host-bundle.mjs';
 import {archiveHostUnit,inspectArchiveHostBundle} from '../scripts/hosting/install-archive-host.mjs';
 import {createArchiveHostCiCommand,ArchiveHostCiCommandError} from '../scripts/hosting/archive-host-ci-command.mjs';
@@ -23,7 +23,8 @@ async function fixture(){
   // These are original test bytes, deliberately not executable Linux runtimes.
   const bytes=Buffer.from(path.includes('conformance')?'original conformance bytes':path+' synthetic fixture'),mode=path.endsWith('.json')?0o444:0o555;await mkdir(dirname(join(runtime,path)),{recursive:true});await writeFile(join(runtime,path),bytes);entries.push({path,bytes:bytes.length,sha256:archiveHostHash(bytes),mode});
  }
- const manifest=parseArchiveRuntime({version:1,platform:'linux-x64',pins:ARCHIVE_HOST_PINS,sourceHashes:{launcher:archiveHostHash(files.get('scripts/hosting/media-sandbox-launch.c')!),probe:archiveHostHash(files.get('scripts/hosting/media-sandbox-probe.c')!)},packageLockSha256:archiveHostHash(files.get('package-lock.json')!),bubblewrapSha256:'a'.repeat(64),files:entries});const bytes=JSON.stringify(manifest)+'\n';await writeFile(join(runtime,'runtime-manifest.json'),bytes);return {temp,repo,runtime,commit,manifest,runtimeHash:archiveHostHash(bytes),files};
+ await createArchiveEmptyDirectories(runtime,ARCHIVE_RUNTIME_EMPTY_DIRECTORIES);
+ const manifest=parseArchiveRuntime({version:1,platform:'linux-x64',pins:ARCHIVE_HOST_PINS,sourceHashes:{launcher:archiveHostHash(files.get('scripts/hosting/media-sandbox-launch.c')!),probe:archiveHostHash(files.get('scripts/hosting/media-sandbox-probe.c')!)},packageLockSha256:archiveHostHash(files.get('package-lock.json')!),bubblewrapSha256:'a'.repeat(64),files:entries,emptyDirectories:ARCHIVE_RUNTIME_EMPTY_DIRECTORIES});const bytes=JSON.stringify(manifest)+'\n';await writeFile(join(runtime,'runtime-manifest.json'),bytes);return {temp,repo,runtime,commit,manifest,runtimeHash:archiveHostHash(bytes),files};
 }
 
 test('archive bundle pins Git bytes, runtime inputs and ordinary ESM module layout without secrets',async t=>{
@@ -39,7 +40,7 @@ test('offline builder rejects output containment, unreviewed digest and linked r
  const f=await fixture();t.after(()=>rm(f.temp,{recursive:true,force:true}));const input={sourceRoot:f.repo,commit:f.commit,runtimeRoot:f.runtime,runtimeManifestSha256:f.runtimeHash};
  for(const output of [join(f.repo,'nested-output'),join(f.runtime,'nested-output')])await assert.rejects(buildArchiveHostBundle({...input,output}),/ARCHIVE_HOST_PACKAGE_REJECTED/);
  await assert.rejects(buildArchiveHostBundle({...input,runtimeManifestSha256:'0'.repeat(64),output:join(f.temp,'wrong-pin')}),/ARCHIVE_HOST_PACKAGE_REJECTED/);
- await link(join(f.runtime,'node'),join(f.temp,'node-hardlink'));await assert.rejects(verifyArchiveTree(f.runtime,f.manifest.files,{extra:['runtime-manifest.json']}),/ARCHIVE_HOST_PACKAGE_REJECTED/);
+ await link(join(f.runtime,'node'),join(f.temp,'node-hardlink'));await assert.rejects(verifyArchiveTree(f.runtime,f.manifest.files,{extra:['runtime-manifest.json'],emptyDirectories:f.manifest.emptyDirectories}),/ARCHIVE_HOST_PACKAGE_REJECTED/);
 });
 test('Git symlink blobs are rejected even when the allowlisted suffix looks like source',async t=>{
  const f=await fixture();t.after(()=>rm(f.temp,{recursive:true,force:true}));const blob=git(f.repo,['rev-parse','HEAD:src/lib/minimal.ts']);git(f.repo,['update-index','--cacheinfo','120000,'+blob+',src/lib/minimal.ts']);git(f.repo,['commit','--quiet','-m','Synthetic symlink index mode']);const commit=git(f.repo,['rev-parse','HEAD']);
@@ -53,6 +54,22 @@ test('strict runtime format rejects escapes, duplicates, unpinned code and execu
  const f=await fixture();t.after(()=>rm(f.temp,{recursive:true,force:true}));
  const nextChunk=structuredClone(f.manifest);nextChunk.files.push({path:'node_modules/next/dist/bundle-analyzer/_next/static/chunks/03~yq9q893hmn.js',bytes:1,sha256:'1'.repeat(64),mode:0o444});assert.doesNotThrow(()=>parseArchiveRuntime(nextChunk));
  for(const change of [(v:any)=>v.files[0].path='../node',(v:any)=>v.files.push({...v.files[0]}),(v:any)=>v.pins.nodeVersion='latest',(v:any)=>v.credentials={},(v:any)=>v.files.push({path:'media/real/lib64/arbitrary.so',bytes:1,sha256:'1'.repeat(64),mode:0o555})]){const value=structuredClone(f.manifest);change(value);assert.throws(()=>parseArchiveRuntime(value),/ARCHIVE_HOST_PACKAGE_REJECTED/);}
+});
+test('empty read-only proc/dev mountpoints survive runtime, exact-source bundle and installed-tree copy',async t=>{
+ const f=await fixture();t.after(()=>rm(f.temp,{recursive:true,force:true}));const built=await buildArchiveHostBundle({sourceRoot:f.repo,commit:f.commit,runtimeRoot:f.runtime,runtimeManifestSha256:f.runtimeHash,output:join(f.temp,'bundle')}),bundle=await inspectArchiveHostBundle(built.output,built.bundleSha256),installed=join(f.temp,'installed');await mkdir(installed);
+ await copyArchiveFiles(built.output,installed,bundle.files,{emptyDirectories:bundle.emptyDirectories});await writeFile(join(installed,'bundle.json'),await readFile(join(built.output,'bundle.json')));await inspectArchiveHostBundle(installed,built.bundleSha256);
+ assert.deepEqual(bundle.emptyDirectories,bundle.runtime.emptyDirectories.map((entry:{path:string;mode:number})=>({...entry,path:'runtime/'+entry.path})));
+ for(const [root,directories] of [[f.runtime,f.manifest.emptyDirectories],[built.output,bundle.emptyDirectories],[installed,bundle.emptyDirectories]] as [string,{path:string;mode:number}[]][]){for(const entry of directories){const path=join(root,entry.path),info=await lstat(path);assert.equal(info.isDirectory(),true);assert.equal(info.isSymbolicLink(),false);assert.deepEqual(await readdir(path),[]);if(process.platform!=='win32')assert.equal(info.mode&0o7777,0o555);}}
+ await rmdir(join(f.runtime,'media/real/proc'));await assert.rejects(buildArchiveHostBundle({sourceRoot:f.repo,commit:f.commit,runtimeRoot:f.runtime,runtimeManifestSha256:f.runtimeHash,output:join(f.temp,'missing-source-mountpoint')}));
+});
+test('mountpoint evidence rejects omitted, writable, duplicate or substituted directories',async t=>{
+ const f=await fixture();t.after(()=>rm(f.temp,{recursive:true,force:true}));
+ for(const change of [(value:any)=>delete value.emptyDirectories,(value:any)=>value.emptyDirectories.pop(),(value:any)=>value.emptyDirectories[0].mode=0o755,(value:any)=>value.emptyDirectories[0].path='media/real/tmp',(value:any)=>value.emptyDirectories[1]={...value.emptyDirectories[0]}]){const value=structuredClone(f.manifest);change(value);assert.throws(()=>parseArchiveRuntime(value),/ARCHIVE_HOST_PACKAGE_REJECTED/);}
+ const built=await buildArchiveHostBundle({sourceRoot:f.repo,commit:f.commit,runtimeRoot:f.runtime,runtimeManifestSha256:f.runtimeHash,output:join(f.temp,'bundle')}),bundle=await inspectArchiveHostBundle(built.output,built.bundleSha256),path=join(built.output,'runtime/media/real/proc');const changed=structuredClone(bundle);changed.emptyDirectories[0].mode=0o755;assert.throws(()=>parseArchiveBundle(changed),/ARCHIVE_HOST_PACKAGE_REJECTED/);
+ await rmdir(path);await assert.rejects(inspectArchiveHostBundle(built.output,built.bundleSha256));await writeFile(path,'not a mountpoint');await assert.rejects(inspectArchiveHostBundle(built.output,built.bundleSha256));await rm(path);
+ await mkdir(path);await writeFile(join(path,'unreviewed'),'unreviewed contents');await chmod(path,0o555);await assert.rejects(inspectArchiveHostBundle(built.output,built.bundleSha256));await chmod(path,0o755);await rm(join(path,'unreviewed'));await rmdir(path);
+ const outside=join(f.temp,'outside');await mkdir(outside);await symlink(outside,path,process.platform==='win32'?'junction':'dir');await assert.rejects(inspectArchiveHostBundle(built.output,built.bundleSha256));await rm(path);await mkdir(path,{mode:0o555});await chmod(path,0o555);
+ await mkdir(join(built.output,'runtime/media/real/unlisted-empty'));await assert.rejects(inspectArchiveHostBundle(built.output,built.bundleSha256));
 });
 test('disabled systemd service delegates only its own subtree with bounded resource and stop policy',()=>{
  const sha='a'.repeat(64),release='/var/lib/coatria-archive-releases/'+sha;

@@ -13,6 +13,9 @@ export const ARCHIVE_HOST_CONFIG='/etc/coatria-archive';
 export const ARCHIVE_HOST_STATE='/var/lib/coatria-archive-state';
 export const archiveHostHash=value=>createHash('sha256').update(value).digest('hex');
 export const archiveRuntimeTarget=path=>path.startsWith('node_modules/')?'app/'+path:'runtime/'+path;
+// bwrap mounts /proc and /dev after binding the decoder root read-only. These
+// mountpoints must survive every package copy even though they contain no files.
+export const ARCHIVE_RUNTIME_EMPTY_DIRECTORIES=Object.freeze(['real','conformance'].flatMap(kind=>['proc','dev'].map(name=>Object.freeze({path:'media/'+kind+'/'+name,mode:0o555}))));
 export const archiveHostReceiptCurrent=(receipt,bundleSha256,bootId)=>!!receipt&&receipt.version===1&&receipt.bundleSha256===bundleSha256&&receipt.bootId===bootId;
 export function archiveHostDelegatedPath(value,mode){
  if(!['qualify','preflight','worker'].includes(mode))archiveHostFailure();const match=/^0::(\/[^\n]+)\n?$/.exec(value);if(!match||!match[1].endsWith('/coatria-archive-'+mode+'.service/supervisor')||match[1].includes('..')||match[1].includes('\\')||match[1].includes('//'))archiveHostFailure();const supervisorGroup='/sys/fs/cgroup'+match[1],serviceRoot=supervisorGroup.slice(0,-'/supervisor'.length);return {serviceRoot,supervisorGroup,cgroupRoot:serviceRoot+'/decoders'};
@@ -27,9 +30,14 @@ function entries(value){
  return value.map(v=>{if(!exact(v,['path','bytes','sha256','mode'])||!archiveHostRelative(v.path)||seen.has(v.path)||!Number.isSafeInteger(v.bytes)||v.bytes<0||v.bytes>512*1024**2||!sha(v.sha256)||![0o444,0o555].includes(v.mode))archiveHostFailure();seen.add(v.path);total+=v.bytes;if(total>3*1024**3)archiveHostFailure();return {...v};});
 }
 const requiredRuntime=['node','media-sandbox-launch','media/real/bin/ffmpeg','media/real/bin/ffprobe','media/conformance/bin/ffmpeg','media/conformance/bin/ffprobe','node_modules/tsx/package.json','node_modules/pg/package.json'];
+function emptyDirectories(value,expected){
+ if(!Array.isArray(value)||value.length!==expected.length)archiveHostFailure();const paths=new Set();
+ for(const entry of value){if(!exact(entry,['path','mode'])||entry.mode!==0o555||paths.has(entry.path)||!expected.some(e=>e.path===entry.path&&e.mode===entry.mode))archiveHostFailure();paths.add(entry.path);}
+ return value.map(entry=>({...entry}));
+}
 export function parseArchiveRuntime(value){
- if(!exact(value,['version','platform','pins','sourceHashes','packageLockSha256','bubblewrapSha256','files'])||value.version!==1||value.platform!=='linux-x64'||JSON.stringify(value.pins)!==JSON.stringify(ARCHIVE_HOST_PINS)||!exact(value.sourceHashes,['launcher','probe'])||!sha(value.sourceHashes.launcher)||!sha(value.sourceHashes.probe)||!sha(value.packageLockSha256)||!sha(value.bubblewrapSha256))archiveHostFailure();
- const files=entries(value.files),paths=new Map(files.map(f=>[f.path,f]));
+ if(!exact(value,['version','platform','pins','sourceHashes','packageLockSha256','bubblewrapSha256','files','emptyDirectories'])||value.version!==1||value.platform!=='linux-x64'||JSON.stringify(value.pins)!==JSON.stringify(ARCHIVE_HOST_PINS)||!exact(value.sourceHashes,['launcher','probe'])||!sha(value.sourceHashes.launcher)||!sha(value.sourceHashes.probe)||!sha(value.packageLockSha256)||!sha(value.bubblewrapSha256))archiveHostFailure();
+ const files=entries(value.files),paths=new Map(files.map(f=>[f.path,f])),directories=emptyDirectories(value.emptyDirectories,ARCHIVE_RUNTIME_EMPTY_DIRECTORIES);
  for(const file of requiredRuntime)if(!paths.has(file))archiveHostFailure();
  for(const file of files){if(!['node','media-sandbox-launch'].includes(file.path)&&!file.path.startsWith('node_modules/')&&!file.path.startsWith('media/real/')&&!file.path.startsWith('media/conformance/'))archiveHostFailure();if(file.path.split('/').includes('.bin'))archiveHostFailure();if((file.path==='node'||file.path==='media-sandbox-launch'||/^media\/(?:real|conformance)\/(?:bin\/ff(?:mpeg|probe)|lib64\/ld-linux-x86-64.so.2)$/.test(file.path))&&file.mode!==0o555)archiveHostFailure();}
  for(const kind of ['real','conformance']){
@@ -37,18 +45,19 @@ export function parseArchiveRuntime(value){
   for(const f of members)if(!/^media\/(?:real|conformance)\/(?:bin\/ff(?:mpeg|probe)|lib(?:64|\/x86_64-linux-gnu)\/[A-Za-z0-9_.+-]+)$/.test(f.path)||!f.path.includes('/bin/')&&!f.path.endsWith('/lib64/ld-linux-x86-64.so.2')&&f.mode!==0o444)archiveHostFailure();
  }
  if(paths.get('media/conformance/bin/ffmpeg').sha256!==paths.get('media/conformance/bin/ffprobe').sha256)archiveHostFailure();
- return {...value,files};
+ return {...value,files,emptyDirectories:directories};
 }
 export function parseArchiveBundle(value){
- if(!exact(value,['version','kind','commit','tree','runtimeManifestSha256','runtime','files'])||value.version!==1||value.kind!=='coatria-archive-host'||!(/^[a-f0-9]{40}$/).test(value.commit)||!(/^[a-f0-9]{40}$/).test(value.tree)||!sha(value.runtimeManifestSha256))archiveHostFailure();
+ if(!exact(value,['version','kind','commit','tree','runtimeManifestSha256','runtime','files','emptyDirectories'])||value.version!==1||value.kind!=='coatria-archive-host'||!(/^[a-f0-9]{40}$/).test(value.commit)||!(/^[a-f0-9]{40}$/).test(value.tree)||!sha(value.runtimeManifestSha256))archiveHostFailure();
  const runtime=parseArchiveRuntime(value.runtime),files=entries(value.files);if(archiveHostHash(JSON.stringify(runtime)+'\n')!==value.runtimeManifestSha256)archiveHostFailure();
+ const directories=emptyDirectories(value.emptyDirectories,runtime.emptyDirectories.map(entry=>({...entry,path:archiveRuntimeTarget(entry.path)})));
  const map=new Map(files.map(f=>[f.path,f]));for(const f of runtime.files){const item=map.get(archiveRuntimeTarget(f.path));if(!item||item.sha256!==f.sha256||item.bytes!==f.bytes||item.mode!==f.mode)archiveHostFailure();}
  for(const f of files)if(!f.path.startsWith('app/')&&!f.path.startsWith('runtime/'))archiveHostFailure();
  if(files.filter(f=>f.path.startsWith('runtime/')||f.path.startsWith('app/node_modules/')).length!==runtime.files.length)archiveHostFailure();
  if(map.get('app/package-lock.json')?.sha256!==runtime.packageLockSha256)archiveHostFailure();
  if(map.get('app/scripts/hosting/media-sandbox-launch.c')?.sha256!==runtime.sourceHashes.launcher||map.get('app/scripts/hosting/media-sandbox-probe.c')?.sha256!==runtime.sourceHashes.probe)archiveHostFailure();
  for(const path of ['app/scripts/hosting/run-archive-host.mts','app/scripts/hosting/install-archive-host.mjs','app/scripts/higgsfield-archive-worker.ts','app/scripts/hosting/media-sandbox-linux-canary.mts'])if(!map.has(path))archiveHostFailure();
- return {...value,runtime,files};
+ return {...value,runtime,files,emptyDirectories:directories};
 }
 export async function archiveHostRead(path,maxBytes=16*1024**2){
  const info=await lstat(path);if(!info.isFile()||info.isSymbolicLink()||info.nlink!==1||info.size>maxBytes||await realpath(path)!==resolve(path))archiveHostFailure();
@@ -65,15 +74,26 @@ export async function archiveHostTrusted(path,directory=false,{checkAcl=true}={}
  if(await realpath(path)!==resolve(path))archiveHostFailure();let p=resolve(path),first=true;
  const paths=[];for(;;){paths.push(p);const info=await lstat(p);if(info.uid!==0||info.mode&0o6022||info.isSymbolicLink()||(first&&!directory?!info.isFile()||info.nlink!==1:!info.isDirectory()))archiveHostFailure();if(process.getuid?.()!==0){try{await access(p,constants.W_OK);archiveHostFailure();}catch(error){if(!['EACCES','EROFS'].includes(error.code??''))throw error;}}first=false;const parent=dirname(p);if(parent===p)break;p=parent;}if(checkAcl)archiveHostNoExtendedAcls(paths);
 }
-export async function verifyArchiveTree(root,files,{trusted=false,extra=/** @type {string[]} */([])}={}){
- if(await realpath(root)!==resolve(root)||(await lstat(root)).isSymbolicLink())archiveHostFailure();const expected=new Map(files.map(f=>[f.path,f])),allowedExtra=new Set(extra);let count=0;
+export async function verifyArchiveEmptyDirectories(root,directories,{trusted=false}={}){
+ for(const entry of directories){if(!archiveHostRelative(entry.path)||entry.mode!==0o555)archiveHostFailure();const path=join(root,entry.path),info=await lstat(path);if(!info.isDirectory()||info.isSymbolicLink()||await realpath(path)!==resolve(path)||(process.platform!=='win32'&&(info.mode&0o7777)!==entry.mode)||(await readdir(path)).length)archiveHostFailure();if(trusted)await archiveHostTrusted(path,true);}
+}
+export async function createArchiveEmptyDirectories(root,directories){
+ for(const entry of directories){if(!archiveHostRelative(entry.path)||entry.mode!==0o555)archiveHostFailure();const path=join(root,entry.path);if(await realpath(dirname(path))!==resolve(dirname(path)))archiveHostFailure();await mkdir(path,{mode:entry.mode});await chmod(path,entry.mode);}
+ await verifyArchiveEmptyDirectories(root,directories);
+}
+export async function verifyArchiveTree(root,files,{trusted=false,extra=/** @type {string[]} */([]),emptyDirectories=/** @type {{path:string,mode:number}[]} */([])}={}){
+ if(await realpath(root)!==resolve(root)||(await lstat(root)).isSymbolicLink())archiveHostFailure();const expected=new Map(files.map(f=>[f.path,f])),allowedExtra=new Set(extra),allowedDirectories=new Set(emptyDirectories.map(entry=>entry.path));let count=0;
+ for(const path of [...files.map(file=>file.path),...extra,...emptyDirectories.map(entry=>entry.path)]){const parts=path.split('/');parts.pop();while(parts.length){allowedDirectories.add(parts.join('/'));parts.pop();}}
+ await verifyArchiveEmptyDirectories(root,emptyDirectories,{trusted});
  async function walk(path,relative=''){
-  const info=await lstat(path);if(!info.isDirectory()||info.isSymbolicLink())archiveHostFailure();if(trusted)await archiveHostTrusted(path,true,{checkAcl:false});
+  const info=await lstat(path);if(!info.isDirectory()||info.isSymbolicLink()||relative&&!allowedDirectories.has(relative))archiveHostFailure();if(trusted)await archiveHostTrusted(path,true,{checkAcl:false});
   for(const name of await readdir(path)){const rel=relative?relative+'/'+name:name,p=join(path,name),stat=await lstat(p);if(stat.isDirectory()){await walk(p,rel);continue;}if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1)archiveHostFailure();if(allowedExtra.delete(rel))continue;const entry=expected.get(rel);if(!entry)archiveHostFailure();if(trusted){await archiveHostTrusted(p,false,{checkAcl:false});if((stat.mode&0o777)!==entry.mode)archiveHostFailure();}const facts=await archiveHostFileHash(p);if(facts.bytes!==entry.bytes||facts.sha256!==entry.sha256)archiveHostFailure();expected.delete(rel);if(++count>60000)archiveHostFailure();}
  }if(trusted){await archiveHostTrusted(root,true);archiveHostNoExtendedAcls([root],true);}await walk(root);if(expected.size||allowedExtra.size)archiveHostFailure();if(trusted)archiveHostNoExtendedAcls([root],true);
 }
-export async function copyArchiveFiles(from,to,files){
+export async function copyArchiveFiles(from,to,files,{emptyDirectories=/** @type {{path:string,mode:number}[]} */([])}={}){
+ await verifyArchiveEmptyDirectories(from,emptyDirectories);
  for(const f of files){if(!archiveHostRelative(f.path))archiveHostFailure();const target=join(to,f.path);await mkdir(dirname(target),{recursive:true,mode:0o755});await copyFile(join(from,f.path),target,constants.COPYFILE_EXCL);const check=await archiveHostFileHash(target);if(check.bytes!==f.bytes||check.sha256!==f.sha256)archiveHostFailure();await chmod(target,f.mode);}
+ await createArchiveEmptyDirectories(to,emptyDirectories);
 }
 export function archiveHostProfiles(bundle,release){
  return Object.fromEntries(['real','conformance'].map(kind=>{const files=bundle.runtime.files.filter(f=>f.path.startsWith('media/'+kind+'/')).map(f=>({path:f.path.slice(('media/'+kind).length),bytes:f.bytes,sha256:f.sha256}));return [kind,{version:1,platform:'linux-x64',runtimeRoot:release+'/runtime/media/'+kind,files,launcher:{path:release+'/runtime/media-sandbox-launch',sha256:bundle.runtime.files.find(f=>f.path==='media-sandbox-launch').sha256},bubblewrap:{path:'/usr/bin/bwrap',sha256:bundle.runtime.bubblewrapSha256},limits:kind==='real'?{memoryBytes:512*1024**2,cpuQuotaMicros:100000,cpuPeriodMicros:100000,pids:64,openFiles:64,wallTimeMs:60000}:{memoryBytes:64*1024**2,cpuQuotaMicros:20000,cpuPeriodMicros:100000,pids:16,openFiles:64,wallTimeMs:10000}}];}));

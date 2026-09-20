@@ -25,6 +25,11 @@ human-approved source and destination before any archive can run.
 | Database preflight | Current LOGIN, grants, scratch and decoder startup checks | No archive claimed; no S3 connectivity proof |
 | Explicit worker start | One leased archive operation at a time | Application approvals and per-archive authority remain separate gates |
 
+Runtime and bundle manifests include the empty `/proc` and `/dev` mount points
+for both decoder profiles, with mode `0555`. Export, copy and installation
+verify these directories as well as file contents. Rebuild earlier file-only
+bundles: they omit mount points required after the decoder root becomes read-only.
+
 ## Prepare a suitable host
 
 Use a Linux x64 VM with systemd as PID 1, systemd 254 or newer, unified cgroup v2

@@ -6,7 +6,7 @@ import {randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
 import {dirname,isAbsolute,join,relative,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {ARCHIVE_HOST_PINS,archiveHostFailure,archiveHostHash,archiveHostRead,archiveHostFileHash,parseArchiveRuntime,verifyArchiveTree} from './archive-host-package.mjs';
+import {ARCHIVE_HOST_PINS,ARCHIVE_RUNTIME_EMPTY_DIRECTORIES,archiveHostFailure,archiveHostHash,archiveHostRead,archiveHostFileHash,parseArchiveRuntime,verifyArchiveTree,verifyArchiveEmptyDirectories,createArchiveEmptyDirectories} from './archive-host-package.mjs';
 
 const stages=new Set(['platform','preparation_read','setup_pins','input_paths','build_staging','node_extract','node_version','npm_configuration','npm_install','runtime_copy','media_copy','dependency_copy','source_pins','manifest']);
 const operations=new Set(['create_cached_container','copy_node','copy_npm','remove_cached_container','read_node_version','npm_ci_offline']);
@@ -45,8 +45,10 @@ export async function exportArchiveHostRuntime({sourceRoot,qualificationPath,npm
  stage='media_copy';for(const kind of ['real','conformance']){
   const pin=config.profiles[kind],raw=await archiveHostRead(pin.profilePath);if(archiveHostHash(raw)!==pin.expectedProfileSha256)archiveHostFailure();const profile=JSON.parse(raw);
   if(profile.version!==1||profile.platform!=='linux-x64'||profile.bubblewrap.sha256!==setup.bubblewrapSha256)archiveHostFailure();
+  await verifyArchiveEmptyDirectories(profile.runtimeRoot,[{path:'proc',mode:0o555},{path:'dev',mode:0o555}],{trusted:true});
   for(const member of profile.files){if(!/^\/(?:bin\/ff(?:mpeg|probe)|lib(?:64|\/x86_64-linux-gnu)\/[A-Za-z0-9_.+-]+)$/.test(member.path))archiveHostFailure();const source=join(profile.runtimeRoot,member.path),facts=await archiveHostFileHash(source);if(facts.sha256!==member.sha256||facts.bytes!==member.bytes)archiveHostFailure();await copy(source,'media/'+kind+member.path,member.path.startsWith('/bin/')||member.path==='/lib64/ld-linux-x86-64.so.2'?0o555:0o444);}
   if(kind==='real'){if((await archiveHostFileHash(profile.launcher.path)).sha256!==profile.launcher.sha256)archiveHostFailure();await copy(profile.launcher.path,'media-sandbox-launch',0o555);}
+  await createArchiveEmptyDirectories(target,ARCHIVE_RUNTIME_EMPTY_DIRECTORIES.filter(entry=>entry.path.startsWith('media/'+kind+'/')));
  }
  async function modules(directory,relative='node_modules'){
   const info=await lstat(directory);if(!info.isDirectory()||info.isSymbolicLink()||await realpath(directory)!==resolve(directory))archiveHostFailure();
@@ -54,7 +56,7 @@ export async function exportArchiveHostRuntime({sourceRoot,qualificationPath,npm
  }stage='dependency_copy';await modules(join(dependencyRoot,'node_modules'));files.sort((a,b)=>a.path.localeCompare(b.path,'en'));
  stage='source_pins';const sourceHashes={launcher:setup.sourceHashes['scripts/hosting/media-sandbox-launch.c'],probe:setup.sourceHashes['scripts/hosting/media-sandbox-probe.c']};
  for(const [name,file]of [['launcher','media-sandbox-launch.c'],['probe','media-sandbox-probe.c']])if(archiveHostHash(await archiveHostRead(join(repo,'scripts/hosting',file)))!==sourceHashes[name])archiveHostFailure();
- stage='manifest';const runtime=parseArchiveRuntime({version:1,platform:'linux-x64',pins:ARCHIVE_HOST_PINS,sourceHashes,packageLockSha256:archiveHostHash(lock),bubblewrapSha256:setup.bubblewrapSha256,files});const bytes=JSON.stringify(runtime)+'\n';await writeFile(join(target,'runtime-manifest.json'),bytes,{flag:'wx',mode:0o444});await verifyArchiveTree(target,runtime.files,{extra:['runtime-manifest.json']});return {runtimeManifestSha256:archiveHostHash(bytes),files:files.length,qualified:false,output:target};
+ stage='manifest';const runtime=parseArchiveRuntime({version:1,platform:'linux-x64',pins:ARCHIVE_HOST_PINS,sourceHashes,packageLockSha256:archiveHostHash(lock),bubblewrapSha256:setup.bubblewrapSha256,files,emptyDirectories:ARCHIVE_RUNTIME_EMPTY_DIRECTORIES});const bytes=JSON.stringify(runtime)+'\n';await writeFile(join(target,'runtime-manifest.json'),bytes,{flag:'wx',mode:0o444});await verifyArchiveTree(target,runtime.files,{extra:['runtime-manifest.json'],emptyDirectories:runtime.emptyDirectories});return {runtimeManifestSha256:archiveHostHash(bytes),files:files.length,qualified:false,output:target};
  }catch(error){throw error instanceof ArchiveRuntimeExportError?error:new ArchiveRuntimeExportError(stage,error);}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){void(async()=>{try{const [sourceRoot,qualificationPath,npmCache,output,...extra]=process.argv.slice(2);if(extra.length||!output)archiveHostFailure();console.log(JSON.stringify(await exportArchiveHostRuntime({sourceRoot,qualificationPath,npmCache,output})));}catch(error){console.error(JSON.stringify({code:'ARCHIVE_HOST_RUNTIME_EXPORT_FAILED',...error instanceof ArchiveRuntimeExportError?{diagnostic:error.diagnostic}:{}}));process.exitCode=1;}})();}
