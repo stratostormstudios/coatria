@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,writeFile,readdir,rm} from 'node:fs/promises';
-import {join,resolve,relative,isAbsolute} from 'node:path';
+import {mkdtemp,readFile,writeFile,readdir,rm,mkdir,cp,lstat,unlink} from 'node:fs/promises';
+import {join,resolve,relative,isAbsolute,dirname} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID,createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
+import {spawnSync} from 'node:child_process';
 import {runRendererHost,rendererHostConfiguration,rendererStateDirectory,RENDER_ORIGIN} from '../scripts/hosting/run-renderer-host.mjs';
 import {BUILTIN_EXECUTION_PROFILE} from '../scripts/vfx/worker.mjs';
 import {buildRendererBootstrap,RENDERER_SOURCE_PATHS} from '../scripts/hosting/build-renderer-bootstrap.mjs';
@@ -130,8 +131,36 @@ test('root parent accepts graceful shutdown and does not escalate after confirme
  assert.deepEqual(signals,['SIGTERM']);assert.equal(result.forced,false);assert.equal(result.terminationConfirmed,true);assert.equal(result.code,0);
 });
 test('bootstrap pins exact LF source bytes, dependencies and official Blender archive without secrets',async()=>{
- const root=resolve('.'),commit='1'.repeat(40);await assert.rejects(buildRendererBootstrap({commit:'main',root}));const built=await buildRendererBootstrap({commit,root});assert.equal(built.image,nodeImage);assert.equal(built.manifest.length,12);assert.deepEqual(built.manifest.map((item:any)=>item.path),RENDERER_SOURCE_PATHS);
+ const root=resolve('.'),commit='1'.repeat(40);await assert.rejects(buildRendererBootstrap({commit:'main',root}));const built=await buildRendererBootstrap({commit,root});assert.equal(built.image,nodeImage);assert.equal(built.manifest.length,13);assert.deepEqual(built.manifest.map((item:any)=>item.path),RENDERER_SOURCE_PATHS);
  for(const item of built.manifest){const text=(await readFile(join(root,item.path),'utf8')).replaceAll('\r\n','\n');assert.equal(item.bytes,Buffer.byteLength(text));assert.equal(item.sha256,digest(text));}
  assert.equal(built.blender.sha256,'84098912789dc450e95697c4184fb8a90acbe5111c2ba4aede3fecb57806a168');assert.equal(built.blender.bytes,383295504);assert.equal(built.blender,BLENDER_RELEASE);assert(!built.args.includes(token));
  const lock=JSON.parse(await readFile(join(root,'scripts/hosting/renderer-runtime/package-lock.json'),'utf8'));assert.equal(lock.packages[''].dependencies.tsx,'4.23.13');assert.equal(lock.packages[''].dependencies.zod,'4.5.4');assert(lock.packages['node_modules/@esbuild/linux-x64'].integrity);assert(Object.keys(lock.packages).every(key=>key===''||/^node_modules\/(tsx|zod|esbuild|fsevents|@esbuild\/[^/]+)$/.test(key)));
+});
+
+test('sealed renderer source manifest imports outside the repository with only its locked dependencies',{timeout:60000},async()=>{
+ const root=resolve('.'),directory=await mkdtemp(join(tmpdir(),'coatria-renderer-closure-')),outside=relative(root,directory);
+ assert(outside&&(outside.startsWith('..')||isAbsolute(outside)),'Closure fixture must be outside the checkout.');
+ try{
+  const built=await buildRendererBootstrap({commit:'1'.repeat(40),root});
+  for(const entry of built.manifest){assert(typeof entry.target==='string');const target=join(directory,entry.target);await mkdir(dirname(target),{recursive:true});const content=(await readFile(join(root,entry.path),'utf8')).replaceAll('\r\n','\n');assert.equal(digest(content),entry.sha256);await writeFile(target,content,{flag:'wx'});}
+  // Copy only packages declared by this sealed runtime's lock, not the app's
+  // node_modules tree or symlinks back into the repository. No install scripts,
+  // network, provider credentials, native Blender or renderer jobs are used.
+  const lock=JSON.parse(await readFile(join(directory,'package-lock.json'),'utf8'));
+  for(const[packagePath,entry]of Object.entries(lock.packages)as[string,any][]){
+   if(!packagePath)continue;assert(/^node_modules\/(tsx|zod|esbuild|fsevents|@esbuild\/[^/]+)$/.test(packagePath));
+   const source=join(root,packagePath);let info;try{info=await lstat(source);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT'&&entry.optional)continue;throw error;}
+   assert(info.isDirectory()&&!info.isSymbolicLink(),'Dependency must be a local package directory.');assert.equal(JSON.parse(await readFile(join(source,'package.json'),'utf8')).version,entry.version,'Installed fixture dependency must match the sealed runtime lock.');
+   const target=join(directory,packagePath);await mkdir(dirname(target),{recursive:true});await cp(source,target,{recursive:true,dereference:false,errorOnExist:true,force:false});
+  }
+  for(const dependency of Object.keys(lock.packages[''].dependencies))assert((await lstat(join(directory,'node_modules',dependency))).isDirectory());
+  const sources=built.manifest.map(entry=>entry.target).filter((file):file is string=>typeof file==='string'&&/\.(?:mts|mjs|ts)$/.test(file));
+  const probe=`globalThis.fetch=async()=>{throw Error('NETWORK_FORBIDDEN_IN_IMPORT_PROBE')};try{for(const path of ${JSON.stringify(sources)})await import('./'+path);console.log('RENDERER_SOURCE_IMPORT_OK');}catch(error){console.error(['ERR_MODULE_NOT_FOUND','MODULE_NOT_FOUND'].includes(error?.code)&&String(error?.message).includes('studio-generated-protocol')?'RENDERER_SOURCE_GENERATED_PROTOCOL_MISSING':'RENDERER_SOURCE_IMPORT_FAILED');process.exitCode=1;}`;
+  const importClosure=()=>spawnSync(process.execPath,['--import','tsx','--input-type=module','-e',probe],{cwd:directory,encoding:'utf8',windowsHide:true,timeout:30000,maxBuffer:65536,env:{...(process.env.SystemRoot?{SystemRoot:process.env.SystemRoot}:{}),HOME:directory,TEMP:directory,TMP:directory,LANG:'C.UTF-8',NODE_ENV:'test'}});
+  const complete=importClosure();assert.equal(complete.error,undefined);assert.equal(complete.status,0,complete.stderr);assert.equal(complete.stdout.trim(),'RENDERER_SOURCE_IMPORT_OK');assert.equal(complete.stderr,'');
+  // Negative control proves the probe cannot resolve this dependency from the
+  // original checkout or a stale tsx cache after the successful import.
+  await unlink(join(directory,'src/lib/studio-generated-protocol.ts'));
+  const missing=importClosure();assert.equal(missing.error,undefined);assert.equal(missing.status,1);assert.equal(missing.stdout,'');assert.equal(missing.stderr.trim(),'RENDERER_SOURCE_GENERATED_PROTOCOL_MISSING');
+ }finally{const contained=relative(tmpdir(),directory);assert(contained&&!contained.startsWith('..')&&!isAbsolute(contained));await rm(directory,{recursive:true,force:true});}
 });

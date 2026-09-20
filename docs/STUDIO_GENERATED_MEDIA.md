@@ -68,10 +68,13 @@ the external recipient storage transport is implemented and qualified. The
 older creative-followup mechanism also rejects v2 rather than treating a
 human-attested v1 pairing as verified generated evidence.
 
-Remaining release work includes real PostgreSQL concurrency/privilege tests,
-the connected agent registration tests, bounded/batched artifact reads for
-large histories, generated-media UI, and a separately qualified archive host
-and actual Runpod volume transport. Client delivery additionally requires its
+PostgreSQL CI has exercised concurrent registration, duplicate-source rejection,
+lease expiry after lock waits, review revocation and restricted evidence grants.
+Connected agent registration and legacy compatibility also have automated tests.
+The exact candidate still requires a complete passing CI run before release.
+
+Remaining product work includes generated-media UI and a separately qualified
+archive host and actual Runpod volume transport. Client delivery additionally requires its
 exact-version, external-account download grants and gateway. Local synthetic
 database fixtures prove authority rules; they do not prove a real provider
 transfer or certify client media quality.

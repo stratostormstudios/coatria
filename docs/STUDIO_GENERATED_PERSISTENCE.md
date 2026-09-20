@@ -52,9 +52,9 @@ hash. Its authoritative projection is `schemaVersion:2`,
 `kind:'verified_generated_media'`, `mediaKind`, `companyId`, `projectId`,
 `artifactId`, `workItemId`, `archiveId`, `archiveApprovedBy`, `requestId`, `jobId`,
 `outputId`, `storageVersionId`, `specSha256`, plus exact `source`, `media` and
-`file` objects from the evidence row. Extra top-level fields are presently
-permitted; the future service must define and validate the final strict wire
-contract. They cannot replace the authoritative projection. Hashing/spec
+`file` objects from the evidence row. SQL permits extra top-level fields, but
+the service builds a canonical manifest with a fixed shape and requires exact
+byte equality when reading it. Extra fields cannot replace that projection. Hashing/spec
 canonicalization uses core PostgreSQL SHA-256, without an added extension.
 
 Every v2 `studio_reviews` row must also have an append-only

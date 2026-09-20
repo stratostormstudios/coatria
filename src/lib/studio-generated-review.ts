@@ -83,7 +83,7 @@ export async function prepareGeneratedStudioDelivery(client:PoolClient,actor:Stu
  if(work.some(w=>w.stage!=='delivery'&&w.status!=='done'))fail(409,'All production work needs independent task acceptance before packaging.','STUDIO_WORK_INCOMPLETE');
  const units=(await client.query('SELECT id FROM studio_shots WHERE company_id=$1 AND project_id=$2 ORDER BY id',[actor.companyId,project.id])).rows;
  const qc=work.filter(w=>w.stage==='qc'),finalIds=new Set<string>(qc.flatMap(w=>w.dependencies));
- if(!units.length||qc.length!==units.length||units.some(unit=>qc.filter(w=>w.shot_id===unit.id).length!==1)||qc.some(w=>w.dependencies.length!==1)||finalIds.size!==units.length)fail(409,'Every deliverable needs its complete independent QC dependency.','STUDIO_DELIVERY_INCOMPLETE');
+ if(!units.length||qc.length!==units.length||units.some(unit=>qc.filter(w=>w.shot_id===unit.id).length!==1)||qc.some(w=>{const final=work.find(candidate=>candidate.id===w.dependencies[0]);return w.dependencies.length!==1||!final||final.shot_id!==w.shot_id||final.stage!=='generation'||final.execution!=='creative';})||finalIds.size!==units.length)fail(409,'Every deliverable needs its complete independent QC dependency.','STUDIO_DELIVERY_INCOMPLETE');
  const artifacts=[],reviews=[],selectedWork=new Set<string>();
  for(const artifactId of [...data.artifactIds].sort()){
   const {evidence,work:item,technicalMatch}=await checkedEvidence(client,actor.companyId,project,artifactId);

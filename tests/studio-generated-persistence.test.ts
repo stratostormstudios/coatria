@@ -196,6 +196,18 @@ test('generated persistence enforces typed projects and immutable verified prove
    await db.query("UPDATE studio_projects SET gates='{}' WHERE id=$1",[clean.p.id]);
    await assert.rejects(()=>generatedOperation(clean.p.id,reviewer,(client,p)=>recordGeneratedStudioReview(client,actor(reviewer),p,cleanData)),(error:any)=>error.code==='STUDIO_GATE_REQUIRED');
   });
+  await t.test('packaging rejects QC dependencies swapped between deliverables before considering artifacts',async()=>{
+   const f=await fixture(),secondUnit=await unit(f.p,'D020'),secondWork=await work(f.p,secondUnit);await authorizeFixture(f.p.id);
+   await db.query("UPDATE tasks SET status='done',approved_by=$2 WHERE id=ANY($1::uuid[])",[[f.w.task_id,secondWork.task_id],reviewer]);
+   for(const [u,predecessor]of [[f.u,secondWork],[secondUnit,f.w]]){
+    const task=await insert(db,'tasks',{company_id:company,title:'Synthetic mislinked QC',created_by:producer,status:'done',approved_by:reviewer});
+    const qc=await insert(db,'studio_work_items',{company_id:company,project_id:f.p.id,shot_id:u.id,logical_key:u.code+':qc',task_id:task.id,stage:'qc',role_key:'qc',execution:'human'});
+    await insert(db,'studio_dependencies',{company_id:company,project_id:f.p.id,work_item_id:qc.id,predecessor_id:predecessor.id});
+   }
+   const data=studioDeliveryInput.parse({clientId:randomUUID(),revision:1,name:'Reject swapped QC',artifactIds:[randomUUID(),randomUUID()],note:'QC must cover its own deliverable before artifact selection is evaluated.'});
+   await assert.rejects(()=>generatedOperation(f.p.id,reviewer,(client,p)=>prepareGeneratedStudioDelivery(client,actor(reviewer),p,data)),(error:any)=>error.code==='STUDIO_DELIVERY_INCOMPLETE');
+   assert.equal((await db.query('SELECT count(*)::int AS n FROM studio_deliveries WHERE project_id=$1',[f.p.id])).rows[0].n,0);
+  });
   await t.test('runtime grants retain v1 writes and allow only append/read access to generated source and review evidence',async()=>{
    await(control??db).query('CREATE ROLE '+role+' NOLOGIN');roleCreated=true;await db.query((await readFile('database/runtime-permissions.sql','utf8')).replaceAll('coatria_runtime_v1',role));
    await tx(async client=>{await insert(client,'studio_artifacts',{...legacyArtifact,id:randomUUID(),version:2,metadata:JSON.stringify(legacyArtifact.metadata)});await insert(client,'studio_reviews',{company_id:company,project_id:legacy.id,artifact_id:legacyArtifact.id,decision:'changes_requested',note:'Legacy remains usable',technical_qc:false,reviewed_by:reviewer});},true);

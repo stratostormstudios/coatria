@@ -4,7 +4,7 @@ import {z} from 'zod';
 import {requireMembership,type Membership} from './auth';
 import {memberMutation} from './company';
 import {body,fail,id,json} from './security';
-import {STUDIO_TEMPLATES,STUDIO_SKILLS,STUDIO_DISCIPLINES,getStudioTemplate,studioSetupInput,studioProjectInput,studioVersionedProjectInput,studioProjectPatchInput,studioDispatchInput,studioArtifactInput,studioGateInput,studioReviewInput,studioDeliveryInput,type StudioProject,type StudioRole,type StudioWorkItem,type StudioProjectDetail,type StudioSnapshot,type StudioGeneratedProject,type StudioGeneratedShot,type StudioGeneratedArtifact,type StudioGeneratedProjectDetail,type StudioReadableProject,type StudioReadableProjectDetail,type StudioReadableSnapshot} from './studio-protocol';
+import {STUDIO_TEMPLATES,STUDIO_SKILLS,STUDIO_DISCIPLINES,getStudioTemplate,studioSetupInput,studioProjectInput,studioVersionedProjectInput,studioProjectPatchInput,studioDispatchInput,studioArtifactInput,studioGateInput,studioReviewInput,studioDeliveryInput,type StudioProject,type StudioRole,type StudioWorkItem,type StudioProjectDetail,type StudioSnapshot,type StudioGeneratedProject,type StudioGeneratedShot,type StudioGeneratedProjectDetail,type StudioReadableProject,type StudioReadableProjectDetail,type StudioReadableSnapshot} from './studio-protocol';
 import {studioGeneratedProjectInput,studioGeneratedSpecInput,studioGeneratedWorkUnitInput,studioGeneratedArtifactRegisterInput} from './studio-generated-protocol';
 import {recordGeneratedStudioReview,prepareGeneratedStudioDelivery,assertGeneratedStudioTaskArtifact} from './studio-generated-review';
 import {createAgentRunInTransaction} from './agent-runs';
@@ -156,9 +156,9 @@ export async function studioProjectDetail(client:PoolClient,companyId:string,pro
  if(project.contractVersion===2){
   const shots=await studioGeneratedShots(client,companyId,projectId);
   if(shots.some(shot=>shot.kind!==project.spec.kind))fail(409,'Generated deliverables disagree with their project specification.','STUDIO_GENERATED_EVIDENCE_INVALID');
-  const {loadStoredGeneratedArtifact}=await import('./studio-generated-artifacts');
+  const {loadStoredGeneratedArtifacts}=await import('./studio-generated-artifacts');
   const ids=(await client.query<{id:string}>('SELECT id FROM studio_artifacts WHERE company_id=$1 AND project_id=$2 ORDER BY created_at DESC,id DESC LIMIT 1000',[companyId,projectId])).rows;
-  const artifacts:StudioGeneratedArtifact[]=[];for(const artifact of ids)artifacts.push((await loadStoredGeneratedArtifact(client,companyId,projectId,artifact.id)).artifact);
+  const artifacts=(await loadStoredGeneratedArtifacts(client,companyId,projectId,ids.map(artifact=>artifact.id))).map(stored=>stored.artifact);
   const reviews=(await client.query('SELECT 2 AS "contractVersion",r.id,r.artifact_id AS "artifactId",r.decision,r.note,r.technical_qc AS "technicalQc",r.reviewed_by AS "reviewedBy",r.created_at AS "createdAt",e.spec_sha256 AS "specSha256",e.manifest_sha256 AS "manifestSha256",e.attestation_version AS "attestationVersion",e.technical_match AS "technicalMatch" FROM studio_reviews r JOIN studio_generated_review_evidence e ON e.company_id=r.company_id AND e.project_id=r.project_id AND e.review_id=r.id WHERE r.company_id=$1 AND r.project_id=$2 ORDER BY r.created_at DESC,r.id DESC LIMIT 1000',[companyId,projectId])).rows;
   const deliveries=(await client.query('SELECT id,name,status,manifest,note,created_at AS "createdAt" FROM studio_deliveries WHERE company_id=$1 AND project_id=$2 ORDER BY created_at DESC,id DESC LIMIT 100',[companyId,projectId])).rows;
   const roles=await studioRoles(client,companyId,project.productionPath),skillKeys=new Set(roles.flatMap(role=>role.skills));
