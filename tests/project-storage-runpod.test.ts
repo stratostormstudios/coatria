@@ -47,6 +47,12 @@ test('HEAD returns metadata, only maps genuine 404 to missing, and sanitizes oth
  const denied=fixture(()=>xml(`<Error><Code>AccessDenied</Code><Message>${config.credentials.secretAccessKey}</Message></Error>`,403));try{await assert.rejects(denied.storage.head(versionId),error=>isCode('STORAGE_PROVIDER_UNAVAILABLE')(error)&&!String(error).includes(config.credentials.secretAccessKey));assert.equal(denied.calls.length,1);}finally{denied.storage.close();}
 });
 
+test('known-volume access requires signed HEAD200 on only the selected bucket and never treats404 as authenticated access',async()=>{
+ const f=fixture(({url,init})=>{assert.equal(init.method,'HEAD');assert.equal(url.pathname,'/'+config.volumeId+'/');assert.equal(url.searchParams.size,0);assert.match(new Headers(init.headers).get('authorization')!,/^AWS4-HMAC-SHA256 /);return new Response(null,{status:200});});try{assert.equal(await f.storage.verifyBucketAccess(),undefined);assert.equal(f.calls.length,1);}finally{f.storage.close();}
+ for(const status of[403,404,500]){const denied=fixture(()=>new Response(null,{status}));try{await assert.rejects(denied.storage.verifyBucketAccess(),isCode('STORAGE_PROVIDER_UNAVAILABLE'));assert.equal(denied.calls.length,1);}finally{denied.storage.close();}}
+ const malformed=fixture(()=>new Response(null,{status:201}));try{await assert.rejects(malformed.storage.verifyBucketAccess(),isCode('STORAGE_PROVIDER_PROTOCOL'));}finally{malformed.storage.close();}
+});
+
 test('HEAD allows heavy object lengths without treating them as a metadata response body',async()=>{
  const f=fixture(()=>new Response(null,{headers:{'Content-Length':String(10*1024**3),ETag:'"large-object"'}}),{maxObjectBytes:100*1024**3});try{assert.equal((await f.storage.head(versionId))?.bytes,10*1024**3);assert.equal(f.calls.length,1);}finally{f.storage.close();}
 });

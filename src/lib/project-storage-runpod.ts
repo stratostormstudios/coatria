@@ -2,7 +2,7 @@
 // Authorization and durable transfer receipts belong to the service/gateway, not this adapter.
 import {createHash} from 'node:crypto';
 import {Readable} from 'node:stream';
-import {S3Client, ListObjectsV2Command, HeadObjectCommand, GetObjectCommand, CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand, AbortMultipartUploadCommand} from '@aws-sdk/client-s3';
+import {S3Client, ListObjectsV2Command, HeadBucketCommand, HeadObjectCommand, GetObjectCommand, CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand, AbortMultipartUploadCommand} from '@aws-sdk/client-s3';
 import {RUNPOD_STORAGE_REGIONS,runpodStorageEndpoint} from './project-storage-protocol';
 
 export {RUNPOD_STORAGE_REGIONS,runpodStorageEndpoint};
@@ -36,6 +36,8 @@ export interface RunpodObjectMetadata {versionId:string;bytes:number;etag:string
 export interface RunpodObjectPage {objects:RunpodObjectMetadata[];cursor:string|null}
 export interface RunpodObjectRead {stream:ReadableStream<Uint8Array>;bytes:number;totalBytes:number;etag:string;contentType:string|null;contentRange:string|null;range:{start:number;end:number}|null}
 export interface RunpodProjectStorage {
+ /** Confirms a successful HEAD of the configured volume. Does not prove write permissions. */
+ verifyBucketAccess(options?:RunpodStorageOptions):Promise<void>;
  list(input?:{cursor?:string;limit?:number}&RunpodStorageOptions):Promise<RunpodObjectPage>;
  head(versionId:string,options?:RunpodStorageOptions):Promise<RunpodObjectMetadata|null>;
  createMultipart(input:{versionId:string;bytes:number;contentType:string}&RunpodStorageOptions):Promise<RunpodMultipartUpload>;
@@ -125,6 +127,9 @@ export function createRunpodProjectStorage(config:RunpodProjectStorageConfig,tra
  function metadata(value:unknown,versionId:string):RunpodObjectMetadata{const o=record(value);const modified=o.LastModified instanceof Date&&!Number.isNaN(o.LastModified.valueOf())?o.LastModified.toISOString():null;const contentType=typeof o.ContentType==='string'?o.ContentType.slice(0,160):null;return {versionId,bytes:integer(o.ContentLength??o.Size,0,maxObjectBytes,'STORAGE_PROVIDER_PROTOCOL'),etag:etag(o.ETag),modifiedAt:modified,contentType};}
  return {
   validateMultipart:upload,
+  async verifyBucketAccess(options={}){
+   const context=begin(options.signal);try{const result=record(await untilAborted(context.current.signal,()=>client.send(new HeadBucketCommand({Bucket:config.volumeId}),{abortSignal:context.current.signal})));if(status(result)!==200)fail('STORAGE_PROVIDER_PROTOCOL');}catch(e){throw error(e,false);}finally{context.finish();}
+  },
   async list(input={}){
    const limit=integer(input.limit??50,1,100);let continuation:string|undefined;
    if(input.cursor!==undefined){try{const raw=JSON.parse(Buffer.from(text(input.cursor,8192,'STORAGE_INPUT_INVALID'),'base64url').toString('utf8'));if(raw.scope!==binding)fail('STORAGE_INPUT_INVALID');continuation=text(raw.token,2048,'STORAGE_INPUT_INVALID');}catch{fail('STORAGE_INPUT_INVALID');}}
