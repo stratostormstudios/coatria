@@ -121,6 +121,9 @@ test('generated continuation persistence is immutable, scoped and source-bound',
    const results=await Promise.allSettled([tx(client=>put(client,a.row)),tx(client=>put(client,b.row))]);assert.equal(results.filter(result=>result.status==='fulfilled').length,1);assert.equal((results.find(result=>result.status==='rejected') as PromiseRejectedResult).reason.code,'23505');
   });
   await t.test('restricted runtime can append/read but cannot rewrite source or steal a step',async()=>{
+   // Earlier assertions exercise the 031 boundary; current runtime grants also
+   // require the additive client storage table introduced in 032.
+   await db.query(await readFile('database/032_studio_generated_client_delivery.sql','utf8'));
    await(control??db).query('CREATE ROLE '+role+' NOLOGIN');roleCreated=true;await db.query((await readFile('database/runtime-permissions.sql','utf8')).replaceAll('coatria_runtime_v1',role));
    // These are the only new grants needed by the invoker-rights step trigger.
    await db.query('GRANT SELECT,INSERT ON studio_generated_followups,studio_generated_followup_steps TO '+role);
