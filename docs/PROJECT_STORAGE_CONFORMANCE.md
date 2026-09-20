@@ -41,6 +41,12 @@ secret fields in the creation dialog. Truncated table previews are not usable
 credentials. Do not infer a fixed credential length or extract the first
 credential-shaped substring from a page containing multiple keys.
 
+Runpod multipart responses can represent the requested object key with one
+leading slash. Create and completion validation accept only the canonical key
+or exactly one leading slash followed by that same key, and still require the
+configured bucket. Request keys are unchanged. Repeated slashes, bucket prefixes,
+URL-encoded aliases and different version keys remain uncertain outcomes.
+
 Before each create,
 part upload, completion and abort, it writes and syncs an intent to the private
 `mutation-journal.jsonl`. Returned descriptors and parts are retained for

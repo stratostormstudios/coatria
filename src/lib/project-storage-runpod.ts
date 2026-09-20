@@ -19,6 +19,8 @@ function text(value:unknown,max=2048,code:RunpodStorageErrorCode='STORAGE_PROVID
 function etag(value:unknown){return text(value,256);}
 function mediaType(value:unknown){if(typeof value!=='string'||value.length>160||!/^[-\w.+]+\/[-\w.+]+$/.test(value))fail('STORAGE_INPUT_INVALID');return value;}
 function status(value:Record<string,unknown>){return record(value.$metadata).httpStatusCode;}
+// Runpod replies may include one leading slash; request keys remain canonical.
+function matchesObjectKey(value:unknown,expected:string){return value===expected||value==='/'+expected;}
 export function runpodProjectRoot(companyId:string,projectId:string){return `coatria/companies/${id(companyId)}/projects/${id(projectId)}/`;}
 export function runpodProjectObjectKey(companyId:string,projectId:string,versionId:string){return runpodProjectRoot(companyId,projectId)+'objects/'+id(versionId);}
 
@@ -147,7 +149,7 @@ export function createRunpodProjectStorage(config:RunpodProjectStorageConfig,tra
   async createMultipart(input){
    const bytes=integer(input.bytes,1,maxObjectBytes);if(Math.ceil(bytes/partBytes)>10000)fail('STORAGE_INPUT_INVALID');const path=key(input.versionId),contentType=mediaType(input.contentType);
    const result=record(await send(new CreateMultipartUploadCommand({Bucket:config.volumeId,Key:path,ContentType:contentType}),true,input.signal));
-   if(status(result)!==200||result.Bucket!==config.volumeId||result.Key!==path)fail('STORAGE_PROVIDER_UNCERTAIN');let uploadId:string;try{uploadId=text(result.UploadId);}catch{fail('STORAGE_PROVIDER_UNCERTAIN');}
+   if(status(result)!==200||result.Bucket!==config.volumeId||!matchesObjectKey(result.Key,path))fail('STORAGE_PROVIDER_UNCERTAIN');let uploadId:string;try{uploadId=text(result.UploadId);}catch{fail('STORAGE_PROVIDER_UNCERTAIN');}
    return {scope:binding,versionId:input.versionId,uploadId,bytes,partBytes};
   },
   async uploadPart(input){
@@ -165,7 +167,7 @@ export function createRunpodProjectStorage(config:RunpodProjectStorageConfig,tra
    const handle=upload(input.upload),count=Math.ceil(handle.bytes/partBytes);if(!Array.isArray(input.parts)||input.parts.length!==count)fail('STORAGE_INPUT_INVALID');
    const parts=input.parts.map((p,index)=>{if(p.partNumber!==index+1||p.bytes!==Math.min(partBytes,handle.bytes-index*partBytes))fail('STORAGE_INPUT_INVALID');return {PartNumber:p.partNumber,ETag:text(p.etag,256,'STORAGE_INPUT_INVALID')};});
    const result=record(await send(new CompleteMultipartUploadCommand({Bucket:config.volumeId,Key:key(handle.versionId),UploadId:handle.uploadId,MultipartUpload:{Parts:parts}}),true,input.signal));
-   if(status(result)!==200||result.Bucket!==config.volumeId||result.Key!==key(handle.versionId))fail('STORAGE_PROVIDER_UNCERTAIN');try{return {versionId:handle.versionId,etag:etag(result.ETag)};}catch{fail('STORAGE_PROVIDER_UNCERTAIN');}
+   if(status(result)!==200||result.Bucket!==config.volumeId||!matchesObjectKey(result.Key,key(handle.versionId)))fail('STORAGE_PROVIDER_UNCERTAIN');try{return {versionId:handle.versionId,etag:etag(result.ETag)};}catch{fail('STORAGE_PROVIDER_UNCERTAIN');}
   },
   async abortMultipart(input){const handle=upload(input.upload);const result=record(await send(new AbortMultipartUploadCommand({Bucket:config.volumeId,Key:key(handle.versionId),UploadId:handle.uploadId}),true,input.signal));if(status(result)!==204)fail('STORAGE_PROVIDER_UNCERTAIN');},
   async get(input){
