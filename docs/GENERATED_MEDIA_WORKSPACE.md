@@ -1,6 +1,6 @@
 # Generated-media workspace — release candidate
 
-The Studio UI now supports the opt-in version 2 image, video and audio contract alongside existing frame-based VFX projects. This is an unreleased candidate; migration 030 and its restricted runtime grants must be deployed with the matching server version. Creating a project does not start provider generation or approve spending.
+The Studio UI now supports the opt-in version 2 image, video and audio contract alongside existing frame-based VFX projects. This is an unreleased candidate; migrations 030–031 and their restricted runtime grants must be deployed with the matching server version. Creating a project does not start provider generation or approve spending.
 
 ## Production flow
 
@@ -24,4 +24,4 @@ All controls use the existing authenticated APIs and published agent contracts. 
 
 The browser fixtures exercise the real React components with locally intercepted API/storage responses and strict production request schemas. Coverage includes all three media contracts, exact archive association, member and reviewer restrictions, stale data, interrupted retries, checksum corruption, work/package boundaries, mobile layout and preserved VFX views. The same browser lane runs against a production Next build in CI, alongside server/PostgreSQL, isolated media decoding, renderer and 50-session checks. Synthetic browser media is not evidence of provider output quality or live storage connectivity.
 
-Before release: qualify the actual archive worker and separately supplied Runpod storage, apply the controlled database/runtime rollout, and verify live permissions and operational recovery. External-account generated-file delivery and acknowledgement remain unfinished. The coordinator also needs the explicitly approved [generated continuation](GENERATED_MEDIA_CONTINUATION_PLAN.md) before an ended specialist can automatically resume from a later verified archive. None of those capabilities is implied by a prepared internal package.
+Before release: qualify the actual archive worker and separately supplied Runpod storage, apply the controlled database/runtime rollout, and verify live permissions and operational recovery. External-account generated-file delivery and acknowledgement remain unfinished. The candidate includes an explicitly approved [generated continuation](GENERATED_MEDIA_CONTINUATION_PLAN.md), default off, which lets a coordinator resume one stopped specialist against an exact verified archive within the existing run allowance. This still requires deployment qualification and a newly reviewed policy. None of those capabilities is implied by a prepared internal package.

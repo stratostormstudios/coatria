@@ -1,6 +1,7 @@
 import {managedAgentAuthoritySql,managedAgentAuthorityPrincipals} from './studio-hosting';
 import {coordinationRunAuthority} from './studio-coordination';
 import {planningReviewRunAuthority} from './studio-review-policy';
+import {generatedFollowupRunAuthority,generatedFollowupRunContext} from './studio-generated-followups';
 import {createHmac,randomUUID} from 'node:crypto';
 import type {PoolClient} from 'pg';
 import {z} from 'zod';
@@ -41,7 +42,11 @@ async function lockedRun(client:PoolClient,identity:AgentRunIdentity,runId:strin
  id(runId);const preview=(await client.query('SELECT requested_by FROM agent_runs WHERE company_id=$1 AND agent_id=$2 AND id=$3',[identity.company_id,identity.id,runId])).rows[0];if(!preview)fail(404,'Agent request not found.');
  const access=await authority(client,identity,preview.requested_by);
  const run=(await client.query("SELECT *,lease_expires_at>clock_timestamp() AND started_at>clock_timestamp()-interval '30 minutes' AS lease_live FROM agent_runs WHERE company_id=$1 AND agent_id=$2 AND id=$3 FOR UPDATE",[identity.company_id,identity.id,runId])).rows[0];
- if(!run)fail(404,'Agent request not found.');await missionAuthority(client,identity.company_id,run,access.requesterRole);if(!await coordinationRunAuthority(client,identity.company_id,run))fail(409,'This delegated work no longer has its exact project approval.','COORDINATION_AUTHORITY_ENDED');if(!await planningReviewRunAuthority(client,identity.company_id,run))fail(409,'This planning review no longer has its exact project approval.','STUDIO_REVIEW_AUTHORITY_ENDED');return{...access,run,capabilities:capabilities(run.capabilities).filter(capability=>capabilities(access.agent.capabilities).includes(capability))};
+ if(!run)fail(404,'Agent request not found.');await missionAuthority(client,identity.company_id,run,access.requesterRole);if(!await coordinationRunAuthority(client,identity.company_id,run))fail(409,'This delegated work no longer has its exact project approval.','COORDINATION_AUTHORITY_ENDED');if(!await planningReviewRunAuthority(client,identity.company_id,run))fail(409,'This planning review no longer has its exact project approval.','STUDIO_REVIEW_AUTHORITY_ENDED');await assertGeneratedRunAuthority(client,identity.company_id,run);
+ // Policy/source checks may wait for locks. A lease read before those waits is
+ // not proof that this worker still has time to act when the checks finish.
+ await refreshRunLease(client,identity.company_id,run);
+ return{...access,run,capabilities:capabilities(run.capabilities).filter(capability=>capabilities(access.agent.capabilities).includes(capability))};
 }
 async function missionAuthority(client:PoolClient,companyId:string,run:Record<string,any>,requesterRole:string|undefined){
  const mission=(await client.query('SELECT m.status,m.created_by FROM agent_mission_cycles c JOIN agent_missions m ON m.company_id=c.company_id AND m.id=c.mission_id WHERE c.company_id=$1 AND c.run_id=$2',[companyId,run.id])).rows[0];
@@ -52,6 +57,20 @@ async function missionAuthority(client:PoolClient,companyId:string,run:Record<st
 function requireLease(run:Record<string,any>,leaseToken:string){
  if(run.status==='cancelled')fail(409,'This request was cancelled.','RUN_CANCELLED');
  if(run.status!=='running'||!run.lease_live||run.lease_token_hash!==hashToken(leaseToken))fail(409,'This worker no longer owns a live lease.','RUN_LEASE_LOST');
+}
+async function assertGeneratedRunAuthority(client:PoolClient,companyId:string,run:Record<string,any>){
+ if(!await generatedFollowupRunAuthority(client,companyId,run))fail(409,'This generated continuation no longer has its exact project, policy or source approval.','STUDIO_GENERATED_FOLLOWUP_AUTHORITY_ENDED');
+}
+/** The caller already holds this run's row lock; refresh time after later waits. */
+async function refreshRunLease(client:PoolClient,companyId:string,run:Record<string,any>){
+ const current=(await client.query("SELECT status,lease_token_hash,lease_expires_at,lease_expires_at>clock_timestamp() AND started_at>clock_timestamp()-interval '30 minutes' AS lease_live FROM agent_runs WHERE company_id=$1 AND id=$2",[companyId,run.id])).rows[0];
+ if(!current)fail(404,'Agent request not found.');Object.assign(run,current);
+}
+/** Recheck generated source/policy and DB-time lease after tool effects/receipt
+ * locks, while the enclosing transaction can still roll every effect back. */
+export async function assertRunToolCommitAuthority(client:PoolClient,identity:Pick<AgentRunIdentity,'company_id'>,run:Record<string,any>,leaseToken:string){
+ await assertGeneratedRunAuthority(client,identity.company_id,run);
+ await refreshRunLease(client,identity.company_id,run);requireLease(run,leaseToken);
 }
 /** Caller owns the transaction. Locks company -> sorted memberships -> agent -> run. */
 export async function authorizeRunTool(client:PoolClient,identity:AgentRunIdentity,runId:string,leaseToken:string){const access=await lockedRun(client,identity,runId);requireLease(access.run,leaseToken);return access as{run:Record<string,any>;capabilities:string[];requesterRole:string;agent:Record<string,any>};}
@@ -108,7 +127,7 @@ export async function claimAgentRun(identity:AgentRunIdentity,input:unknown){
   const prior=(await client.query('SELECT * FROM agent_run_claims WHERE agent_id=$1 AND claim_id=$2',[identity.id,data.claimId])).rows[0];
   if(prior){if(prior.worker_id!==data.workerId)fail(409,'This claim key belongs to a different worker.','IDEMPOTENCY_CONFLICT');if(!prior.run_id)return{run:null,replayed:true};
    const proof=leaseProof(identity,prior.run_id,prior.attempt,data.claimId),run=(await client.query("SELECT *,lease_expires_at>clock_timestamp() AND started_at>clock_timestamp()-interval '30 minutes' AS lease_live FROM agent_runs WHERE company_id=$1 AND id=$2 FOR UPDATE",[identity.company_id,prior.run_id])).rows[0];
-   if(!await coordinationRunAuthority(client,identity.company_id,run))fail(409,'This delegated work no longer has its exact project approval.','COORDINATION_AUTHORITY_ENDED');if(!await planningReviewRunAuthority(client,identity.company_id,run))fail(409,'This planning review no longer has its exact project approval.','STUDIO_REVIEW_AUTHORITY_ENDED');requireLease(run,proof);const requester=(await client.query("SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2 AND role<>'removed'",[identity.company_id,run.requested_by])).rows[0];if(!requester||access.agent.invocation_access==='admins'&&!['owner','admin'].includes(requester.role))fail(403,'The requester no longer has access.','RUN_REQUESTER_ACCESS');await missionAuthority(client,identity.company_id,run,requester.role);return{run:await project(client,identity.company_id,run.id),leaseToken:proof,leaseExpiresAt:run.lease_expires_at,replayed:true};}
+   if(!await coordinationRunAuthority(client,identity.company_id,run))fail(409,'This delegated work no longer has its exact project approval.','COORDINATION_AUTHORITY_ENDED');if(!await planningReviewRunAuthority(client,identity.company_id,run))fail(409,'This planning review no longer has its exact project approval.','STUDIO_REVIEW_AUTHORITY_ENDED');await assertGeneratedRunAuthority(client,identity.company_id,run);const requester=(await client.query("SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2 AND role<>'removed'",[identity.company_id,run.requested_by])).rows[0];if(!requester||access.agent.invocation_access==='admins'&&!['owner','admin'].includes(requester.role))fail(403,'The requester no longer has access.','RUN_REQUESTER_ACCESS');await missionAuthority(client,identity.company_id,run,requester.role);const result=await project(client,identity.company_id,run.id);await assertRunToolCommitAuthority(client,identity,run,proof);return{run:result,leaseToken:proof,leaseExpiresAt:run.lease_expires_at,replayed:true};}
   // Company KEY SHARE prevents member offboarding from committing during this claim.
   await client.query("UPDATE agent_runs r SET status='cancelled',worker_id=NULL,lease_token_hash=NULL,lease_expires_at=NULL,finished_at=clock_timestamp(),updated_at=clock_timestamp(),error='Requester access ended.' WHERE r.company_id=$1 AND r.agent_id=$2 AND r.status IN ('queued','running') AND NOT EXISTS(SELECT 1 FROM memberships m WHERE m.company_id=r.company_id AND m.user_id=r.requested_by AND m.role<>'removed' AND ($3<>'admins' OR m.role IN ('owner','admin')))",[identity.company_id,identity.id,access.agent.invocation_access]);
   await client.query("UPDATE agent_runs SET status='failed',worker_id=NULL,lease_token_hash=NULL,lease_expires_at=NULL,finished_at=clock_timestamp(),updated_at=clock_timestamp(),error='The 30-minute execution deadline was reached.' WHERE company_id=$1 AND agent_id=$2 AND status IN ('queued','running') AND started_at<=clock_timestamp()-interval '30 minutes'",[identity.company_id,identity.id]);
@@ -118,15 +137,36 @@ export async function claimAgentRun(identity:AgentRunIdentity,input:unknown){
   if(!(await client.query("SELECT id FROM agent_runs WHERE company_id=$1 AND agent_id=$2 AND status='running' AND lease_expires_at>clock_timestamp()",[identity.company_id,identity.id])).rowCount)run=(await client.query("SELECT * FROM agent_runs WHERE company_id=$1 AND agent_id=$2 AND status='queued' AND available_at<=clock_timestamp() AND attempts<max_attempts ORDER BY available_at,created_at,id FOR UPDATE SKIP LOCKED LIMIT 1",[identity.company_id,identity.id])).rows[0];
   if(run&&!await coordinationRunAuthority(client,identity.company_id,run)){await client.query("UPDATE agent_runs SET status='cancelled',finished_at=clock_timestamp(),error='Project coordination authority ended.' WHERE company_id=$1 AND id=$2",[identity.company_id,run.id]);run=undefined;}
   if(run&&!await planningReviewRunAuthority(client,identity.company_id,run)){await client.query("UPDATE agent_runs SET status='cancelled',finished_at=clock_timestamp(),error='Planning review authority ended.' WHERE company_id=$1 AND id=$2",[identity.company_id,run.id]);run=undefined;}
+  if(run&&!await generatedFollowupRunAuthority(client,identity.company_id,run)){await client.query("UPDATE agent_runs SET status='cancelled',finished_at=clock_timestamp(),error='Generated continuation authority ended.' WHERE company_id=$1 AND id=$2",[identity.company_id,run.id]);run=undefined;}
   if(!run){await client.query('INSERT INTO agent_run_claims(company_id,agent_id,claim_id,worker_id) VALUES($1,$2,$3,$4)',[identity.company_id,identity.id,data.claimId,data.workerId]);return{run:null,replayed:false};}
   const attempt=run.attempts+1,proof=leaseProof(identity,run.id,attempt,data.claimId);
   await client.query("UPDATE agent_runs SET status='running',attempts=$3,worker_id=$4,lease_token_hash=$5,lease_expires_at=clock_timestamp()+interval '60 seconds',started_at=COALESCE(started_at,clock_timestamp()),updated_at=clock_timestamp(),error='' WHERE company_id=$1 AND id=$2",[identity.company_id,run.id,attempt,data.workerId,hashToken(proof)]);
   await client.query('INSERT INTO agent_run_claims(company_id,agent_id,claim_id,worker_id,run_id,attempt) VALUES($1,$2,$3,$4,$5,$6)',[identity.company_id,identity.id,data.claimId,data.workerId,run.id,attempt]);
-  const result=await project(client,identity.company_id,run.id);return{run:result,leaseToken:proof,leaseExpiresAt:result.leaseExpiresAt,replayed:false};
+  const result=await project(client,identity.company_id,run.id);await refreshRunLease(client,identity.company_id,run);await assertRunToolCommitAuthority(client,identity,run,proof);return{run:result,leaseToken:proof,leaseExpiresAt:result.leaseExpiresAt,replayed:false};
  });
 }
-export async function heartbeatAgentRun(identity:AgentRunIdentity,runId:string,input:unknown){const data=parse(leaseInput,input);return transaction(async client=>{await authorizeRunTool(client,identity,runId,data.leaseToken);await client.query("UPDATE agent_runs SET lease_expires_at=clock_timestamp()+interval '60 seconds',updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2",[identity.company_id,runId]);const run=await project(client,identity.company_id,runId);return{run,leaseExpiresAt:run.leaseExpiresAt};});}
-export async function agentRunContext(identity:AgentRunIdentity,runId:string,leaseToken:string){parse(leaseInput,{leaseToken});return transaction(async client=>{const access=await authorizeRunTool(client,identity,runId,leaseToken);await client.query('SELECT id FROM conversations WHERE company_id=$1 AND id=$2 FOR SHARE',[identity.company_id,access.run.conversation_id]);const messages=access.run.purpose==='connection_test'?[]:(await client.query(`SELECT m.id,m.body,m.parent_id AS "parentId",m.sequence::text AS sequence,m.deleted_at AS "deletedAt",m.actor_kind AS "actorKind",COALESCE(m.user_id,m.agent_id) AS "actorId",COALESCE(u.name,a.name,'Former teammate') AS "authorName" FROM messages m LEFT JOIN users u ON u.id=m.user_id LEFT JOIN agents a ON a.company_id=m.company_id AND a.id=m.agent_id WHERE m.company_id=$1 AND m.conversation_id=$2 AND (($3::uuid IS NULL AND m.parent_id IS NULL) OR m.id=$3 OR m.parent_id=$3) ORDER BY (m.id=$3) DESC NULLS LAST,m.sequence DESC LIMIT 30`,[identity.company_id,access.run.conversation_id,access.run.parent_id])).rows.sort((a,b)=>BigInt(a.sequence)<BigInt(b.sequence)?-1:1);return{run:await project(client,identity.company_id,runId),messages,capabilities:access.capabilities,installation:await installedRuntimeContext(client,identity.company_id,identity.id)};});}
+export async function heartbeatAgentRun(identity:AgentRunIdentity,runId:string,input:unknown){
+ const data=parse(leaseInput,input);return transaction(async client=>{
+  const access=await authorizeRunTool(client,identity,runId,data.leaseToken);
+  await client.query("UPDATE agent_runs SET lease_expires_at=clock_timestamp()+interval '60 seconds',updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2",[identity.company_id,runId]);
+  const run=await project(client,identity.company_id,runId);await assertRunToolCommitAuthority(client,identity,access.run,data.leaseToken);return{run,leaseExpiresAt:run.leaseExpiresAt};
+ });
+}
+export async function agentRunContext(identity:AgentRunIdentity,runId:string,leaseToken:string){
+ parse(leaseInput,{leaseToken});return transaction(async client=>{
+  const access=await authorizeRunTool(client,identity,runId,leaseToken);
+  const generatedFollowup=await generatedFollowupRunContext(client,identity.company_id,runId);
+  // Source-bound work receives its exact evidence and server-owned steps. Nearby
+  // conversation messages cannot expand this continuation's objective or scope.
+  let messages:Record<string,any>[]=[];
+  if(generatedFollowup===null){
+   await client.query('SELECT id FROM conversations WHERE company_id=$1 AND id=$2 FOR SHARE',[identity.company_id,access.run.conversation_id]);
+   if(access.run.purpose!=='connection_test')messages=(await client.query(`SELECT m.id,m.body,m.parent_id AS "parentId",m.sequence::text AS sequence,m.deleted_at AS "deletedAt",m.actor_kind AS "actorKind",COALESCE(m.user_id,m.agent_id) AS "actorId",COALESCE(u.name,a.name,'Former teammate') AS "authorName" FROM messages m LEFT JOIN users u ON u.id=m.user_id LEFT JOIN agents a ON a.company_id=m.company_id AND a.id=m.agent_id WHERE m.company_id=$1 AND m.conversation_id=$2 AND (($3::uuid IS NULL AND m.parent_id IS NULL) OR m.id=$3 OR m.parent_id=$3) ORDER BY (m.id=$3) DESC NULLS LAST,m.sequence DESC LIMIT 30`,[identity.company_id,access.run.conversation_id,access.run.parent_id])).rows.sort((a,b)=>BigInt(a.sequence)<BigInt(b.sequence)?-1:1);
+  }
+  const result={run:await project(client,identity.company_id,runId),messages,capabilities:access.capabilities,installation:await installedRuntimeContext(client,identity.company_id,identity.id),...generatedFollowup===null?{}:{generatedFollowup}};
+  await assertRunToolCommitAuthority(client,identity,access.run,leaseToken);return result;
+ });
+}
 export async function finishAgentRun(identity:AgentRunIdentity,runId:string,kind:'complete'|'fail',input:unknown){
  const data=kind==='complete'?parse(completeInput,input):parse(failInput,input);
  return transaction(async client=>{
@@ -136,10 +176,13 @@ export async function finishAgentRun(identity:AgentRunIdentity,runId:string,kind
   if(prior){if(prior.payload_hash!==digest||prior.kind!==kind)fail(409,'This completion key was used for another result.','IDEMPOTENCY_CONFLICT');if(prior.lease_token_hash!==hashToken(data.leaseToken))fail(409,'This receipt belongs to another lease.','RUN_LEASE_LOST');return{...prior.response,replayed:true};}
   requireLease(access.run,data.leaseToken);
   if(kind==='complete'&&'result'in data){
+   const continuation=await generatedFollowupRunContext(client,identity.company_id,runId);
+   if(continuation!==null&&continuation.nextStep!=='submitted')fail(409,'Submit the pinned generated task before completing this continuation. Use fail to report a blocked or unsuccessful continuation.','GENERATED_FOLLOWUP_INCOMPLETE');
    const channel=(await client.query('SELECT room_id FROM conversations WHERE company_id=$1 AND id=$2',[identity.company_id,access.run.conversation_id])).rows[0];
    const result=await sendRunConversationMessage(client,{kind:'agent',companyId:identity.company_id,userId:identity.created_by,agentId:identity.id,tokenHash:identity.token_hash},channel.room_id||'commons',{clientId:randomUUID(),body:data.result.length>3800?data.result.slice(0,3800)+'\n\nOpen the agent request to read the full result.':data.result,parentId:access.run.parent_id});
+   await assertRunToolCommitAuthority(client,identity,access.run,data.leaseToken);
    await client.query("UPDATE agent_runs SET status='succeeded',result=$3,artifact_url=$4,result_message_id=$5,error='',worker_id=NULL,lease_token_hash=NULL,lease_expires_at=NULL,finished_at=clock_timestamp(),updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2",[identity.company_id,runId,data.result,data.artifactUrl||null,result.message.id]);
-  }else if('error'in data)await client.query("UPDATE agent_runs SET status=CASE WHEN $4::boolean OR attempts>=max_attempts OR EXISTS(SELECT 1 FROM agent_mission_cycles mc WHERE mc.company_id=agent_runs.company_id AND mc.run_id=agent_runs.id) THEN 'failed' ELSE 'queued' END,error=$3,available_at=clock_timestamp()+CASE WHEN attempts=1 THEN interval '5 seconds' ELSE interval '30 seconds' END,worker_id=NULL,lease_token_hash=NULL,lease_expires_at=NULL,finished_at=CASE WHEN $4::boolean OR attempts>=max_attempts OR EXISTS(SELECT 1 FROM agent_mission_cycles mc WHERE mc.company_id=agent_runs.company_id AND mc.run_id=agent_runs.id) THEN clock_timestamp() ELSE NULL END,updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2",[identity.company_id,runId,data.error,data.retryable===false]);
+  }else if('error'in data){await assertRunToolCommitAuthority(client,identity,access.run,data.leaseToken);await client.query("UPDATE agent_runs SET status=CASE WHEN $4::boolean OR attempts>=max_attempts OR EXISTS(SELECT 1 FROM agent_mission_cycles mc WHERE mc.company_id=agent_runs.company_id AND mc.run_id=agent_runs.id) THEN 'failed' ELSE 'queued' END,error=$3,available_at=clock_timestamp()+CASE WHEN attempts=1 THEN interval '5 seconds' ELSE interval '30 seconds' END,worker_id=NULL,lease_token_hash=NULL,lease_expires_at=NULL,finished_at=CASE WHEN $4::boolean OR attempts>=max_attempts OR EXISTS(SELECT 1 FROM agent_mission_cycles mc WHERE mc.company_id=agent_runs.company_id AND mc.run_id=agent_runs.id) THEN clock_timestamp() ELSE NULL END,updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2",[identity.company_id,runId,data.error,data.retryable===false]);}
   const response={run:await project(client,identity.company_id,runId)};await client.query('INSERT INTO agent_run_receipts(company_id,run_id,client_id,kind,payload_hash,lease_token_hash,response) VALUES($1,$2,$3,$4,$5,$6,$7)',[identity.company_id,runId,data.clientId,kind,digest,hashToken(data.leaseToken),JSON.stringify(response)]);return{...response,replayed:false};
  });
 }

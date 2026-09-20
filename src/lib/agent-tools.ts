@@ -6,10 +6,10 @@ import {proposeHiggsfieldArchive,listHiggsfieldArchives,getHiggsfieldArchive} fr
 import {managedAgentAuthoritySql,managedAgentAuthorityPrincipals} from './studio-hosting';
 import {createHash} from 'node:crypto';
 import {z} from 'zod';
-import type {PoolClient} from 'pg';
 import {transaction} from './db';
 import {authenticateAgent} from './integrations';
-import {authorizeRunTool,type AgentRunIdentity} from './agent-runs';
+import {authorizeRunTool,assertRunToolCommitAuthority,type AgentRunIdentity} from './agent-runs';
+import {executeAgentTaskAction,agentTaskProjection as taskProjection,recordAgentTaskAuthors as authors} from './agent-task-actions';
 import {requireMembership,lockMembership} from './auth';
 import {body,fail,id,json,rateLimit,uuid} from './security';
 import {layoutInput,roomInput,submissionUrl,text} from './model';
@@ -19,7 +19,7 @@ import type {AgentCapability} from './agent-policy';
 import {STUDIO_TEMPLATES,studioProjectPlanInput,studioArtifactRegisterInput,studioCompanyPlanInput,planStudioCompany,type StudioProjectDetail,type StudioReadableProjectDetail,type StudioReadableSnapshot} from './studio-protocol';
 import {studioGeneratedProjectPlanInput,studioGeneratedArtifactRegisterInput} from './studio-generated-protocol';
 import {registerStudioGeneratedArtifact} from './studio-generated-artifacts';
-import {studioSnapshot,studioProjectDetail,createStudioProject,registerStudioArtifact,assertStudioTaskAction} from './studio';
+import {studioSnapshot,studioProjectDetail,createStudioProject,registerStudioArtifact} from './studio';
 import {studioStaffingPlanInput} from './studio-staffing-protocol';
 import {proposeStudioStaffing,getStudioStaffingProposal,listStudioStaffingProposals} from './studio-staffing';
 import {executionPlanInput} from './studio-execution-protocol';
@@ -28,6 +28,8 @@ import {studioCoordinationGetInput,studioWorkDispatchInput} from './studio-coord
 import {studioCoordinationSnapshot,dispatchStudioWork} from './studio-coordination';
 import {assertRenderFollowupTool} from './studio-render-followups';
 import {assertCreativeFollowupTool} from './studio-creative-followup';
+import {studioGeneratedFollowupGetInput,studioGeneratedFollowupDispatchInput,studioGeneratedFollowupAdvanceInput} from './studio-generated-followup-protocol';
+import {assertGeneratedFollowupTool,studioGeneratedFollowupSnapshot,dispatchStudioGeneratedFollowup,advanceStudioGeneratedFollowup} from './studio-generated-followups';
 import {studioReviewPolicyGetInput,studioReviewDispatchInput,studioReviewReadInput,studioReviewDecideInput} from './studio-review-policy-protocol';
 import {studioReviewAgentSnapshot,dispatchStudioReview,readStudioPlanningReview,decideStudioPlanningReview} from './studio-review-policy';
 import {studioClientDeliveryListInput} from './studio-client-delivery-protocol';
@@ -67,6 +69,9 @@ export const AGENT_TOOLS:Record<string,ToolDefinition>={
  studio_storage_references_list:{capability:'infrastructure.read',description:'Read project-bound immutable snapshots of indexed heavy-file references. Shows changed/missing/revoked indices; never mounts storage or exposes file bytes.',mutating:false,schema:page.extend({projectId:uuid}).strict()},
  studio_storage_reference_register:{capability:'studio.write',description:'Pin an existing same-company drive index entry to the exact assigned project/task, checking expected size and modified timestamp. Metadata only: no hashing, file access, provider upload or execution.',mutating:true,schema:studioStorageReferencePlanInput.extend({projectId:uuid}).strict()},
  studio_coordination_get:{capability:'studio.read',description:'Read the exact administrator-approved project coordination policy, remaining lifetime specialist run count, durable parent-child receipts and renderFollowups eligible for one continuation after verified publication and human promotion. A run limit is not a dollar budget. No workers start.',mutating:false,schema:studioCoordinationGetInput},
+ studio_generated_followups_get:{capability:'studio.read',description:'Read generated-media continuation eligibility and durable history for one contractVersion:2 project, optionally one exact archive. Follow nextAfter. A verified archive is not creative approval. No worker starts and no file bytes or provider credentials are exposed.',mutating:false,schema:studioGeneratedFollowupGetInput},
+ studio_generated_followup_dispatch:{capability:'studio.write',additionalCapabilities:['studio.read','tasks.write'],description:'As the exact approved coordinator, queue one source-bound specialist continuation for an existing generated work item and verified archive under the explicit current project and policy revisions. Consumes shared finite coordination limits. The child can only read exact metadata and advance claim, register and submit steps. No generation, file transfer, approval, delegation or automatic failed-child retry.',mutating:true,schema:studioGeneratedFollowupDispatchInput},
+ studio_generated_followup_advance:{capability:'studio.write',additionalCapabilities:['studio.read','tasks.write','creative.read','creative.write','storage.read'],description:'Advance this source-bound generated continuation through claim, register, then submit. Supply only the exact projectId, workItemId and step from generatedFollowup context. The server owns task revisions, artifact metadata and stable step receipt IDs; retry the same step after an uncertain response. Submission requests independent review and never approves media or delivery. Direct tasks_* tools are unavailable to this continuation.',mutating:true,schema:studioGeneratedFollowupAdvanceInput},
  studio_review_policy_get:{capability:'studio.read',description:'Read the exact opt-in planning review policy, remaining reviewer runs and machine review receipts. Machine planning acceptance is distinct from human review, media QC and business or client approval.',mutating:false,schema:studioReviewPolicyGetInput},
  studio_client_deliveries_list:{capability:'studio.read',description:'Read account-bound client package grants and receipt summaries for this project. Distinguishes portal opens, download access issuance and authenticated client acknowledgement. Does not issue file access, send a link, disclose private storage URLs, or impersonate a client.',mutating:false,schema:studioClientDeliveryListInput.extend({projectId:z.string().uuid()}).strict()},
  studio_review_dispatch:{capability:'studio.write',description:'As the approved coordinator, queue one distinct reviewer for an exact submitted planning task revision. The server pins the submission, producing agent and policy; every attempt consumes the finite reviewer run allowance. Cannot review media, approve business gates or accept your own work.',mutating:true,schema:studioReviewDispatchInput},
@@ -90,7 +95,7 @@ export const AGENT_TOOLS:Record<string,ToolDefinition>={
  studio_staffing_get:{capability:'studio.read',description:'Read saved company staffing proposals for a current administrator requester. Supply proposalId for the exact reviewed role and skill plan. Does not reveal credentials or apply the proposal.',mutating:false,schema:z.object({proposalId:uuid.optional(),after:uuid.optional(),limit:z.number().int().min(1).max(25).default(10)}).strict().refine(v=>!(v.proposalId&&v.after),'Choose an exact proposal or a page.')},
  studio_execution_get:{capability:'studio.read',description:'Read a company execution page: kind=connectors, inputs, or jobs. Follow page.nextAfter for remaining records. With jobId, read its exact profile, pinned inputs, status and output files, paginated by fileOffset. With inputId read one pinned file reference. Connector file checks are not independent artistic QC. Does not fetch media or return credentials.',mutating:false,schema:z.object({projectId:uuid.optional(),jobId:uuid.optional(),inputId:uuid.optional(),kind:z.enum(['jobs','inputs','connectors']).default('jobs'),after:uuid.optional(),fileOffset:z.number().int().min(0).max(1000).default(0),limit:z.number().int().min(1).max(50).default(25)}).strict().refine(v=>!v.fileOffset||Boolean(v.jobId),'A file offset requires a job.').refine(v=>[v.jobId,v.inputId,v.after].filter(Boolean).length<=1,'Choose an exact resource or a page.')},
  studio_execution_submit:{capability:'studio.execute',description:'Propose a bounded DCC job for this specialist’s currently reserved production task. Uses an administrator-registered connector, exact profile version, pinned input hashes and current project revision. The job waits for human approval; it cannot provision compute, execute arbitrary code, accept media or deliver files.',mutating:true,schema:executionPlanInput},
- studio_plan:{capability:'studio.write',description:'Create a draft studio project and server-generated production plan for an owner or administrator request. Omit contractVersion for the unchanged legacy frame plan. Explicit contractVersion:2 and productionPath:higgsfield create an image, video or audio plan with matching deliverable kinds; no invented frame ranges. Requires separate human approval; never activates work or approves delivery. Generated v2 client sharing and automatic creative follow-ups remain unsupported.',mutating:true,schema:z.union([studioGeneratedProjectPlanInput,studioProjectPlanInput])},
+ studio_plan:{capability:'studio.write',description:'Create a draft studio project and server-generated production plan for an owner or administrator request. Omit contractVersion for the unchanged legacy frame plan. Explicit contractVersion:2 and productionPath:higgsfield create an image, video or audio plan with matching deliverable kinds; no invented frame ranges. Requires separate human approval; never activates work or approves delivery. Generated continuations require their separate explicit coordination policy; generated v2 client sharing remains unavailable.',mutating:true,schema:z.union([studioGeneratedProjectPlanInput,studioProjectPlanInput])},
  studio_artifact_register:{capability:'studio.write',description:'Register an immutable external artifact reference against a project revision for an owner or administrator request. Metadata is declared, not independently verified. Does not download, render, approve or deliver files.',mutating:true,schema:studioArtifactRegisterInput.safeExtend({projectId:uuid})},
  studio_generated_artifact_register:{capability:'studio.write',additionalCapabilities:['creative.read','creative.write','storage.read'],description:'Register one already verified archive as an immutable image/video/audio artifact for an exact contractVersion:2 project and assigned work item. Also requires creative.read, creative.write and storage.read in current grants and this live run. The server loads and checks stored source, file and media evidence; do not supply URLs, hashes or verification claims. Replays recheck current role, project and storage authority. Does not generate, transfer files, submit a task, approve media or share with clients.',mutating:true,schema:studioGeneratedArtifactRegisterInput.omit({clientId:true}).extend({projectId:uuid}).strict()},
  office_presence:{capability:'office.write',description:'Move only this agent and set availability. Requires recurring contact; does not start audio, capture a screen, or control a human.',mutating:true,schema:z.object({roomId:uuid.nullable(),x:z.number().min(-20).max(20),z:z.number().min(-20).max(20),status:z.enum(['available','focus','away'])}).strict()},
@@ -108,9 +113,7 @@ function parse<T>(schema:z.ZodType<T>,value:unknown):T{const result=schema.safeP
 export function agentToolInputSchema(definition:Pick<ToolDefinition,'schema'>){return {...z.toJSONSchema(definition.schema,{unrepresentable:'any',io:'input'}),type:'object' as const};}
 function canonical(value:unknown):string{if(Array.isArray(value))return '['+value.map(canonical).join(',')+']';if(value&&typeof value==='object')return '{'+Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>JSON.stringify(k)+':'+canonical(v)).join(',')+'}';return JSON.stringify(value);}
 const proposalColumns=`p.id,p.agent_id AS "agentId",a.name AS "agentName",p.run_id AS "runId",p.requested_by AS "requestedBy",p.kind,p.data,p.status,p.created_at AS "createdAt",p.expires_at AS "expiresAt",p.reviewed_at AS "reviewedAt",p.reviewed_by AS "reviewedBy",p.result`;
-const taskProjection=`id,title,description,status,assignee_id AS "assigneeId",created_agent_id AS "createdAgentId",agent_run_id AS "agentRunId",revision,submission_url AS "submissionUrl",submission_summary AS "submissionSummary",approved_by AS "approvedBy",approved_agent_id AS "approvedAgentId",machine_review_id AS "machineReviewId",created_at AS "createdAt",updated_at AS "updatedAt"`;
 function paged(rows:Record<string,unknown>[],limit:number,key='id'){const hasMore=rows.length>limit,items=rows.slice(0,limit);return {items,hasMore,nextAfter:hasMore?items.at(-1)?.[key]:null};}
-async function authors(client:PoolClient,taskId:string,requester:string,sponsor:string){await client.query('INSERT INTO task_authors(task_id,user_id) SELECT $1,unnest($2::uuid[]) ON CONFLICT DO NOTHING',[taskId,[...new Set([requester,sponsor])]]);}
 
 const studioAgentPageBytes=96*1024;
 const jsonBytes=(value:unknown)=>Buffer.byteLength(JSON.stringify(value));
@@ -169,7 +172,7 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
  if(name==='studio_staffing_propose'&&hashArgs.templateId==='vfx-boutique')delete hashArgs.templateId;
  const hash=createHash('sha256').update(canonical({tool:name,runId:command.runId,arguments:hashArgs})).digest('hex');
  return transaction(async client=>{
-  const context=await authorizeRunTool(client,agent,command.runId,command.leaseToken);await assertRenderFollowupTool(client,context.agent,context.run,name,args);await assertCreativeFollowupTool(client,context.agent,context.run,name,args);
+  const context=await authorizeRunTool(client,agent,command.runId,command.leaseToken);await assertRenderFollowupTool(client,context.agent,context.run,name,args);await assertCreativeFollowupTool(client,context.agent,context.run,name,args);await assertGeneratedFollowupTool(client,context.agent,context.run,name,args);
   if(![definition.capability,...definition.additionalCapabilities??[]].every(capability=>context.capabilities.includes(capability)))fail(403,'This run does not have permission for this tool.','AGENT_CAPABILITY_REQUIRED');
   if((['studio.write','studio.execute','studio.review','creative.write'].includes(definition.capability)||name==='studio_staffing_get')&&!['owner','admin'].includes(context.requesterRole))fail(403,'Studio changes, planning review and staffing require a current owner or administrator request.','STUDIO_REQUESTER_ACCESS');
   // All operations on a run are serialized after current authority and lease checks.
@@ -182,7 +185,14 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
    if(name==='studio_generated_artifact_register'){
     const{projectId,...artifact}=args;await registerStudioGeneratedArtifact(client,{companyId:agent.company_id,userId:context.run.requested_by,agentId:agent.id,runId:context.run.id,agentSponsorId:agent.created_by},projectId,{...artifact,clientId:command.requestId});
    }
-   return {result:await recordStudioInferenceToolReceipt(client,context.agent,command.runId,command.requestId,name,command.arguments,previous.response),replayed:true};
+   // Transport receipts do not extend a source/policy approval. These services
+   // revalidate their exact durable child/step without creating another effect.
+   if(name==='studio_generated_followup_dispatch')await dispatchStudioGeneratedFollowup(client,context.agent,context.run,args);
+   if(name==='studio_generated_followup_advance')await advanceStudioGeneratedFollowup(client,context.agent,context.run,context.requesterRole,args);
+   const result=await recordStudioInferenceToolReceipt(client,context.agent,command.runId,command.requestId,name,command.arguments,previous.response);
+   if(name==='studio_generated_followup_dispatch')await dispatchStudioGeneratedFollowup(client,context.agent,context.run,args);
+   await assertRunToolCommitAuthority(client,agent,context.run,command.leaseToken);
+   return {result,replayed:true};
   }
   if(definition.mutating&&Number((await client.query('SELECT count(*) FROM agent_tool_receipts WHERE company_id=$1 AND run_id=$2',[agent.company_id,command.runId])).rows[0].count)>=200)fail(409,'This run reached its limit of 200 committed tool actions. Start a new reviewed request.','AGENT_TOOL_BUDGET');
   const run=context.run,companyId=agent.company_id,limit=args.limit||50,values=[companyId,args.after||null,limit+1];let result:unknown;
@@ -222,6 +232,9 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
    case 'hiring_list':result=paged((await client.query('SELECT id,title,description,type,compensation,budget,status FROM openings WHERE company_id=$1 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT $3',values)).rows,limit);break;
    case 'proposals_list':result=paged((await client.query(`SELECT ${proposalColumns} FROM agent_proposals p JOIN agents a ON a.id=p.agent_id WHERE p.company_id=$1 AND ($2::uuid IS NULL OR p.id>$2) AND p.run_id=$4 ORDER BY p.id LIMIT $3`,[...values,run.id])).rows,limit);break;
    case 'studio_coordination_get':result=await studioCoordinationSnapshot(client,companyId,args.projectId);break;
+   case 'studio_generated_followups_get':result=await studioGeneratedFollowupSnapshot(client,companyId,args);break;
+   case 'studio_generated_followup_dispatch':result=await dispatchStudioGeneratedFollowup(client,context.agent,run,args);break;
+   case 'studio_generated_followup_advance':result=await advanceStudioGeneratedFollowup(client,context.agent,run,context.requesterRole,args);break;
    case 'studio_review_policy_get':result=await studioReviewAgentSnapshot(client,companyId,args.projectId,args);break;
    case 'studio_client_deliveries_list':result=await studioClientDeliveryList(client,companyId,args.projectId,studioClientDeliveryListInput.parse({after:args.after,limit:args.limit}));break;
    case 'studio_review_dispatch':result=await dispatchStudioReview(client,context.agent,context.run,args);break;
@@ -256,26 +269,7 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
    case 'tasks_create':{
     result=(await client.query(`INSERT INTO tasks(company_id,title,description,created_by,created_agent_id,agent_run_id) VALUES($1,$2,$3,$4,$5,$6) RETURNING ${taskProjection}`,[companyId,args.title,args.description,run.requested_by,agent.id,run.id])).rows[0];await authors(client,(result as any).id,run.requested_by,agent.created_by);break;
    }
-   case 'tasks_claim':case 'tasks_update':case 'tasks_submit':{
-    await assertStudioTaskAction(client,companyId,args.taskId,name,args,run,context.agent);
-    const task=(await client.query('SELECT * FROM tasks WHERE company_id=$1 AND id=$2 FOR UPDATE',[companyId,args.taskId])).rows[0];if(!task)fail(404,'Task not found.');
-    if(task.revision!==args.revision)fail(409,'The task changed. Read its current revision before continuing.','TASK_CONFLICT');
-    if(task.created_by!==run.requested_by&&!['owner','admin'].includes(context.requesterRole))fail(403,'The requester cannot edit this task. Ask its creator or an administrator.','TASK_REQUESTER_ACCESS');
-    if(task.assignee_id||!['todo','doing'].includes(task.status))fail(409,'This task is assigned to a person or no longer editable.','TASK_UNAVAILABLE');
-    if(name==='tasks_claim'){
-     if(task.agent_run_id&&task.agent_run_id!==run.id){const previousRun=(await client.query('SELECT status FROM agent_runs WHERE company_id=$1 AND id=$2',[companyId,task.agent_run_id])).rows[0];if(!previousRun||!['succeeded','failed','cancelled'].includes(previousRun.status))fail(409,'This task is already reserved.','TASK_RESERVED');}
-     else if(task.status!=='todo'&&task.agent_run_id!==run.id)fail(409,'This task is already in progress.','TASK_RESERVED');
-     await client.query("UPDATE tasks SET agent_run_id=$3,status='doing',revision=revision+1,updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2",[companyId,args.taskId,run.id]);
-    }else{
-     if(task.agent_run_id!==run.id)fail(403,'Only the run reserving this task can change it.','TASK_RUN_REQUIRED');
-     if(name==='tasks_update')await client.query('UPDATE tasks SET title=$3,description=$4,status=$5,revision=revision+1,updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2',[companyId,args.taskId,args.title??task.title,args.description??task.description,args.status??task.status]);
-     else{
-      await client.query("UPDATE tasks SET status='review',submitted_by=NULL,submitted_agent_id=$3,submission_url=$4,submission_summary=$5,review_note='',approved_by=NULL,approved_agent_id=NULL,machine_review_id=NULL,revision=revision+1,updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2",[companyId,args.taskId,agent.id,args.submissionUrl||null,args.summary]);
-      await client.query('INSERT INTO contributions(company_id,task_id,agent_id,summary,submission_url,tokens_used) VALUES($1,$2,$3,$4,$5,$6)',[companyId,args.taskId,agent.id,args.summary,args.submissionUrl||null,args.tokensUsed]);
-     }
-    }
-    await authors(client,args.taskId,run.requested_by,agent.created_by);result=(await client.query(`SELECT ${taskProjection} FROM tasks WHERE company_id=$1 AND id=$2`,[companyId,args.taskId])).rows[0];break;
-   }
+   case 'tasks_claim':case 'tasks_update':case 'tasks_submit':result=await executeAgentTaskAction(client,context.agent,run,context.requesterRole,name,args);break;
    case 'layout_propose':case 'rooms_propose':case 'hiring_propose':{
     if(Number((await client.query("SELECT count(*) FROM agent_proposals WHERE company_id=$1 AND run_id=$2 AND status='pending'",[companyId,run.id])).rows[0].count)>=20)fail(409,'This run already has 20 pending proposals.');
     const kind=name==='layout_propose'?'layout':name==='rooms_propose'?'room':'opening';
@@ -287,6 +281,10 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
    await client.query('INSERT INTO agent_tool_receipts(company_id,agent_id,run_id,request_id,tool,request_hash,response) VALUES($1,$2,$3,$4,$5,$6,$7)',[companyId,agent.id,run.id,command.requestId,name,hash,JSON.stringify(result)]);
    await client.query("INSERT INTO activity(company_id,kind,description) VALUES($1,'agent.tool_used',$2)",[companyId,`${agent.name} used ${name} in run ${run.id}.`]);
   }
+  // A coordinator is not its child: the child lifecycle guard cannot establish
+  // this dispatch's policy deadline after outer receipt writes or lock waits.
+  if(name==='studio_generated_followup_dispatch')await dispatchStudioGeneratedFollowup(client,context.agent,run,args);
+  await assertRunToolCommitAuthority(client,agent,run,command.leaseToken);
   return {result,replayed:false};
  });
 }

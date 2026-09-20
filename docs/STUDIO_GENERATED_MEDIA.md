@@ -3,7 +3,7 @@
 `src/lib/studio-generated-protocol.ts` defines an opt-in version 2 contract for
 new Higgsfield projects. The current checkout connects typed project creation,
 verified-archive registration, independent review and internal packaging. It
-has not yet been released to production. Migration 030 and its restricted
+has not yet been released to production. Migrations 030–031 and their restricted
 runtime grants must ship together with the version-aware API after PostgreSQL
 and integration qualification. This does not enable archive workers, paid
 generation or external storage downloads by itself.
@@ -78,7 +78,7 @@ creation, exact-source registration, independent review, internal packaging and
 checksum-verified downloads. Its browser lane uses synthetic API/storage fixtures.
 
 Remaining product work includes a separately qualified archive host and actual
-Runpod volume transport, plus the [planned bounded agent continuation](GENERATED_MEDIA_CONTINUATION_PLAN.md).
+Runpod volume transport, plus the [bounded agent continuation candidate](GENERATED_MEDIA_CONTINUATION_PLAN.md).
 Client delivery additionally requires its
 exact-version, external-account download grants and gateway. Local synthetic
 database fixtures prove authority rules; they do not prove a real provider

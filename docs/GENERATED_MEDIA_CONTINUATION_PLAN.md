@@ -1,18 +1,18 @@
-# Generated-media continuation — planned
+# Generated-media continuation — implementation candidate
 
-**Design only. Not implemented, deployed or authorized.** This document does
-not approve inference, generation, transfers or migrations. Existing policy
+**Implemented on the development branch; not deployed.** This document does
+not approve inference, generation, transfers or production migrations. Existing policy
 approvals must not acquire the proposed capability automatically. The v2
 generated-media workflow itself remains subject to its release gates in
 [STUDIO_GENERATED_MEDIA.md](STUDIO_GENERATED_MEDIA.md).
 
-## Current gap and manual path
+## Gap addressed and manual alternative
 
 A specialist can claim a v2 generation task and prepare an exact Higgsfield
 request, then stop for human credit approval. Provider execution and a
 separately approved archive may finish after that specialist run ends.
 
-The coordinator cannot currently resume that task against its verified archive:
+The original coordinator dispatch cannot resume that task against its verified archive:
 `studio_work_dispatch` replays the original child for an already dispatched
 work item; its continuation selector supports only DCC `executionJobId`.
 Ordinary dispatch permits completed DCC work to resume, but a creative task
@@ -31,7 +31,7 @@ media QC and task acceptance remain separate operations.
 
 ## Smallest complete workflow
 
-Add an explicit, default-off generated-continuation opt-in to the finite
+The implementation adds an explicit, default-off generated-continuation opt-in to the finite
 coordination policy. A human administrator must review a new policy revision.
 One eligible verified archive then permits one child of the original assigned
 specialist to read its evidence, claim the existing task, register that archive
@@ -51,10 +51,9 @@ registered artifact. Check current storage/source availability and exact
 immutable evidence. A completed archive's historical lease expiry does not
 invalidate its provenance or supply new authority.
 
-## Proposed data model
+## Data model
 
-The next migration after 030, provisionally
-`031_studio_generated_followups.sql`, would add an immutable
+Migration `031_studio_generated_followups.sql` adds an immutable
 `studio_generated_followups` table with:
 
 - Company/project/work/task IDs; original source child; new parent coordinator
@@ -85,11 +84,11 @@ creative-followup and ordinary dispatch receipts unchanged.
 
 ## API, authority and replay
 
-Add a separate `studio-generated-followups` service/protocol rather than change
+The separate `studio-generated-followups` service/protocol preserves
 the meaning of existing dispatch selectors:
 
-- Member GET `.../studio/projects/{id}/generated-followups`: bounded, paginated
-  eligible identities, blockers and historical continuations; no transfer URL.
+- Member GET `.../studio/projects/{id}/generated-followups`: bounded, independently paginated
+  archive candidates (after/nextAfter) and history (historyAfter/historyNextAfter); no transfer URL.
 - Agent read tool for the exact project and optional archive.
 - `studio_generated_followup_dispatch` through the existing authenticated agent
   tool endpoint: `{projectId, workItemId, archiveId, projectRevision,
@@ -115,10 +114,9 @@ generation proposals, new archives, download tickets and delegation.
 Allow only the pinned task claim and submission; registration must use the
 pinned archive and fixed metadata. If another actor registers that source while
 the registration branch is pending, stop for reconciliation rather than switch
-branches silently. Replays use the same step IDs and reviewed arguments. Derive
+branches silently. The model calls `studio_generated_followup_advance` with only projectId, workItemId and step (claim, register or submit). Server-owned inner operation IDs, revisions and fixed metadata remain stable even when Codex, Claude or the provider adapter creates a new transport UUID. Replays reuse the same committed step; models cannot substitute evidence or metadata. Derive
 permitted post-claim/post-registration/post-submission states from exact receipts,
-including this operation's own revisions. Check project revision at dispatch
-and mutation; thereafter compare relevant gates/specification/role/source so
+including this operation's own revisions. Check the caller project revision at dispatch and lock the current project for each mutation; thereafter compare relevant gates/specification/role/source so
 unrelated project work does not invalidate a legitimate continuation.
 
 A repeated dispatch reauthorizes the caller/policy and returns the recorded
@@ -127,14 +125,9 @@ child conflicts. Failed or expired children cannot be automatically requeued.
 Historical GET remains separate from permission to execute. Preserve original
 producer and account attribution; record the new registrar independently.
 
-## Database-time prerequisite
+## Database-time authority
 
-Current `studio-coordination.ts` uses host `Date.now()` for policy expiry and
-creation bounds. Before adding this authority path, replace those decisions
-with database time sampled after the relevant locks, including a final
-pre-commit deadline check. A skewed host clock or a long lock wait must not
-extend approval. This is a required narrow correction, not a relaxation of
-expiry or a new approval.
+The implementation replaces coordinator approval decisions with database time sampled after relevant lock waits and at the end of authority checks. Legacy save request hashes stay unchanged when the optional generatedContinuations field is omitted. Expired exact pause remains available. The leased agent lifecycle refreshes its database clock after authority waits and before committing tool effects.
 
 ## Qualification and boundaries
 
@@ -158,3 +151,15 @@ The first slice allows one continuation per original source child. Further
 corrections need explicit reconciliation or new reviewed work. Media QC, task
 acceptance, provider/worker qualification and external client delivery keep
 their existing independent boundaries. Metadata reads do not inspect pixels.
+
+
+## Candidate qualification
+
+The implementation includes full image/video/audio leased-tool fixtures, exact-source artifact reuse, different transport IDs at every step, current policy/source/storage/sponsor revocation, wrong coordinator requester rejection, scoped context and completion only after submission. A separate persistence fixture tests deferred source relationships, append-only runtime permissions and cross-column step uniqueness. Real PostgreSQL races run in CI; synthetic emulator coverage cannot replace them. Migration 031 must precede this API/UI release and the complete runtime grant file must be applied transactionally by the database owner. Existing policies stay off until a current administrator explicitly enables a new revision.
+
+The UI exposes that opt-in and identifies generated continuation history. New generated coordinator missions include archive candidate/history reads and exact dispatch instructions. Saving a policy or paused mission starts no work. Jev remains a separate optional advisory design in [JEV_DECISION_LAYER.md](JEV_DECISION_LAYER.md); it has no execution or approval authority here.
+
+
+## Concurrent configuration changes
+
+The specialist's own credential/grant changes and explicit policy pause serialize with its held authority rows. New actions after a committed company-role, profile or coordinator-plugin change fail the policy fingerprint check. An unrelated configuration edit may overlap one action already authorized in flight; the edit is not a universal cancellation barrier for that action. Busy production roles cannot be reassigned through studio setup. This candidate does not claim that every configuration edit synchronously cancels all workers; use explicit policy pause, request cancellation and host controls for that operational purpose.

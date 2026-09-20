@@ -209,6 +209,8 @@ test('generated persistence enforces typed projects and immutable verified prove
    assert.equal((await db.query('SELECT count(*)::int AS n FROM studio_deliveries WHERE project_id=$1',[f.p.id])).rows[0].n,0);
   });
   await t.test('runtime grants retain v1 writes and allow only append/read access to generated source and review evidence',async()=>{
+   // Runtime grants target the complete current schema; earlier cases isolate the 030 upgrade.
+   for(const file of migrations.filter(file=>file>'030_studio_generated_media.sql'))await db.query(await readFile('database/'+file,'utf8'));
    await(control??db).query('CREATE ROLE '+role+' NOLOGIN');roleCreated=true;await db.query((await readFile('database/runtime-permissions.sql','utf8')).replaceAll('coatria_runtime_v1',role));
    await tx(async client=>{await insert(client,'studio_artifacts',{...legacyArtifact,id:randomUUID(),version:2,metadata:JSON.stringify(legacyArtifact.metadata)});await insert(client,'studio_reviews',{company_id:company,project_id:legacy.id,artifact_id:legacyArtifact.id,decision:'changes_requested',note:'Legacy remains usable',technical_qc:false,reviewed_by:reviewer});},true);
    await tx(client=>client.query('SELECT artifact_id FROM studio_generated_artifact_sources LIMIT 1'),true);
