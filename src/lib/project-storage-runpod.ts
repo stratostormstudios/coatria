@@ -94,7 +94,8 @@ function sdkTransport(endpoint:string,bucket:string,objectPrefix:string,maxObjec
    const response=await untilAborted(signal,()=>{const pending=transport.fetch(url,{method:request.method,headers,body:request.body as BodyInit|undefined,...request.body instanceof Readable?{duplex:'half'}:{},redirect:'error',cache:'no-store',signal});void pending.then(late=>{if(signal.aborted)cancel(late.body);},()=>{});return pending;});
    if(signal.aborted){cancel(response.body);throw abortError(signal);}
    if(response.headers.get('content-encoding')&&!['identity',''].includes(response.headers.get('content-encoding')!)){cancel(response.body);fail('STORAGE_PROVIDER_PROTOCOL');}
-   const objectGet=request.method==='GET'&&request.path.startsWith('/'+bucket+'/'+objectPrefix)&&!queryString;
+   // GetObject carries the SDK's x-id marker. Other queries (including multipart metadata) keep the metadata cap.
+   const objectGet=request.method==='GET'&&request.path.startsWith('/'+bucket+'/'+objectPrefix)&&Object.entries(request.query??{}).every(([name,value])=>name==='x-id'&&value==='GetObject');
    const maxBytes=objectGet&&response.ok?maxObjectBytes:1024*1024;
    // HEAD's Content-Length describes the object, not an HTTP response body.
    const length=request.method==='HEAD'?null:response.headers.get('content-length');if(length!==null&&(!/^\d+$/.test(length)||Number(length)>maxBytes)){cancel(response.body);fail('STORAGE_RESPONSE_TOO_LARGE');}

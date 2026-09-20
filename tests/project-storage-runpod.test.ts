@@ -107,6 +107,18 @@ test('streamed GET validates full object size and exact range metadata before ex
  try{const whole=await f.storage.get({versionId,maxBytes:6});assert.equal(whole.bytes,6);assert.equal(whole.totalBytes,6);assert.equal(whole.range,null);assert.equal((await buffer(whole.stream)).toString(),'abcdef');const part=await f.storage.get({versionId,range:{start:2,end:4},maxBytes:3});assert.equal(part.totalBytes,6);assert.deepEqual(part.range,{start:2,end:4});assert.equal((await buffer(part.stream)).toString(),'cde');await assert.rejects(f.storage.get({versionId,range:{start:0,end:6},maxBytes:3}),isCode('STORAGE_INPUT_INVALID'));assert.equal(f.calls.length,2);}finally{f.storage.close();}
 });
 
+test('real SDK GetObject query streams more than five MiB through native fetch within the object limit', {timeout:10000},async()=>{
+ const size=5*1024**2+64*1024,body=Buffer.alloc(size,37),expected=createHash('sha256').update(body).digest('hex');let requests=0;
+ const server=createServer((_request,response)=>{requests++;response.writeHead(200,{'Content-Length':String(size),ETag:'"large-get"','Content-Type':'application/octet-stream'});response.end(body);});
+ await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));const address=server.address();assert(address&&typeof address!=='string');
+ const f=fixture(({url,init})=>{assert.equal(url.searchParams.get('x-id'),'GetObject');assert.equal(init.method,'GET');return fetch(`http://127.0.0.1:${address.port}/sdk-download`,init);},{maxObjectBytes:size,timeoutMs:5000});
+ try{const result=await f.storage.get({versionId,maxBytes:size,ifMatch:'"large-get"'}),received=await buffer(result.stream);assert.equal(result.bytes,size);assert.equal(received.length,size);assert.equal(createHash('sha256').update(received).digest('hex'),expected);assert.equal(requests,1);assert.equal(f.calls.length,1);}finally{f.storage.close();server.closeAllConnections();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));}
+});
+
+test('large configured objects do not raise the one MiB cap for metadata or failed object responses',async()=>{
+ for(const kind of['listing','failed-get']){const f=fixture(()=>new Response('x'.repeat(1024*1024+1),{status:kind==='listing'?200:500,headers:{'Content-Type':'application/xml','Content-Length':String(1024*1024+1)}}),{maxObjectBytes:10*1024**2});try{await assert.rejects(kind==='listing'?f.storage.list():f.storage.get({versionId,maxBytes:5*1024**2}),isCode('STORAGE_RESPONSE_TOO_LARGE'));assert.equal(f.calls.length,1);}finally{f.storage.close();}}
+});
+
 test('ignored or malformed Range cannot masquerade as successful seeking',async()=>{
  for(const response of [()=>object('abc',200),()=>object('abc',206,{'Content-Range':'bytes 0-2/6'}),()=>object('abc',206,{'Content-Range':'garbage'})]){const f=fixture(response);try{await assert.rejects(f.storage.get({versionId,range:{start:2,end:4},maxBytes:3}),isCode('STORAGE_RANGE_UNSUPPORTED'));}finally{f.storage.close();}}
 });
