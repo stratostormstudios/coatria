@@ -6,9 +6,10 @@ import {authenticateAgent} from './integrations';
 import {authorizeRunTool,authorizeStoredAgentRun,type AgentRunIdentity} from './agent-runs';
 import {installedRuntimeContext} from './plugin-marketplace';
 import {AGENT_TOOLS} from './agent-tools';
+import {generatedFollowupRunContext} from './studio-generated-followups';
 import {body,fail,hashToken,id,json,rateLimit,ApiError} from './security';
 import {stableRequestId} from '../../public/downloads/agent-worker.mjs';
-import {bridgePolicy,characterInstructions,normalize,usageTokens,modelContextResult} from '../../public/downloads/provider-adapter.mjs';
+import {bridgePolicy,characterInstructions,normalize,usageTokens,modelContextResult,modelRequestContext} from '../../public/downloads/provider-adapter.mjs';
 import {studioInferenceSubmitInput,studioInferenceCancelInput,studioInferenceLeaseInput,studioInferenceConfigInput,type StudioInference} from './studio-inference-protocol';
 
 type Row=Record<string,any>;
@@ -33,11 +34,12 @@ async function binding(client:PoolClient,identity:AgentRunIdentity,installation:
  if(digest(exact)!==row.configuration_hash||digest(row.configuration)!==row.configuration_hash)fail(403,'The enrolled agent configuration changed.','INFERENCE_HOST_UNAVAILABLE');return{...row,inference:config.data};
 }
 async function authority(client:PoolClient,identity:AgentRunIdentity,runId:string,proof:string,stored=false){await control(client,identity.company_id);const access=stored?await authorizeStoredAgentRun(client,identity,runId,proof):await authorizeRunTool(client,identity,runId,proof),installation=await installedRuntimeContext(client,identity.company_id,identity.id);if(!installation)fail(403,'An installed managed runtime is required.','INFERENCE_HOST_UNAVAILABLE');return{...access,installation,host:await binding(client,identity,installation)};}
-async function firstBody(client:PoolClient,access:Row){
- const run=access.run;await client.query('SELECT id FROM conversations WHERE company_id=$1 AND id=$2 FOR SHARE',[run.company_id,run.conversation_id]);
- const messages=run.purpose==='connection_test'?[]:(await client.query(`SELECT m.id,m.body,m.parent_id AS "parentId",m.sequence::text AS sequence,m.deleted_at AS "deletedAt",m.actor_kind AS "actorKind",COALESCE(m.user_id,m.agent_id) AS "actorId",COALESCE(u.name,a.name,'Former teammate') AS "authorName" FROM messages m LEFT JOIN users u ON u.id=m.user_id LEFT JOIN agents a ON a.company_id=m.company_id AND a.id=m.agent_id WHERE m.company_id=$1 AND m.conversation_id=$2 AND (($3::uuid IS NULL AND m.parent_id IS NULL) OR m.id=$3 OR m.parent_id=$3) ORDER BY (m.id=$3) DESC NULLS LAST,m.sequence DESC LIMIT 30`,[run.company_id,run.conversation_id,run.parent_id])).rows.sort((a,b)=>BigInt(a.sequence)<BigInt(b.sequence)?-1:1);
+export async function buildStudioInferenceRequest(client:PoolClient,access:Row){
+ const run=access.run,generatedFollowup=await generatedFollowupRunContext(client,run.company_id,run.id);
+ if(!generatedFollowup)await client.query('SELECT id FROM conversations WHERE company_id=$1 AND id=$2 FOR SHARE',[run.company_id,run.conversation_id]);
+ const messages=generatedFollowup||run.purpose==='connection_test'?[]:(await client.query(`SELECT m.id,m.body,m.parent_id AS "parentId",m.sequence::text AS sequence,m.deleted_at AS "deletedAt",m.actor_kind AS "actorKind",COALESCE(m.user_id,m.agent_id) AS "actorId",COALESCE(u.name,a.name,'Former teammate') AS "authorName" FROM messages m LEFT JOIN users u ON u.id=m.user_id LEFT JOIN agents a ON a.company_id=m.company_id AND a.id=m.agent_id WHERE m.company_id=$1 AND m.conversation_id=$2 AND (($3::uuid IS NULL AND m.parent_id IS NULL) OR m.id=$3 OR m.parent_id=$3) ORDER BY (m.id=$3) DESC NULLS LAST,m.sequence DESC LIMIT 30`,[run.company_id,run.conversation_id,run.parent_id])).rows.sort((a,b)=>BigInt(a.sequence)<BigInt(b.sequence)?-1:1);
  const tools=Object.entries(AGENT_TOOLS).filter(([,tool])=>access.capabilities.includes(tool.capability)).map(([name,tool])=>({type:'function',function:{name,description:tool.description,parameters:z.toJSONSchema(tool.schema,{io:'input',unrepresentable:'any'})}}));
- return{model:access.installation.runtimeConfig.modelId,messages:[{role:'system',content:bridgePolicy+characterInstructions(access.installation)},{role:'user',content:bounded({verifiedRequest:{id:run.id,prompt:run.prompt},untrustedConversationContext:{messages}},300000)}],...(tools.length?{tools}:{}),max_tokens:0,stream:false};
+ return{model:access.installation.runtimeConfig.modelId,messages:[{role:'system',content:bridgePolicy+characterInstructions(access.installation)},{role:'user',content:bounded(modelRequestContext(run,{messages,...generatedFollowup?{generatedFollowup}:{}}),300000)}],...(tools.length?{tools}:{}),max_tokens:0,stream:false};
 }
 function effectiveLimits(access:Row){const p=access.host.preset,r=access.installation.runtimeConfig;const limits={maxSteps:Math.min(r.maxSteps??8,p.maxSteps,20),maxOutputTokens:Math.min(r.maxOutputTokens??2048,p.maxOutputTokens,8192),maxTotalTokens:Math.min(r.maxTotalTokens??24000,p.maxTotalTokens,100000),timeoutSeconds:Math.min(r.timeoutSeconds??180,p.timeoutSeconds,600)};if(Object.values(limits).some(v=>!Number.isSafeInteger(v)||v<1))fail(409,'The approved inference limits are invalid.','INFERENCE_LIMITS_INVALID');return limits;}
 async function nextBody(client:PoolClient,prior:Row){
@@ -53,7 +55,7 @@ export async function submitStudioInference(identity:AgentRunIdentity,runId:stri
   const same=steps.find(row=>row.step===data.step);if(same){if(same.lease_token_hash!==hashToken(data.leaseToken))fail(409,'This inference belongs to another lease.','RUN_LEASE_LOST');return{inference:projection(same),replayed:true};}
   const limits=effectiveLimits(access);if(data.step!==steps.length||data.step>=limits.maxSteps||steps.some(row=>row.status!=='succeeded'))fail(409,'The next exact completed reasoning step is required within the run limit.','INFERENCE_SEQUENCE');
   if(!studioInferenceConfigured())fail(503,'Server-managed inference is not configured.','INFERENCE_UNAVAILABLE');
-  const request:any=steps.length?await nextBody(client,steps.at(-1)!):await firstBody(client,access);request.max_tokens=limits.maxOutputTokens;
+  const request:any=steps.length?await nextBody(client,steps.at(-1)!):await buildStudioInferenceRequest(client,access);request.max_tokens=limits.maxOutputTokens;
   const reservedTokens=Buffer.byteLength(bounded(request))+limits.maxOutputTokens+1024;if(steps.reduce((sum,row)=>sum+(row.status==='succeeded'&&Number.isSafeInteger(row.used_tokens)?row.used_tokens:row.reserved_tokens),0)+reservedTokens>limits.maxTotalTokens)fail(409,'The run reached its cumulative inference token allowance.','INFERENCE_TOKEN_BUDGET');
   const deadline=Math.min(+new Date(access.run.started_at)+limits.timeoutSeconds*1000,+new Date(access.host.host_expires_at),+new Date(access.host.provision_expires_at),steps.length?+new Date(steps[0].deadline_at):Infinity),remaining=deadline-Date.now();if(remaining<10000)fail(409,'There is insufficient approved run time for another inference request.','INFERENCE_DEADLINE');
   const jobs=Number((await client.query('SELECT count(*) AS count FROM studio_inference_jobs WHERE company_id=$1 AND provision_id=$2',[identity.company_id,access.host.provision_id])).rows[0].count);if(jobs>=access.host.inference.maxJobs)fail(409,'This host reached its approved inference job limit.','INFERENCE_JOB_BUDGET');

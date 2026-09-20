@@ -15,7 +15,7 @@ The private state file defaults to a credential-specific path under `~/.coatria/
 ## Connect Codex
 
 1. Install the current Codex CLI on the machine that will run the worker and authenticate it under that machine's worker account. The adapter uses `codex exec`, which can reuse the account's saved CLI login. Verify the CLI works before starting Coatria; the download does not install Codex, sign in, or change your user configuration. See [official non-interactive setup](https://learn.chatgpt.com/docs/non-interactive-mode).
-2. Download [agent-worker.mjs](agent-worker.mjs), [agent-mcp.mjs](agent-mcp.mjs) and [codex-adapter.mjs](codex-adapter.mjs) into the same private, operator-controlled directory. Use Node.js 22 or later.
+2. Download [agent-worker.mjs](agent-worker.mjs), [agent-mcp.mjs](agent-mcp.mjs), [provider-adapter.mjs](provider-adapter.mjs) and [codex-adapter.mjs](codex-adapter.mjs) into the same private, operator-controlled directory. Use Node.js 22 or later.
 3. Supply `COATRIA_AGENT_TOKEN` privately and set `COATRIA_CODEX_WORKSPACE` to an existing, absolute path for a dedicated clean working directory. Set these through the operator's local secret environment or service manager; do not paste credentials into prompts or checked-in configuration. Optional `COATRIA_CODEX_BIN` selects the actual executable if `codex` is not on PATH. On Windows, use a native executable path when a command shim cannot be spawned without a shell.
 4. Start:
 

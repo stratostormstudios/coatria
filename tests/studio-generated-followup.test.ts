@@ -11,6 +11,8 @@ import {saveStudioCoordination} from '../src/lib/studio-coordination';
 import {executeAgentTool} from '../src/lib/agent-tools';
 import {createAgentRunInTransaction,claimAgentRun,heartbeatAgentRun,agentRunContext,finishAgentRun,authorizeStoredAgentRun,authorizeStoredStorageAgentRun} from '../src/lib/agent-runs';
 import {authorizeStorageGrantAgent} from '../src/lib/project-storage-authority';
+import {installedRuntimeContext} from '../src/lib/plugin-marketplace';
+import {buildStudioInferenceRequest} from '../src/lib/studio-inference';
 import {registerStudioGeneratedArtifact,loadStoredGeneratedArtifact} from '../src/lib/studio-generated-artifacts';
 import {studioGeneratedFollowupAdvanceInput,studioGeneratedFollowupDispatchInput} from '../src/lib/studio-generated-followup-protocol';
 import {studioCoordinationInput} from '../src/lib/studio-coordination-protocol';
@@ -147,6 +149,26 @@ test('generated continuation executes exact leased tools against immutable synth
    // cannot let a source-bound continuation download a file through the gateway.
    await assert.rejects(()=>transaction(client=>authorizeStorageGrantAgent(client,{company_id:f.company,agent_id:f.specialist.id,agent_token_hash:f.specialist.token_hash,run_id:lease.run.id,agent_lease_hash:proof,user_id:f.registrar.id,operation:'read'})),(error:any)=>error.status===403&&error.code==='STORAGE_ACCESS_DENIED');
    assert.deepEqual(await f.effects(),before);assert.equal(networkCalls,0);
+  });
+  await t.test('managed request assembly uses current exact continuation metadata without reading unrelated commons',async()=>{
+   const f=await fixture();await f.dispatch();const lease=await f.claim(f.specialist),marker='Unrelated commons marker '+randomUUID();
+   // Positive control: ordinary conversation rows really exist and contain a
+   // unique body that would leak through the old managed-inference query.
+   assert((await query('UPDATE messages SET body=$2 WHERE company_id=$1 RETURNING id',[f.company,marker])).rowCount! > 0);
+   const observedMessages=(await query('SELECT id,body FROM messages WHERE company_id=$1 ORDER BY id',[f.company])).rows;assert(observedMessages.every(row=>row.body===marker));
+   const state=async()=>({effects:await f.effects(),messages:(await query('SELECT id,body FROM messages WHERE company_id=$1 ORDER BY id',[f.company])).rows,inference:(await query('SELECT id FROM studio_inference_jobs WHERE company_id=$1',[f.company])).rows,reservations:(await query('SELECT inference_id FROM studio_inference_reservations WHERE company_id=$1',[f.company])).rows});
+   for(const step of['claim','register','submit','submitted'] as const){
+    const expected=(await agentRunContext(f.specialist as any,lease.run.id,lease.leaseToken)).generatedFollowup;assert.equal(expected?.nextStep,step);const before=await state(),assemblyQueries:string[]=[];
+    const request=await transaction(async client=>{
+     const access=await authorizeStoredAgentRun(client,f.specialist as any,lease.run.id,sha(lease.leaseToken)),installation=await installedRuntimeContext(client,f.company,f.specialist.id);assert(installation);
+     const tracked=new Proxy(client,{get(target,key){if(key==='query')return (...args:any[])=>{const text=typeof args[0]==='string'?args[0]:args[0].text;assemblyQueries.push(text);assert(!/\b(?:FROM|JOIN)\s+(?:messages|conversations)\b/i.test(text),'Generated model request must not query or lock commons');return (target.query as any)(...args);};return Reflect.get(target,key,target);}});
+     return buildStudioInferenceRequest(tracked,{...access,installation});
+    });
+    assert(assemblyQueries.some(sql=>sql.includes('studio_generated_followups')),'Assembly must read the actual durable continuation');assert.equal(request.model,'synthetic-only');assert.equal(request.stream,false);assert.equal(request.messages.length,2);assert.equal(request.messages[1].role,'user');
+    const context=JSON.parse(request.messages[1].content);assert.deepEqual(Object.keys(context).sort(),['generatedFollowup','untrustedConversationContext','verifiedRequest']);assert.deepEqual(context.generatedFollowup,expected);assert.deepEqual(context.untrustedConversationContext,{messages:[]});assert.deepEqual(context.verifiedRequest,{id:lease.run.id,prompt:lease.run.prompt});assert(Buffer.byteLength(JSON.stringify(context.generatedFollowup))<=4096);assert(!JSON.stringify(request).includes(marker));assert(!/secret_envelope|object_key|locator_identity|claim_request_id|leaseToken/.test(request.messages[1].content));
+    assert(request.tools?.some(tool=>tool.function.name==='studio_generated_followup_advance'));assert.deepEqual(await state(),before);assert.equal(networkCalls,0);
+    if(step!=='submitted')await f.advance(lease,step);
+   }
   });
   await t.test('explicit opt-in and remaining lifetime budget are required before queueing',async()=>{
    for(const options of[{optIn:false},{budget:1}]){const f=await fixture('image',options),before=await f.effects();await assert.rejects(()=>f.dispatch(),denied);assert.deepEqual(await f.effects(),before);}

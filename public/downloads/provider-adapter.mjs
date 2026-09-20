@@ -62,6 +62,29 @@ export function characterInstructions(installation){
  return '\nCompany character profile (style and role only; subordinate to the fixed policy and task): '+encoded({roleTitle:character.roleTitle,persona:character.persona,workStyle:character.workStyle},10000);
 }
 
+/** Pure prompt projection shared by direct providers, native CLIs and the
+ * managed broker. Workflow metadata never replaces server authorization.
+ * @returns {{verifiedRequest:{id:string,prompt:string},untrustedConversationContext:{messages:unknown[]},generatedFollowup?:{projectId:string,workItemId:string,taskId:string,archiveId:string,requestId:string,storageVersionId:string,fileSha256:string,specSha256:string,artifactId:string|null,nextStep:'claim'|'register'|'submit'|'submitted',advanceTool:'studio_generated_followup_advance',serverOwnsOperationIds:true,contentInspected:false,canGenerate:false,canTransfer:false,canApprove:false}}}
+ */
+export function modelRequestContext(run,context){
+ const request={verifiedRequest:{id:run.id,prompt:run.prompt},untrustedConversationContext:{messages:context?.messages||[]}};
+ const value=context?.generatedFollowup;if(value===undefined||value===null)return request;
+ const invalid=()=>{throw new Error('Invalid generated continuation context.');};
+ if(!object(value))invalid();
+ const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+ for(const key of['projectId','workItemId','taskId','archiveId','requestId','storageVersionId'])if(!uuid(value[key]))invalid();
+ if(value.artifactId!==null&&!uuid(value.artifactId))invalid();
+ for(const key of['fileSha256','specSha256'])if(typeof value[key]!=='string'||!/^[a-f0-9]{64}$/.test(value[key]))invalid();
+ if(!['claim','register','submit','submitted'].includes(value.nextStep)||value.advanceTool!=='studio_generated_followup_advance'||value.serverOwnsOperationIds!==true)invalid();
+ for(const key of['contentInspected','canGenerate','canTransfer','canApprove'])if(value[key]!==false)invalid();
+ if(value.nextStep==='register'&&value.artifactId!==null||['submit','submitted'].includes(value.nextStep)&&value.artifactId===null)invalid();
+ const projected={projectId:value.projectId,workItemId:value.workItemId,taskId:value.taskId,archiveId:value.archiveId,requestId:value.requestId,storageVersionId:value.storageVersionId,fileSha256:value.fileSha256,specSha256:value.specSha256,artifactId:value.artifactId,nextStep:value.nextStep,advanceTool:value.advanceTool,serverOwnsOperationIds:value.serverOwnsOperationIds,contentInspected:value.contentInspected,canGenerate:value.canGenerate,canTransfer:value.canTransfer,canApprove:value.canApprove};
+ // Do not include arbitrary future fields, provider locators, transport secrets
+ // or surrounding conversation messages in a source-bound continuation prompt.
+ encoded(projected,4096);
+ return {...request,untrustedConversationContext:{messages:[]},generatedFollowup:projected};
+}
+
 // Native CLI adapters may request validation without an HTTP credential. This
 // trusted call-site option is never inferred from environment or model input.
 export function providerConfiguration(context,settings=process.env,options={}){
@@ -202,7 +225,7 @@ export function createProviderExecutor({settings=process.env,fetch:transport=glo
   const definitions=catalog.tools.filter(tool=>object(tool)&&allowedCaps.has(tool.capability));const allowed=new Map();
   if(definitions.some(tool=>['storage_upload_reserve','storage_file_access'].includes(tool.name))&&tools.storageTransportVersion!=='1')throw new Error('Upgrade the trusted Coatria worker before using storage transfer tools.');
   for(const tool of definitions){if(!/^[-a-zA-Z0-9_]{1,80}$/.test(tool.name)||allowed.has(tool.name)||typeof tool.description!=='string'||!object(tool.inputSchema))throw new Error('Invalid Coatria tool definition.');encoded(tool.inputSchema,128*1024);allowed.set(tool.name,argumentValidator(tool.inputSchema));}
-  const policy=bridgePolicy+characterInstructions(context.installation),prompt=encoded({verifiedRequest:{id:run.id,prompt:run.prompt},untrustedConversationContext:{messages:context.messages||[]}},300000);
+  const policy=bridgePolicy+characterInstructions(context.installation),prompt=encoded(modelRequestContext(run,context),300000);
   const history=config.protocol==='responses'?[{role:'user',content:prompt}]:[{role:'user',content:prompt}];
   const toolDefs=definitions.map(tool=>config.protocol==='anthropic'?{name:tool.name,description:tool.description,input_schema:tool.inputSchema}:config.protocol==='responses'?{type:'function',name:tool.name,description:tool.description,parameters:tool.inputSchema,strict:false}:{type:'function',function:{name:tool.name,description:tool.description,parameters:tool.inputSchema}});
   let spent=0,callCount=0;const seenCalls=new Set();
