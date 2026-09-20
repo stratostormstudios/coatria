@@ -8,16 +8,19 @@ import {lstat,open,readFile,readlink,readdir,rmdir,writeFile} from 'node:fs/prom
 import {createServer,connect,type Server} from 'node:net';
 import {release} from 'node:os';
 import {join,resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
 import {createLinuxMediaSandbox,MediaSandboxError,type MediaSandboxExitEvidence,type QualifiedLinuxMediaSandbox,type MediaSandboxLimits} from '../../src/lib/higgsfield-media-sandbox';
 import {inspectHiggsfieldArchiveMedia,type HiggsfieldMediaDescriptor} from '../../src/lib/higgsfield-media-inspection';
 import {diagnoseMediaSandboxStartup} from './media-sandbox-startup-diagnostic.mts';
 
 type ProfilePin={profilePath:string;expectedProfileSha256:string};
-type Config={version:number;profiles:{real:ProfilePin;conformance:ProfilePin};serviceRoot:string;supervisorGroup:string;cgroupRoot:string;uid:number;gid:number;hostCanaryPath:string;hostCanarySha256:string;evidence:string};
+export type MediaSandboxCanaryConfig={fixtureRoot?:string;sourceRoot?:string;diagnostics?:boolean;version:number;profiles:{real:ProfilePin;conformance:ProfilePin};serviceRoot:string;supervisorGroup:string;cgroupRoot:string;uid:number;gid:number;hostCanaryPath:string;hostCanarySha256:string;evidence:string};
+type Config=MediaSandboxCanaryConfig;
 type Observation={group:string;processes:Set<number>;controls:Record<string,string>};
 const digest=(bytes:Buffer|string)=>createHash('sha256').update(bytes).digest('hex');
-const fixture=(name:string)=>resolve('tests/fixtures/media',name);
+const fixture=(config:Config,name:string)=>resolve(config.fixtureRoot??'tests/fixtures/media',name);
+const source=(config:Config,name:string)=>resolve(config.sourceRoot??'.',name);
 const namespaceNames=['mnt','pid','net','ipc','uts','user','cgroup'] as const;
 const namespaces=async()=>Object.fromEntries(await Promise.all(namespaceNames.map(async name=>[name,await readlink('/proc/self/ns/'+name)])));
 const text=async(path:string)=>(await readFile(path,'utf8')).trim();
@@ -37,7 +40,7 @@ async function assertDrained(config:Config,observations:Map<string,Observation>)
 }
 function checkControls(observations:Map<string,Observation>,limits:MediaSandboxLimits){assert.ok(observations.size>0,'A real decoder must be observed inside its assigned cgroup.');for(const item of observations.values())assert.deepEqual(item.controls,{'memory.max':String(limits.memoryBytes),'memory.swap.max':'0','memory.oom.group':'1','pids.max':String(limits.pids),'cpu.max':`${limits.cpuQuotaMicros} ${limits.cpuPeriodMicros}`});}
 async function runObserved(config:Config,sandbox:QualifiedLinuxMediaSandbox,args:string[],options:{timeoutMs?:number;signal?:AbortSignal}={}){
- const file=await open(fixture('synthetic.png'),constants.O_RDONLY),observations=new Map<string,Observation>();let finished=false;
+ const file=await open(fixture(config,'synthetic.png'),constants.O_RDONLY),observations=new Map<string,Observation>();let finished=false;
  try{const promise=sandbox.run({tool:'ffprobe',args,inputFd:file.fd,timeoutMs:options.timeoutMs??9000,signal:options.signal,maxOutputBytes:65536,maxStderrBytes:65536}).then(stdout=>({stdout,error:null}),error=>({stdout:'',error})).finally(()=>{finished=true;});
   while(!finished){await observe(config,observations);await delay(10);}const outcome=await promise;await assertDrained(config,observations);return {...outcome,observations};
  }finally{await file.close();}
@@ -47,17 +50,17 @@ async function configInput(){assert.equal(process.platform,'linux');assert.equal
 
 async function crashChild(config:Config){
  const sandbox=await createLinuxMediaSandbox({...config.profiles.conformance,cgroupRoot:config.cgroupRoot});
- const file=await open(fixture('synthetic.png'),constants.O_RDONLY);process.send?.({ready:true});
+ const file=await open(fixture(config,'synthetic.png'),constants.O_RDONLY);process.send?.({ready:true});
  try{await sandbox.run({tool:'ffprobe',args:['timeout'],inputFd:file.fd,timeoutMs:9000,maxOutputBytes:65536,maxStderrBytes:65536});}finally{await file.close();}throw Error('The parent-death test must terminate its supervisor.');
 }
 
-async function main(config:Config){
+export async function runMediaSandboxCanary(config:Config){
  const report:Record<string,unknown>={qualified:false,runpodQualified:false,noProviderCalls:true,kernel:release(),profiles:config.profiles,tests:[],realFormats:[]};
  const results=report.tests as unknown[];let listener:Server|undefined,startingProfile:'conformance'|'real'|null='conformance';
  try{
-  const inputBefore=await readFile(fixture('synthetic.png'));assert.equal(digest(await readFile(config.hostCanaryPath)),config.hostCanarySha256);
+  const inputBefore=await readFile(fixture(config,'synthetic.png'));assert.equal(digest(await readFile(config.hostCanaryPath)),config.hostCanarySha256);
   const hostNamespaces=await namespaces();report.hostNamespaces=hostNamespaces;
-  const sourceHashes:Record<string,string>={};for(const file of ['scripts/hosting/media-sandbox-launch.c','scripts/hosting/media-sandbox-probe.c','scripts/hosting/prepare-media-sandbox-ci.mjs','scripts/hosting/run-media-sandbox-ci.mjs','scripts/hosting/media-sandbox-linux-canary.mts','scripts/hosting/media-sandbox-startup-diagnostic.mts','scripts/hosting/prepare-media-apparmor-ci.mjs','scripts/hosting/collect-media-apparmor-ci.mjs','src/lib/higgsfield-media-sandbox.ts','src/lib/higgsfield-media-inspection.ts'])sourceHashes[file]=digest(await readFile(resolve(file)));report.sourceHashes=sourceHashes;
+  const sourceHashes:Record<string,string>={};for(const file of ['scripts/hosting/media-sandbox-launch.c','scripts/hosting/media-sandbox-probe.c','scripts/hosting/prepare-media-sandbox-ci.mjs','scripts/hosting/run-media-sandbox-ci.mjs','scripts/hosting/media-sandbox-linux-canary.mts','scripts/hosting/media-sandbox-startup-diagnostic.mts','scripts/hosting/prepare-media-apparmor-ci.mjs','scripts/hosting/collect-media-apparmor-ci.mjs','src/lib/higgsfield-media-sandbox.ts','src/lib/higgsfield-media-inspection.ts'])sourceHashes[file]=digest(await readFile(source(config,file)));report.sourceHashes=sourceHashes;
   const parentLimits:Record<string,string>={};for(const file of ['memory.max','memory.swap.max','pids.max','cpu.max'])parentLimits[file]=await text(join(config.serviceRoot,file));assert.deepEqual(parentLimits,{'memory.max':String(2*1024**3),'memory.swap.max':'0','pids.max':'256','cpu.max':'200000 100000'});report.aggregateParentLimits=parentLimits;
   const events:MediaSandboxExitEvidence[]=[];report.adversarialEvents=events;const sandbox=await createLinuxMediaSandbox({...config.profiles.conformance,cgroupRoot:config.cgroupRoot,onExitEvidence:event=>events.push(event)});assert.equal(events.length,2);assert.ok(events.every(event=>event.drained));startingProfile=null;
   const limits=events[0].limits;
@@ -70,7 +73,7 @@ async function main(config:Config){
   assert.equal(boundary.error,null);const lines=boundary.stdout.trim().split('\n').map(value=>JSON.parse(value));assert.equal(lines.length,2);const network=lines[0],facts=lines[1];assert.equal(network.interfacesLoopbackOnly,true);assert.equal(network.routableDefaultAbsent,true);assert.equal(network.apparmorChildStacked,true);
   for(const key of ['hostFileHidden','hostProcHidden','environmentClean','extraHandlesClosed','inputReadonly','rootReadonly','capabilitiesZero','noNewPrivileges','nestedUsernsDenied','localNetworkDenied','externalNetworkDenied','ipv6Denied'])assert.equal(facts[key],true,key);
   for(const name of namespaceNames){assert.match(facts.namespaces[name],new RegExp('^'+name+':\\[\\d+\\]$'));assert.notEqual(facts.namespaces[name],hostNamespaces[name],name);}
-  checkControls(boundary.observations,limits);assert.equal(connections,0);assert.equal(digest(await readFile(fixture('synthetic.png'))),digest(inputBefore));
+  checkControls(boundary.observations,limits);assert.equal(connections,0);assert.equal(digest(await readFile(fixture(config,'synthetic.png'))),digest(inputBefore));
   results.push({name:'boundary',passed:true,hostFilePositiveControl:true,hostListenerPositiveControl:true,network,isolatedNamespaces:facts.namespaces,facts,liveGroups:boundary.observations.size});await closed(listener);listener=undefined;
   const files=await runObserved(config,sandbox,['files']);assert.equal(files.error,null);const fdFacts=JSON.parse(files.stdout);assert.equal(fdFacts.limited,true);assert.ok(fdFacts.openFiles<limits.openFiles);results.push({name:'file-descriptor-cap',passed:true,...fdFacts});
   for(const name of ['pids','memory'] as const){const start=events.length,result=await runObserved(config,sandbox,[name]);assert.equal(code(result.error),'PROCESS_FAILED');const latest=events.slice(start);assert.equal(latest.length,1);assert.ok(latest[0].drained);if(name==='pids')assert.ok(latest[0].pidsEvents.max>0);else assert.ok((latest[0].memoryEvents.oom_kill??0)+(latest[0].memoryEvents.oom_group_kill??0)>0);checkControls(result.observations,limits);results.push({name:name+'-aggregate-cap',passed:true,evidence:latest[0],observedProcesses:[...result.observations.values()].reduce((n,v)=>n+v.processes.size,0)});}
@@ -81,7 +84,7 @@ async function main(config:Config){
 
   // Kill the Node supervisor itself: no JS finally can run. PDEATHSIG plus the
   // PID namespace must leave no running decoder/setsid descendant behind.
-  const crashObservations=new Map<string,Observation>();const child=spawn(process.execPath,['--import','tsx',resolve('scripts/hosting/media-sandbox-linux-canary.mts'),'--supervisor-crash-child'],{shell:false,stdio:['ignore','ignore','ignore','ipc'],env:{PATH:'/usr/bin:/bin',LANG:'C',LC_ALL:'C',COATRIA_MEDIA_QUALIFICATION:process.env.COATRIA_MEDIA_QUALIFICATION}});
+  const crashObservations=new Map<string,Observation>();const child=spawn(process.execPath,['--import','tsx',source(config,'scripts/hosting/media-sandbox-linux-canary.mts'),'--supervisor-crash-child'],{shell:false,stdio:['ignore','ignore','ignore','ipc'],env:{PATH:'/usr/bin:/bin',LANG:'C',LC_ALL:'C',COATRIA_MEDIA_QUALIFICATION:process.env.COATRIA_MEDIA_QUALIFICATION,COATRIA_MEDIA_CANARY_CHILD:JSON.stringify(config)}});
   let childClosed=false;child.once('exit',()=>{childClosed=true;});const childExit=new Promise<void>((resolve,reject)=>{child.once('error',reject);child.once('close',()=>resolve());});
   try{await new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Crash child failed to qualify.')),15000);child.once('message',()=>{clearTimeout(timer);resolve();});child.once('exit',()=>{clearTimeout(timer);reject(Error('Crash child exited before qualification.'));});});
    await waitFor(async()=>{await observe(config,crashObservations);return [...crashObservations.values()].some(item=>item.processes.size>=5);});assert.ok(child.kill('SIGKILL'));await childExit;
@@ -90,16 +93,22 @@ async function main(config:Config){
   }finally{if(!childClosed){child.kill('SIGKILL');await childExit;}for(const item of crashObservations.values()){try{await writeFile(join(item.group,'cgroup.kill'),'1');await waitFor(async()=>(await text(join(item.group,'cgroup.events'))).includes('populated 0'));await rmdir(item.group);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}}
 
   await assert.rejects(createLinuxMediaSandbox({...config.profiles.real,expectedProfileSha256:'0'.repeat(64),cgroupRoot:config.cgroupRoot}),error=>error instanceof MediaSandboxError&&error.code==='INVALID_PROFILE');
-  const writable=await open(fixture('synthetic.png'),constants.O_RDWR);try{await assert.rejects(sandbox.run({tool:'ffprobe',args:['files'],inputFd:writable.fd,maxOutputBytes:65536,maxStderrBytes:65536,timeoutMs:1000}),error=>error instanceof MediaSandboxError&&error.code==='PROCESS_FAILED');}finally{await writable.close();}assert.equal(digest(await readFile(fixture('synthetic.png'))),digest(inputBefore));results.push({name:'invalid-pin-and-writable-input-denied',passed:true});
+  const writable=await open(fixture(config,'synthetic.png'),constants.O_RDWR);try{await assert.rejects(sandbox.run({tool:'ffprobe',args:['files'],inputFd:writable.fd,maxOutputBytes:65536,maxStderrBytes:65536,timeoutMs:1000}),error=>error instanceof MediaSandboxError&&error.code==='PROCESS_FAILED');}finally{await writable.close();}assert.equal(digest(await readFile(fixture(config,'synthetic.png'))),digest(inputBefore));results.push({name:'invalid-pin-and-writable-input-denied',passed:true});
 
   const realEvents:MediaSandboxExitEvidence[]=[];report.realDecoderEvents=realEvents;startingProfile='real';const real=await createLinuxMediaSandbox({...config.profiles.real,cgroupRoot:config.cgroupRoot,onExitEvidence:event=>realEvents.push(event)});startingProfile=null;
   const formats=[['png','image','image/png'],['jpeg','image','image/jpeg'],['webp','image','image/webp'],['mp4','video','video/mp4'],['mov','video','video/quicktime'],['wav','audio','audio/wav'],['mp3','audio','audio/mpeg']] as const;
   const descriptors:HiggsfieldMediaDescriptor[]=[];
-  for(const [format,kind,mime]of formats){const path=fixture('synthetic.'+format),bytes=await readFile(path),sha256=digest(bytes);const value=await inspectHiggsfieldArchiveMedia({path,expectedKind:kind,expectedBytes:bytes.length,expectedSha256:sha256},{sandbox:real});assert.equal(value.kind,kind);assert.equal(value.contentType,mime);assert.equal(value.format,format);assert.equal(value.bytes,bytes.length);assert.equal(value.sha256,sha256);assert.equal(value.verification,'full_decode');
+  for(const [format,kind,mime]of formats){const path=fixture(config,'synthetic.'+format),bytes=await readFile(path),sha256=digest(bytes);const value=await inspectHiggsfieldArchiveMedia({path,expectedKind:kind,expectedBytes:bytes.length,expectedSha256:sha256},{sandbox:real});assert.equal(value.kind,kind);assert.equal(value.contentType,mime);assert.equal(value.format,format);assert.equal(value.bytes,bytes.length);assert.equal(value.sha256,sha256);assert.equal(value.verification,'full_decode');
    if(value.kind==='image'){assert.equal(value.width,16);assert.equal(value.height,16);}else if(value.kind==='video'){assert.equal(value.durationMs,500);assert.equal(value.frameCount,3);assert.deepEqual(value.frameRate,{numerator:6,denominator:1});assert.equal(value.vfr,false);}else{assert.equal(value.durationMs,100);assert.equal(value.channels,1);assert.equal(value.sampleRateHz,format==='wav'?8000:44100);}descriptors.push(value);
   }
   assert.ok(realEvents.length>=16);assert.ok(realEvents.every(event=>event.drained));assert.equal((await readdir(config.cgroupRoot)).filter(name=>name.startsWith('decoder-')).length,0);report.realFormats=descriptors;report.realDecoderEvents=realEvents;report.adversarialEvents=events;report.qualified=true;
- }catch(error){report.failureCode=code(error);if(startingProfile)report.startupDiagnostic=await diagnoseMediaSandboxStartup(config,startingProfile);throw error;}finally{if(listener)await closed(listener);await writeFile(join(config.evidence,'qualification.json'),JSON.stringify(report,null,2)+'\n',{mode:0o600});}
+ }catch(error){report.failureCode=code(error);if(startingProfile&&config.diagnostics!==false)report.startupDiagnostic=await diagnoseMediaSandboxStartup(config,startingProfile);throw error;}finally{if(listener)await closed(listener);await writeFile(join(config.evidence,'qualification.json'),JSON.stringify(report,null,2)+'\n',{mode:0o600});}
  console.log('Isolated Linux decoder qualified: boundary/resource/cleanup checks and all seven actual media formats passed.');
 }
-const config=await configInput();if(process.argv.includes('--supervisor-crash-child'))await crashChild(config);else await main(config);
+if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){void(async()=>{
+ if(process.argv.length===3&&process.argv[2]==='--supervisor-crash-child'&&process.env.COATRIA_MEDIA_CANARY_CHILD){
+  // Only a child of the trusted canary uses this private, bounded configuration.
+  // It has no receipt authority; the actual sandbox still verifies every pin.
+  const raw=process.env.COATRIA_MEDIA_CANARY_CHILD;assert.ok(raw.length<=16384);const config=JSON.parse(raw) as Config;assert.equal(config.uid,process.getuid?.());assert.equal(config.gid,process.getgid?.());await crashChild(config);
+ }else{const config=await configInput();if(process.argv.includes('--supervisor-crash-child'))await crashChild(config);else await runMediaSandboxCanary(config);}
+})().catch(()=>{console.error('MEDIA_SANDBOX_CANARY_FAILED');process.exitCode=1;});}

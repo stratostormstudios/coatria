@@ -77,6 +77,21 @@ cost-based model routing needs its own approved provider-policy extension.
 
 ## Evaluation and rollout
 
+Treat this as an orchestration feature with staged authority:
+
+1. **Observe:** recommend a department or flag missing brief information alongside
+   the existing workflow. Record disagreement; change no assignments.
+2. **Assist:** show an administrator or project manager the eligible specialist
+   shortlist, reasons supplied by the existing reasoning agent, and abstentions.
+3. **Route:** after held-out evaluation, allow only approved, reversible task
+   routes. The existing dispatcher still enforces identity, dependencies,
+   capabilities and budgets at execution time.
+
+Do not make Jev the company director or a per-frame office simulation dependency.
+Use it on meaningful events such as a new brief or a completed handoff. Keep
+permissions, spending authorization, file access and final delivery acceptance
+in their existing deterministic and human-owned control paths.
+
 Start with a labeled set of real, consented or synthetic production briefs,
 including overlapping departments, multiple intents, incomplete information,
 unavailable skills, hostile instructions and multilingual requests. Split the
@@ -111,3 +126,13 @@ pilot does not qualify autonomous QC, payments, hiring or client publication.
 Use the official provider or an explicitly reviewed gateway when evaluating.
 No Jev account, paid subscription, inference call or production dependency has
 been added as part of this recommendation.
+
+Vercel now documents `typesafe-ai/jev` through AI Gateway using
+`experimental_evaluate` from its AI SDK. This is a plausible deployment fit for
+Coatria, but the SDK is not installed here and no gateway inference has been
+tested. Keep any future adapter isolated behind Coatria's own decision contract
+because the SDK entry point is experimental. On 2026-09-20 the live model page
+advertised promotional free pricing ending September 25, 2026; recheck the actual
+account rate and provider data terms before activation. Do not budget a permanent
+free service from this promotion. See [Vercel's Jev model
+page](https://vercel.com/ai-gateway/models/jev).

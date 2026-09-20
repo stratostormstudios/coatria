@@ -77,6 +77,22 @@ Use Node 24 and the committed dependency lock. The standalone entry point is:
 node --import tsx scripts/higgsfield-archive-worker.ts
 ```
 
+Before enabling processing, run the same entry point with `--preflight`. This
+checks configuration, the encryption keyring, service-owned accessible private
+scratch, the actual decoder sandbox and the database connection, then exits
+without claiming an archive. It works while the archive feature flag is off.
+Startup requires both the session and current database identity to be the
+dedicated archive LOGIN, rejects elevated attributes and role memberships,
+requires migration entries through 029 and compares effective relation/column
+privileges and grant options with the shipped worker grants. Unexpected schema
+creation, ownership, sequence access or callable non-system SECURITY DEFINER
+functions are rejected. These are point-in-time catalog checks; they do not
+qualify storage connectivity or establish a complete database security audit.
+The application and gateway still require their own current migration floor.
+
+Both modes close the database pool on startup failure. Errors report bounded
+codes, never raw connection diagnostics or credentials.
+
 Configure these only on the dedicated worker:
 
 - `COATRIA_ARCHIVE_SCRATCH_ROOT`: existing private absolute directory, mode0700
@@ -131,7 +147,9 @@ Those explicit native unit tests do not prove host isolation. The independent
 `media-sandbox-linux` job must pass its actual adversarial and real-media checks;
 it never skips to success when required kernel or cgroup features are absent.
 
-The archive is still not a production artifact contract or client delivery
-package. Still-image/audio specifications, independent media QC, version-bound
-artifact manifests and client delivery receipts require their own typed workflow.
-No archive operation marks a production task, project or client delivery complete.
+An archive is source evidence, not a production artifact or client package.
+Migrations 030–032 and the [generated-media workflow](STUDIO_GENERATED_MEDIA.md)
+implement typed image/video/audio registration, independent media QC, immutable
+artifact/package manifests and authenticated external-client delivery receipts.
+Those separate actions require their current authority and qualified storage;
+no archive operation itself marks a task, project or client delivery complete.

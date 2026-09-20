@@ -27,7 +27,7 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - name: Typecheck media qualification and diagnostic modules
-        run: node node_modules/typescript/bin/tsc --noEmit --allowImportingTsExtensions --strict --skipLibCheck --target ES2022 --module esnext --moduleResolution bundler --esModuleInterop scripts/hosting/media-sandbox-linux-canary.mts scripts/hosting/media-sandbox-startup-diagnostic.test.mts
+        run: node node_modules/typescript/bin/tsc --noEmit --allowJs --allowImportingTsExtensions --strict --skipLibCheck --target ES2022 --module esnext --moduleResolution bundler --esModuleInterop scripts/hosting/media-sandbox-linux-canary.mts scripts/hosting/media-sandbox-startup-diagnostic.test.mts scripts/hosting/run-archive-host.mts tests/archive-host-package.test.ts
       - name: Test bounded diagnostic classification and fail-closed invocation
         run: node --import tsx --test scripts/hosting/media-sandbox-startup-diagnostic.test.mts scripts/hosting/media-apparmor-ci.test.mjs
       - name: Prepare pinned closure and one capped delegated service
@@ -36,6 +36,9 @@ jobs:
       - name: Drop privilege and prove the real isolation boundary and seven decoders
         run: |
           sudo env CI=true COATRIA_MEDIA_QUALIFICATION="$COATRIA_MEDIA_QUALIFICATION" "$(command -v node)" scripts/hosting/run-media-sandbox-ci.mjs
+      - name: Build the exact archive release and qualify its disabled systemd service
+        run: |
+          sudo env CI=true GITHUB_SHA="$GITHUB_SHA" COATRIA_MEDIA_QUALIFICATION="$COATRIA_MEDIA_QUALIFICATION" COATRIA_NPM_CACHE="$(npm config get cache)" "$(command -v node)" scripts/hosting/qualify-archive-host-ci.mjs
       - name: Preserve scoped AppArmor mode and sanitized kernel denial categories
         if: always() && env.COATRIA_MEDIA_QUALIFICATION != ''
         run: |
