@@ -11,6 +11,7 @@ import {inspectHiggsfieldArchiveMedia,HiggsfieldMediaInspectionError,type Higgsf
 const fixtures=fileURLToPath(new URL('./fixtures/media/',import.meta.url));
 const localBin=process.platform==='win32'?join(process.env.LOCALAPPDATA??'', 'Microsoft','WinGet','Links'):'/usr/bin';
 const options:HiggsfieldMediaInspectionOptions={
+ nativeTestMode:true,
  ffprobePath:process.env.COATRIA_TEST_FFPROBE_PATH??process.env.COATRIA_FFPROBE_PATH??join(localBin,process.platform==='win32'?'ffprobe.exe':'ffprobe'),
  ffmpegPath:process.env.COATRIA_TEST_FFMPEG_PATH??process.env.COATRIA_FFMPEG_PATH??join(localBin,process.platform==='win32'?'ffmpeg.exe':'ffmpeg'),
 };

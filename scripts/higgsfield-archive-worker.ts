@@ -7,12 +7,14 @@ import {higgsfieldArchiveAvailability} from '../src/lib/higgsfield-archive-confi
 import {createHiggsfieldOutputFetcher} from '../src/lib/higgsfield-output-fetch';
 import {inspectHiggsfieldArchiveMedia} from '../src/lib/higgsfield-media-inspection';
 import {createHiggsfieldArchiveWorker} from '../src/lib/higgsfield-archive-worker';
+import {createLinuxMediaSandbox} from '../src/lib/higgsfield-media-sandbox';
 
 async function main(){
  if(!higgsfieldArchiveAvailability().enabled)throw Error('Archive processing is disabled. Configure the dedicated worker before enabling archive approvals.');
  if(!process.env.DATABASE_URL||!process.env.COATRIA_HOSTING_KEYRING)throw Error('The dedicated archive database role and encryption keyring must be configured.');
- const scratchRoot=process.env.COATRIA_ARCHIVE_SCRATCH_ROOT,ffprobePath=process.env.COATRIA_FFPROBE_PATH,ffmpegPath=process.env.COATRIA_FFMPEG_PATH;
- for(const path of [scratchRoot,ffprobePath,ffmpegPath])if(!path||!isAbsolute(path))throw Error('Archive scratch and decoder paths must be explicitly configured absolute paths.');
+ const scratchRoot=process.env.COATRIA_ARCHIVE_SCRATCH_ROOT;
+ if(!scratchRoot||!isAbsolute(scratchRoot))throw Error('Archive scratch must be an explicitly configured absolute path.');
+ const sandbox=await createLinuxMediaSandbox({profilePath:process.env.COATRIA_MEDIA_SANDBOX_PROFILE??'',expectedProfileSha256:process.env.COATRIA_MEDIA_SANDBOX_PROFILE_SHA256??'',cgroupRoot:process.env.COATRIA_MEDIA_CGROUP_ROOT??''});
  const info=await lstat(scratchRoot!);if(!info.isDirectory()||info.isSymbolicLink())throw Error('Use a private regular scratch directory.');
  if(process.platform!=='win32'&&(info.mode&0o077)!==0)throw Error('Archive scratch directory must have mode 0700.');
  if(process.platform!=='win32'&&process.getuid?.()===0)throw Error('Run the archive worker as a dedicated unprivileged service user.');
@@ -21,7 +23,7 @@ async function main(){
  const maxBytes=Number(process.env.COATRIA_ARCHIVE_MAX_SOURCE_BYTES??536870912),deadline=Number(process.env.COATRIA_ARCHIVE_OPERATION_MS??1800000);
  if(!Number.isSafeInteger(maxBytes)||maxBytes<1||maxBytes>100*1024**3||!Number.isSafeInteger(deadline)||deadline<1000||deadline>7200000)throw Error('Use bounded archive byte and time limits.');
  const fetchOutput=createHiggsfieldOutputFetcher({allowedHosts:hosts});
- const worker=createHiggsfieldArchiveWorker({scratchRoot:await realpath(scratchRoot!),operationDeadlineMs:deadline,fetchOutput:input=>fetchOutput({...input,maxBytes:Math.min(input.maxBytes,maxBytes)}),inspectMedia:input=>inspectHiggsfieldArchiveMedia(input,{ffprobePath,ffmpegPath,limits:{maxBytes}})});
+ const worker=createHiggsfieldArchiveWorker({scratchRoot:await realpath(scratchRoot!),operationDeadlineMs:deadline,fetchOutput:input=>fetchOutput({...input,maxBytes:Math.min(input.maxBytes,maxBytes)}),inspectMedia:input=>inspectHiggsfieldArchiveMedia(input,{sandbox,limits:{maxBytes}})});
  const stop=new AbortController();
  const close=()=>stop.abort();process.once('SIGTERM',close);process.once('SIGINT',close);
  console.log(JSON.stringify({event:'archive-worker-started',concurrency:1,maxBytes,deadlineMs:deadline}));

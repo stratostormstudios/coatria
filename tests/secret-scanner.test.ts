@@ -14,6 +14,28 @@ test('secret detection covers provider tokens, scoped tokens and database URLs w
   assert.ok(forbiddenPath('nested/.env.production'));assert.ok(forbiddenPath('nested/.vercel/project.json'));assert.ok(!forbiddenPath('.env.example'));
 });
 
+test('Runpod S3 secrets are classified without reflecting values or treating short prefixes as credentials',()=>{
+  const prefix=['rp','s','_'].join(''),value=prefix+'aB09_-'.repeat(8);
+  assert.deepEqual(detectSecrets(value),['Runpod S3 token']);
+  assert.deepEqual(detectSecrets(Buffer.from('\0'+value+'\n')),['Runpod S3 token']);
+  assert.deepEqual(detectSecrets(prefix+'x'.repeat(19)),[]);
+  assert.deepEqual(detectSecrets('example'+value),[]);
+  assert.ok(!JSON.stringify(detectSecrets(value)).includes(value));
+});
+
+test('Runpod S3 secrets in filenames and contents are redacted in scanner diagnostics',async()=>{
+  const temporary=await mkdtemp(join(tmpdir(),'coatria-secret-scan-'));
+  const value=['rp','s','_'].join('')+'y'.repeat(44);
+  try{
+    execFileSync('git',['init'],{cwd:temporary,stdio:['ignore','pipe','pipe']});
+    await writeFile(join(temporary,value+'.txt'),value);
+    const output=spawnSync(process.execPath,[resolve('scripts/check-secrets.mjs')],{cwd:temporary,encoding:'utf8'}),diagnostic=output.stdout+output.stderr;
+    assert.equal(output.status,1);assert.match(diagnostic,/Runpod S3 token/);assert.match(diagnostic,/\[redacted\]/);assert.ok(!diagnostic.includes(value));
+  }finally{
+    const target=relative(tmpdir(),temporary);assert.ok(target&&!target.startsWith('..')&&!isAbsolute(target));await rm(temporary,{recursive:true,force:true});
+  }
+});
+
 test('scanner catches staged-only values, binary-looking files, nested environments and deleted history',async()=>{
   const temporary=await mkdtemp(join(tmpdir(),'coatria-secret-scan-'));
   const git=(args:string[])=>execFileSync('git',args,{cwd:temporary,encoding:'utf8',stdio:['ignore','pipe','pipe']});

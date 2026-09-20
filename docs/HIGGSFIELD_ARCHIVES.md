@@ -88,22 +88,24 @@ Configure these only on the dedicated worker:
   No wildcard, private address, alternate port, redirect or proxy is accepted.
   Determine these from actual provider outputs privately; never publish signed
   URLs. An expired URL requires investigation, not another paid generation.
-- `COATRIA_FFPROBE_PATH` and `COATRIA_FFMPEG_PATH`: absolute paths to the qualified
-  decoder executables or trusted isolation wrappers. No runtime download or PATH
-  fallback occurs. See the explicit remaining isolation gap below.
+- `COATRIA_MEDIA_SANDBOX_PROFILE`: immutable root-owned Linux decoder manifest;
+  `COATRIA_MEDIA_SANDBOX_PROFILE_SHA256`: its independently configured digest;
+  `COATRIA_MEDIA_CGROUP_ROOT`: empty delegated decoder subtree. The worker checks
+  the closure and exercises the actual namespace/cgroup boundary before claiming
+  work. There is no bare-decoder or arbitrary-wrapper fallback.
 - `COATRIA_ARCHIVE_MAX_SOURCE_BYTES`: deployment ceiling, default512MiB; source
   download and inspection use this ceiling even if a proposal allows more.
 - `COATRIA_ARCHIVE_OPERATION_MS`: complete attempt deadline, default30minutes,
   maximum2hours. Concurrency is one per process; database leases arbitrate replicas.
 
-The decoder currently has a minimal environment, inherited regular input FD,
-fixed format/codec allowlists, full-decode checks, aborts and finite budgets.
-**These are not OS isolation.** Qualify a separate decoder namespace/container
-with no network, credentials or other host files, aggregate memory/CPU/process
-limits, and complete process-group termination. The service itself also needs
-aggregate cgroup limits. The checksum-pinned Linux CI decoder depends on glibc;
-mounting only that binary is not a complete sandbox runtime. Do not treat a
-configuration flag as evidence these boundaries exist.
+The Linux boundary uses a pinned read-only dependency closure, isolated
+namespaces, a clean environment and inherited read-only media FD. A pre-exec
+helper joins an aggregate-capped cgroup before launching any decoder; completion
+requires killing/draining all descendants. The service itself also needs aggregate
+cgroup limits. [Media sandbox qualification](MEDIA_SANDBOX.md) documents exact
+installation pins and the hostile-process plus seven-format CI lane. Only actual
+passing evidence qualifies that tested host; CI configuration alone and an
+ordinary Runpod container do not qualify production deployment.
 
 Stop the service with SIGTERM/SIGINT. It aborts its active operation and records
 an uncertain outcome if a provider write might have happened. A failed read can
@@ -125,6 +127,9 @@ CI prepares a checksum-pinned FFmpeg build with
 `scripts/hosting/prepare-media-inspector-ci.mjs`, then tests actual decoding.
 This script is never called by the production worker. Locally configure
 `COATRIA_TEST_FFPROBE_PATH` and `COATRIA_TEST_FFMPEG_PATH` before `npm test`.
+Those explicit native unit tests do not prove host isolation. The independent
+`media-sandbox-linux` job must pass its actual adversarial and real-media checks;
+it never skips to success when required kernel or cgroup features are absent.
 
 The archive is still not a production artifact contract or client delivery
 package. Still-image/audio specifications, independent media QC, version-bound
