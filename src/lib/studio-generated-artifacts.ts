@@ -1,5 +1,6 @@
 import {createHash,randomUUID} from 'node:crypto';
 import type {PoolClient} from 'pg';
+import {assertGeneratedWorkCurrent} from './studio-generated-rounds';
 import {z} from 'zod';
 import {fail,id} from './security';
 import {authorizeProjectStorageActor} from './project-storage';
@@ -189,6 +190,7 @@ export async function registerStudioGeneratedArtifact(db:PoolClient,actor:Studio
  const {lockedStudioProject,studioWorkItems,bumpStudioProject,studioActivity}=await import('./studio');
  const project=await lockedStudioProject(db,actor.companyId,projectId,old?undefined:data.revision);
  if(project.contractVersion!==2||project.productionPath!=='higgsfield')fail(409,'Generated registration requires a version 2 Higgsfield project.','STUDIO_CONTRACT_UNSUPPORTED');
+ await assertGeneratedWorkCurrent(db,actor.companyId,projectId,data.workItemId);
  if(project.status==='delivered'||project.aiPolicy!=='allowed'||['brief','estimate','production'].some(gate=>project.gates[gate]?.decision!=='approved'))fail(409,'Current production authorization is required.','STUDIO_GATE_REQUIRED');
  const work=(await studioWorkItems(db,actor.companyId,project)).find(w=>w.id===data.workItemId);if(!work||work.execution!=='creative'||work.stage!=='generation')return invalid();
  if(!work.agentId&&!work.humanId)fail(409,'Assign the generation role before registering its media.','STUDIO_ROLE_REQUIRED');

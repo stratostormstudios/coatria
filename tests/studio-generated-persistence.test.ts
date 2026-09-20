@@ -7,7 +7,7 @@ import {Pool,type PoolClient} from 'pg';
 import {studioGeneratedSpecInput,generatedSpecificationSha256,type GeneratedProjectSpec} from '../src/lib/studio-generated-protocol';
 import {buildStudioGeneratedArtifactManifest} from '../src/lib/studio-generated-artifacts';
 import {recordGeneratedStudioReview,prepareGeneratedStudioDelivery,assertGeneratedStudioTaskArtifact} from '../src/lib/studio-generated-review';
-import {studioProjectDetail} from '../src/lib/studio';
+import {lockedStudioProject} from '../src/lib/studio';
 import {studioReviewInput,studioDeliveryInput} from '../src/lib/studio-protocol';
 
 const integration=process.env.COATRIA_INTEGRATION_DATABASE_URL,emulate=process.env.COATRIA_TEST_EMULATOR==='1';
@@ -142,14 +142,17 @@ test('generated persistence enforces typed projects and immutable verified prove
    await rejects(client=>client.query('DELETE FROM studio_generated_review_evidence WHERE review_id=$1',[review.id]));
    await rejects(client=>client.query("UPDATE studio_reviews SET decision='changes_requested' WHERE id=$1",[review.id]));
   });
+  // Persistence assertions above isolate030; current service readers require
+  // the complete schema, including immutable delivery revision scopes.
+  for(const file of migrations.filter(file=>file>'030_studio_generated_media.sql'))await db.query(await readFile('database/'+file,'utf8'));
   async function generatedOperation<T>(projectId:string,actorId:string,run:(client:PoolClient,project:import('../src/lib/studio-protocol').StudioGeneratedProject)=>Promise<T>){
    return tx(async client=>{
     await client.query('SELECT id FROM companies WHERE id=$1 FOR KEY SHARE',[company]);
     await client.query('SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2 FOR SHARE',[company,actorId]);
     await client.query('SELECT id FROM studio_projects WHERE company_id=$1 AND id=$2 FOR UPDATE',[company,projectId]);
-    const detail=await studioProjectDetail(client as PoolClient,company,projectId,2);
-    if(!('contractVersion' in detail.project)||detail.project.contractVersion!==2)throw new Error('Expected generated project');
-    return run(client as PoolClient,detail.project);
+    const project=await lockedStudioProject(client as PoolClient,company,projectId);
+    if(project.contractVersion!==2)throw new Error('Expected generated project');
+    return run(client as PoolClient,project);
    });
   }
   const actor=(userId:string)=>({companyId:company,userId});
@@ -167,9 +170,9 @@ test('generated persistence enforces typed projects and immutable verified prove
     await generatedOperation(f.p.id,reviewer,client=>assertGeneratedStudioTaskArtifact(client,company,f.p.id,f.w.id,true));
     assert.equal((await db.query('SELECT status FROM tasks WHERE id=$1',[f.w.task_id])).rows[0].status,'todo');
     const packageInput=studioDeliveryInput.parse({clientId:randomUUID(),revision:1,name:'Synthetic internal package',artifactIds:[pair.artifact.id],note:'Internal fixture only; no download or client acceptance.'});
-    await assert.rejects(()=>generatedOperation(f.p.id,reviewer,(client,p)=>prepareGeneratedStudioDelivery(client,actor(reviewer),p,packageInput)),(error:any)=>error.code==='STUDIO_WORK_INCOMPLETE');
+    await assert.rejects(()=>generatedOperation(f.p.id,reviewer,(client,p)=>prepareGeneratedStudioDelivery(client,actor(reviewer),p,packageInput)),(error:any)=>error.code==='STUDIO_REVISION_SCOPE_INVALID');
     await db.query("UPDATE tasks SET status='done',approved_by=$2 WHERE id=$1",[f.w.task_id,reviewer]);
-    await assert.rejects(()=>generatedOperation(f.p.id,reviewer,(client,p)=>prepareGeneratedStudioDelivery(client,actor(reviewer),p,packageInput)),(error:any)=>error.code==='STUDIO_DELIVERY_INCOMPLETE');
+    await assert.rejects(()=>generatedOperation(f.p.id,reviewer,(client,p)=>prepareGeneratedStudioDelivery(client,actor(reviewer),p,packageInput)),(error:any)=>error.code==='STUDIO_REVISION_SCOPE_INVALID');
     const qcTask=await insert(db,'tasks',{company_id:company,title:'Synthetic independent QC',created_by:producer,status:'done',approved_by:reviewer});
     const qc=await insert(db,'studio_work_items',{company_id:company,project_id:f.p.id,shot_id:f.u.id,logical_key:'qc',task_id:qcTask.id,stage:'qc',role_key:'qc',execution:'human'});
     await insert(db,'studio_dependencies',{company_id:company,project_id:f.p.id,work_item_id:qc.id,predecessor_id:f.w.id});
@@ -205,12 +208,11 @@ test('generated persistence enforces typed projects and immutable verified prove
     await insert(db,'studio_dependencies',{company_id:company,project_id:f.p.id,work_item_id:qc.id,predecessor_id:predecessor.id});
    }
    const data=studioDeliveryInput.parse({clientId:randomUUID(),revision:1,name:'Reject swapped QC',artifactIds:[randomUUID(),randomUUID()],note:'QC must cover its own deliverable before artifact selection is evaluated.'});
-   await assert.rejects(()=>generatedOperation(f.p.id,reviewer,(client,p)=>prepareGeneratedStudioDelivery(client,actor(reviewer),p,data)),(error:any)=>error.code==='STUDIO_DELIVERY_INCOMPLETE');
+   await assert.rejects(()=>generatedOperation(f.p.id,reviewer,(client,p)=>prepareGeneratedStudioDelivery(client,actor(reviewer),p,data)),(error:any)=>error.code==='STUDIO_REVISION_SCOPE_INVALID');
    assert.equal((await db.query('SELECT count(*)::int AS n FROM studio_deliveries WHERE project_id=$1',[f.p.id])).rows[0].n,0);
   });
   await t.test('runtime grants retain v1 writes and allow only append/read access to generated source and review evidence',async()=>{
-   // Runtime grants target the complete current schema; earlier cases isolate the 030 upgrade.
-   for(const file of migrations.filter(file=>file>'030_studio_generated_media.sql'))await db.query(await readFile('database/'+file,'utf8'));
+   // Runtime grants target the complete current schema applied before service cases.
    await(control??db).query('CREATE ROLE '+role+' NOLOGIN');roleCreated=true;await db.query((await readFile('database/runtime-permissions.sql','utf8')).replaceAll('coatria_runtime_v1',role));
    await tx(async client=>{await insert(client,'studio_artifacts',{...legacyArtifact,id:randomUUID(),version:2,metadata:JSON.stringify(legacyArtifact.metadata)});await insert(client,'studio_reviews',{company_id:company,project_id:legacy.id,artifact_id:legacyArtifact.id,decision:'changes_requested',note:'Legacy remains usable',technical_qc:false,reviewed_by:reviewer});},true);
    await tx(client=>client.query('SELECT artifact_id FROM studio_generated_artifact_sources LIMIT 1'),true);

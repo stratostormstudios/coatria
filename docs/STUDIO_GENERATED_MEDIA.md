@@ -4,7 +4,7 @@
 new Higgsfield projects. The current checkout connects typed project creation,
 verified-archive registration, independent review, internal packaging and
 authenticated external-client delivery. It has not yet been released to
-production. Migrations 030–032 and their restricted runtime/gateway grants must
+production. Migrations 030–033 and their restricted runtime/gateway grants must
 ship together with the version-aware API after PostgreSQL and integration
 qualification. This does not enable archive workers, paid generation or qualify
 a production storage gateway by itself.

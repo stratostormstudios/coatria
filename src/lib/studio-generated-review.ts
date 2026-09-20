@@ -5,6 +5,7 @@ import type {StudioGeneratedProject,studioReviewInput,studioDeliveryInput} from 
 import {fail} from './security';
 import {generatedSpecificationSha256,matchGeneratedArchiveMedia,studioGeneratedWorkUnitInput} from './studio-generated-protocol';
 import {loadStoredGeneratedArtifact} from './studio-generated-artifacts';
+import {assertGeneratedWorkCurrent,generatedRoundScope,pinGeneratedDeliveryRound} from './studio-generated-rounds';
 
 /** These helpers run inside the studio request transaction, after company,
  * caller membership and project locks. They never transfer files, perform a
@@ -46,6 +47,7 @@ export async function recordGeneratedStudioReview(client:PoolClient,actor:Studio
  await humanAdministrator(client,actor);
  if(project.status==='delivered')fail(409,'Delivered review history is closed.','STUDIO_PROJECT_CLOSED');
  const {evidence,work,technicalMatch}=await checkedEvidence(client,actor.companyId,project,data.artifactId);
+ await assertGeneratedWorkCurrent(client,actor.companyId,project.id,work.id);
  if([evidence.artifact.producedBy,evidence.sourceSnapshot.agentSponsorId,evidence.sourceSnapshot.providerSponsorId,evidence.registeredBy].includes(actor.userId))fail(403,'An independent administrator who did not produce, sponsor or register this version must review it.','STUDIO_INDEPENDENT_REVIEW');
  await latest(client,actor.companyId,project.id,work.id,data.artifactId);
  if(work.status==='done')fail(409,'Accepted work and its reviewed version are immutable.','STUDIO_WORK_CLOSED');
@@ -66,6 +68,7 @@ export async function recordGeneratedStudioReview(client:PoolClient,actor:Studio
 export async function assertGeneratedStudioTaskArtifact(client:PoolClient,companyId:string,projectId:string,workItemId:string,requiresApproval:boolean){
  const p=(await client.query('SELECT id,contract_version AS "contractVersion",production_path AS "productionPath",spec FROM studio_projects WHERE company_id=$1 AND id=$2',[companyId,projectId])).rows[0];
  if(p?.contractVersion!==2||p.productionPath!=='higgsfield')fail(409,'A generated-media project is required.','STUDIO_CONTRACT_UNSUPPORTED');
+ await assertGeneratedWorkCurrent(client,companyId,projectId,workItemId);
  const artifact=(await client.query('SELECT id,contract_version FROM studio_artifacts WHERE company_id=$1 AND project_id=$2 AND work_item_id=$3 ORDER BY version DESC LIMIT 1',[companyId,projectId,workItemId])).rows[0];
  if(!artifact||artifact.contract_version!==2)fail(409,'Register verified generated media before submitting this production task.','STUDIO_ARTIFACT_REQUIRED');
  const {evidence,technicalMatch}=await checkedEvidence(client,companyId,p,artifact.id);
@@ -77,13 +80,15 @@ export async function prepareGeneratedStudioDelivery(client:PoolClient,actor:Stu
  await humanAdministrator(client,actor);
  if(project.status==='delivered')fail(409,'This project already has recorded client acceptance.','STUDIO_PROJECT_CLOSED');
  if(project.gates.production?.decision!=='approved')fail(409,'Production authorization is required.','STUDIO_GATE_REQUIRED');
+ const scope=await generatedRoundScope(client,actor.companyId,project.id);
  const work=(await client.query(`SELECT w.id,w.stage,w.execution,w.shot_id,t.status,
   COALESCE((SELECT jsonb_agg(d.predecessor_id ORDER BY d.predecessor_id) FROM studio_dependencies d WHERE d.company_id=w.company_id AND d.project_id=w.project_id AND d.work_item_id=w.id),'[]') AS dependencies
-  FROM studio_work_items w JOIN tasks t ON t.company_id=w.company_id AND t.id=w.task_id WHERE w.company_id=$1 AND w.project_id=$2 ORDER BY w.id`,[actor.companyId,project.id])).rows;
+  FROM studio_work_items w JOIN tasks t ON t.company_id=w.company_id AND t.id=w.task_id WHERE w.company_id=$1 AND w.project_id=$2 AND w.id=ANY($3::uuid[]) ORDER BY w.id`,[actor.companyId,project.id,scope.workItemIds])).rows;
+ if(work.length!==scope.workItemIds.length)fail(409,'The current production round is incomplete.','STUDIO_DELIVERY_INCOMPLETE');
  if(work.some(w=>w.stage!=='delivery'&&w.status!=='done'))fail(409,'All production work needs independent task acceptance before packaging.','STUDIO_WORK_INCOMPLETE');
  const units=(await client.query('SELECT id FROM studio_shots WHERE company_id=$1 AND project_id=$2 ORDER BY id',[actor.companyId,project.id])).rows;
- const qc=work.filter(w=>w.stage==='qc'),finalIds=new Set<string>(qc.flatMap(w=>w.dependencies));
- if(!units.length||qc.length!==units.length||units.some(unit=>qc.filter(w=>w.shot_id===unit.id).length!==1)||qc.some(w=>{const final=work.find(candidate=>candidate.id===w.dependencies[0]);return w.dependencies.length!==1||!final||final.shot_id!==w.shot_id||final.stage!=='generation'||final.execution!=='creative';})||finalIds.size!==units.length)fail(409,'Every deliverable needs its complete independent QC dependency.','STUDIO_DELIVERY_INCOMPLETE');
+ const finalIds=new Set(scope.finals.map(final=>final.generationWorkItemId));
+ if(!units.length||scope.finals.length!==units.length||units.some(unit=>scope.finals.filter(final=>final.unitId===unit.id).length!==1)||finalIds.size!==units.length||scope.finals.some(final=>{if(final.carry)return false;const generation=work.find(item=>item.id===final.generationWorkItemId),qc=work.find(item=>item.id===final.qcWorkItemId);return !generation||!qc||generation.shot_id!==final.unitId||generation.stage!=='generation'||generation.execution!=='creative'||qc.stage!=='qc'||qc.shot_id!==final.unitId||qc.dependencies.length!==1||qc.dependencies[0]!==generation.id;}))fail(409,'Every deliverable needs its complete independent QC dependency.','STUDIO_DELIVERY_INCOMPLETE');
  const artifacts=[],reviews=[],selectedWork=new Set<string>();
  for(const artifactId of [...data.artifactIds].sort()){
   const {evidence,work:item,technicalMatch}=await checkedEvidence(client,actor.companyId,project,artifactId);
@@ -92,13 +97,16 @@ export async function prepareGeneratedStudioDelivery(client:PoolClient,actor:Stu
   if(!finalIds.has(item.id)||selectedWork.has(item.id))fail(409,'Select exactly one final version for each generated deliverable.','STUDIO_DELIVERY_INCOMPLETE');
   selectedWork.add(item.id);
   const review=await approvedReview(client,actor.companyId,project.id,artifactId,evidence.specSha256,evidence.manifestSha256);
+  const carry=scope.finals.find(final=>final.generationWorkItemId===item.id)?.carry;
+  if(carry&&(carry.artifactId!==artifactId||carry.reviewId!==review.id||carry.storageVersionId!==evidence.storageVersionId||carry.manifestSha256!==evidence.manifestSha256||carry.fileSha256!==evidence.fileFacts.sha256))fail(409,'Use the exact approved original selected for this revision carry-forward.','STUDIO_DELIVERY_INCOMPLETE');
   artifacts.push(evidence.artifact);reviews.push(review);
  }
  if(selectedWork.size!==finalIds.size)fail(409,'Include the latest approved final version for every generated deliverable.','STUDIO_DELIVERY_INCOMPLETE');
  if(Number((await client.query('SELECT count(*) FROM studio_deliveries WHERE company_id=$1 AND project_id=$2',[actor.companyId,project.id])).rows[0].count)>=100)fail(409,'This project reached its delivery-package limit.');
  const now=(await client.query('SELECT clock_timestamp() AS at')).rows[0].at;
- const manifest={schemaVersion:2,kind:'generated_media_package',project:{id:project.id,name:project.name,clientName:project.clientName,spec:project.spec,revision:project.revision},generatedAt:new Date(now).toISOString(),preparedBy:actor.userId,transportStatus:'not_transferred',artifacts,reviewReceipts:reviews,note:data.note};
+ const manifest={schemaVersion:2,kind:'generated_media_package',project:{id:project.id,name:project.name,clientName:project.clientName,spec:project.spec,revision:project.revision},...scope.roundId?{revisionRound:{roundId:scope.roundId,number:scope.number,planSha256:scope.planSha256}}:{},generatedAt:new Date(now).toISOString(),preparedBy:actor.userId,transportStatus:'not_transferred',artifacts,reviewReceipts:reviews,note:data.note};
  const delivery=(await client.query('INSERT INTO studio_deliveries(company_id,project_id,name,manifest,note,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,name,status,manifest,note,created_at AS "createdAt"',[actor.companyId,project.id,data.name,JSON.stringify(manifest),data.note,actor.userId])).rows[0];
+ await pinGeneratedDeliveryRound(client,actor.companyId,project.id,delivery.id);
  await client.query("UPDATE studio_projects SET status='delivery' WHERE company_id=$1 AND id=$2",[actor.companyId,project.id]);
- return {delivery};
+ return {delivery:{...delivery,roundId:scope.roundId,roundNumber:scope.number}};
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {assertGeneratedDownload,generatedArchiveReason,generatedManifestPath,generatedPackageSelection,generatedRegistrationReason,generatedReviewerReason,generatedTechnicalMatch,generatedVersionAccessPath} from '../src/lib/generated-media-ui';
+import {assertGeneratedDownload,generatedArchiveReason,generatedCurrentDeliveries,generatedManifestPath,generatedPackageSelection,generatedRegistrationReason,generatedReviewerReason,generatedTechnicalMatch,generatedVersionAccessPath} from '../src/lib/generated-media-ui';
 import type {StudioGeneratedArtifact,StudioGeneratedProjectDetail,StudioGeneratedReview,StudioWorkItem} from '../src/lib/studio-protocol';
 import type {GeneratedObservedMedia,GeneratedProjectSpec,GeneratedWorkUnit} from '../src/lib/studio-generated-protocol';
 import type {HiggsfieldArchive} from '../src/lib/higgsfield-archive-protocol';
@@ -87,4 +87,38 @@ test('media links are locally constructed and access must pin the exact version 
  const access:StorageDownloadAccess={url:`${gateway}/v1/files/${artifact.provenance.storageVersionId}`,headers:{Authorization:'Bearer synthetic_fixture'},expiresAt:'2099-01-01T00:00:00.000Z',bytes:artifact.file.bytes,name:'output.png',sha256:artifact.file.sha256,contentType:artifact.file.contentType};
  assert.doesNotThrow(()=>assertGeneratedDownload(access,artifact,gateway));
  for(const changes of [{url:gateway+'/v1/files/'+id(99)},{url:'https://different.example/v1/files/'+artifact.provenance.storageVersionId},{url:access.url+'?token=leak'},{url:access.url+'#fragment'},{sha256:'f'.repeat(64)},{bytes:101},{contentType:'text/html'}])assert.throws(()=>assertGeneratedDownload({...access,...changes},artifact,gateway));
+});
+
+function revisionFixture(kind:'image'|'video'|'audio'='image'){
+ const f=fixture(kind),{detail,artifact,review}=f;detail.workItems.forEach(work=>work.status='done');
+ detail.historyWorkItems=structuredClone(detail.workItems);
+ const unit={...detail.shots[0],id:id(70),code:'NEW02'};detail.shots.push(unit);
+ const generation={...detail.workItems[0],id:id(71),taskId:id(72),shotId:unit.id},qc={...detail.workItems[1],id:id(73),taskId:id(74),shotId:unit.id,dependencies:[generation.id]};
+ detail.workItems=[generation,qc];
+ const next={...structuredClone(artifact),id:id(75),workItemId:generation.id,provenance:{...artifact.provenance,storageVersionId:id(76)},manifestSha256:'d'.repeat(64)};
+ detail.artifacts.push(next);detail.reviews.push({...review,id:id(77),artifactId:next.id,manifestSha256:next.manifestSha256});
+ const carry={artifactId:artifact.id,reviewId:review.id,storageVersionId:artifact.provenance.storageVersionId,manifestSha256:artifact.manifestSha256,fileSha256:artifact.file.sha256};
+ detail.generatedRound={roundId:id(80),number:1,planSha256:'e'.repeat(64),workItemIds:detail.workItems.map(work=>work.id),finals:[{unitId:id(2),generationWorkItemId:id(3),qcWorkItemId:id(7),carry},{unitId:unit.id,generationWorkItemId:generation.id,qcWorkItemId:qc.id,carry:null}]};
+ return {...f,next,carry};
+}
+test('revision packages combine exact historical carry and newly approved work across all media kinds',()=>{
+ for(const kind of ['image','video','audio'] as const){const {detail,artifact,next}=revisionFixture(kind),before=JSON.stringify(detail.historyWorkItems);
+  assert.deepEqual(generatedPackageSelection(detail),{artifacts:[artifact,next],reason:null});
+  assert.equal(generatedTechnicalMatch(detail,artifact).matches,true);
+  assert.match(generatedReviewerReason(detail,artifact,id(15),'owner')!,/earlier round/);
+  assert.equal(JSON.stringify(detail.historyWorkItems),before);
+  detail.workItems[0].status='doing';assert.match(generatedPackageSelection(detail).reason!,/Accept all/);
+ }
+});
+test('carry pins, original QC and active scope cannot be substituted or silently omitted',()=>{
+ for(const field of ['artifactId','storageVersionId','manifestSha256','fileSha256','reviewId'] as const){const {detail,carry}=revisionFixture();carry[field]=field.endsWith('Sha256')?'f'.repeat(64):id(99);assert.notEqual(generatedPackageSelection(detail).reason,null,field);}
+ const {detail}=revisionFixture();detail.historyWorkItems![1].dependencies=[id(71)];assert.match(generatedPackageSelection(detail).reason!,/exact generation/);
+ const second=revisionFixture().detail;second.generatedRound!.workItemIds.push(id(99));assert.match(generatedPackageSelection(second).reason!,/scope is incomplete/);
+ const third=revisionFixture().detail;third.generatedRound!.finals.pop();assert.match(generatedPackageSelection(third).reason!,/scope is incomplete/);
+});
+test('only the active round packages are eligible while earlier deliveries stay in history',()=>{
+ const {detail}=revisionFixture(),base={id:id(90),name:'Original package',note:'Original immutable package.',createdAt:at,status:'prepared' as const,manifest:{}};
+ detail.deliveries=[base,{...base,id:id(91),name:'Round 1',roundId:detail.generatedRound!.roundId,roundNumber:1}];
+ assert.deepEqual(generatedCurrentDeliveries(detail).map(item=>item.id),[id(91)]);assert.equal(detail.deliveries.length,2);
+ delete detail.generatedRound;assert.deepEqual(generatedCurrentDeliveries(detail).map(item=>item.id),[id(90)]);
 });

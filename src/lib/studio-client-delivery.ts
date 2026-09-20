@@ -9,6 +9,7 @@ import {canonicalStudioMedia,createStudioMediaProvider,type StudioMediaProvider}
 import {studioProjectDetail} from './studio';
 import {buildGeneratedClientPackage,validateGeneratedClientPackage} from './studio-generated-client-package';
 import {issueStudioClientStorageAccess} from './studio-client-storage';
+import {assertGeneratedDeliveryCurrent} from './studio-generated-rounds';
 import {STUDIO_CLIENT_DELIVERY_MAX_DAYS,STUDIO_CLIENT_DELIVERY_MAX_FILES,studioClientDeliveryCreateInput,studioClientDeliveryRevokeInput,studioClientDeliveryAccessInput,studioClientDeliveryResponseInput,studioClientDeliveryListInput,type StudioClientPackage,type StudioClientDeliveryFile} from './studio-client-delivery-protocol';
 
 type Row=Record<string,any>;
@@ -68,7 +69,8 @@ async function activeGrant(client:PoolClient,user:User,shareId:string,options:{w
 }
 async function eligibleDelivery(client:PoolClient,companyId:string,projectId:string,deliveryId:string){
  const delivery=(await client.query('SELECT * FROM studio_deliveries WHERE company_id=$1 AND project_id=$2 AND id=$3',[companyId,projectId,deliveryId])).rows[0];if(!delivery)fail(404,'Delivery package not found.');
- const project=(await client.query('SELECT contract_version FROM studio_projects WHERE company_id=$1 AND id=$2',[companyId,projectId])).rows[0];
+ const project=(await client.query('SELECT contract_version,status,gates FROM studio_projects WHERE company_id=$1 AND id=$2',[companyId,projectId])).rows[0];
+ if(project?.contract_version===2){const scope=await assertGeneratedDeliveryCurrent(client,companyId,projectId,deliveryId),tasks=(await client.query('SELECT w.id,t.status FROM studio_work_items w JOIN tasks t ON t.company_id=w.company_id AND t.id=w.task_id WHERE w.company_id=$1 AND w.project_id=$2 AND w.id=ANY($3::uuid[])',[companyId,projectId,scope.workItemIds])).rows;if(project.gates?.production?.decision!=='approved'||tasks.length!==scope.workItemIds.length||tasks.some(task=>task.status!=='done'))fail(409,'Production and independent delivery-handoff review must be complete before client delivery.','CLIENT_DELIVERY_NOT_READY');return {delivery,detail:{project}};}
  const detail=await studioProjectDetail(client,companyId,projectId,project?.contract_version===2?2:1);
  if(detail.project.gates.production?.decision!=='approved'||detail.workItems.some(work=>work.status!=='done'))fail(409,'Production and independent delivery-handoff review must be complete before client delivery.','CLIENT_DELIVERY_NOT_READY');
  const selected=delivery.manifest?.artifacts;
@@ -115,7 +117,7 @@ async function createShare(client:PoolClient,companyId:string,actorId:string,pro
   if(snapshot.schemaVersion===2)await client.query('INSERT INTO studio_client_delivery_files(company_id,project_id,share_id,file_id,artifact_id,storage_version_id,storage_sha256,storage_bytes,storage_content_type,storage_name,review_id) SELECT $1,$2,$3,f.version_id,f.artifact_id,f.version_id,f.sha256,f.bytes,f.content_type,f.name,f.review_id FROM unnest($4::uuid[],$5::uuid[],$6::text[],$7::bigint[],$8::text[],$9::text[],$10::uuid[]) AS f(version_id,artifact_id,sha256,bytes,content_type,name,review_id)',[companyId,projectId,shareId,snapshot.files.map(f=>f.storageVersionId),snapshot.files.map(f=>f.artifactId),snapshot.files.map(f=>f.sha256),snapshot.files.map(f=>f.bytes),snapshot.files.map(f=>f.contentType),snapshot.files.map(f=>f.path),snapshot.files.map(f=>delivery.manifest.reviewReceipts.find((r:Row)=>r.artifactId===f.artifactId).id)]);
   else await client.query('INSERT INTO studio_client_delivery_files(company_id,project_id,share_id,file_id,artifact_id) SELECT $1,$2,$3,files.file_id,files.artifact_id FROM unnest($4::uuid[],$5::uuid[]) AS files(file_id,artifact_id)',[companyId,projectId,shareId,snapshot.files.map(file=>file.fileId),snapshot.files.map(file=>file.artifactId)]);
   await client.query('INSERT INTO activity(company_id,actor_id,kind,description) VALUES($1,$2,$3,$4)',[companyId,actorId,'studio.client_access_created','An administrator granted one externally confirmed client account access to an exact approved package. No invitation was sent and no download was observed.']);return {shareId};
- });const grant=(await client.query('SELECT * FROM studio_client_deliveries WHERE company_id=$1 AND id=$2',[companyId,result.shareId])).rows[0];if(grant?.package_snapshot?.schemaVersion===2)await validateGeneratedClientPackage(client,grant,{requireReady:false,requireAvailable:false});return {share:await shareView(client,companyId,result.shareId),replayed:result.replayed};
+ });const grant=(await client.query('SELECT * FROM studio_client_deliveries WHERE company_id=$1 AND id=$2',[companyId,result.shareId])).rows[0];if(grant?.package_snapshot?.schemaVersion===2){await assertGeneratedDeliveryCurrent(client,companyId,projectId,grant.delivery_id);await validateGeneratedClientPackage(client,grant,{requireReady:false,requireAvailable:false});}return {share:await shareView(client,companyId,result.shareId),replayed:result.replayed};
 }
 export async function studioClientDeliveryList(client:PoolClient,companyId:string,projectId:string,input:z.infer<typeof studioClientDeliveryListInput>){
  if(!(await client.query('SELECT id FROM studio_projects WHERE company_id=$1 AND id=$2',[companyId,projectId])).rowCount)fail(404,'Studio project not found.');
@@ -139,6 +141,7 @@ async function detail(client:PoolClient,user:User,shareId:string,input:z.infer<t
 }
 async function recordClientResponse(client:PoolClient,user:User,shareId:string,data:z.infer<typeof studioClientDeliveryResponseInput>){
  const grant=await activeGrant(client,user,shareId,{write:true,project:true});
+ if(grant.package_snapshot?.schemaVersion===2)await assertGeneratedDeliveryCurrent(client,grant.company_id,grant.project_id,grant.delivery_id);
  const response=await once(client,grant.company_id,user.id,data.clientId,'respond:'+shareId,data,async()=>{
   if(grant.revision!==data.revision)fail(409,'Client delivery access changed. Refresh before responding.','CLIENT_DELIVERY_REVISION_CONFLICT');
   if((await client.query("SELECT id FROM studio_client_delivery_receipts WHERE company_id=$1 AND share_id=$2 AND kind IN ('acknowledged','changes_requested')",[grant.company_id,grant.id])).rowCount)fail(409,'Your response to this package is already recorded.','CLIENT_RESPONSE_RECORDED');

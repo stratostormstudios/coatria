@@ -14,7 +14,13 @@ GRANT SELECT(company_id,agent_id,host_id,installation_id,token_hash,revoked_at,e
 GRANT SELECT(company_id,child_run_id) ON studio_generated_followups TO coatria_storage_gateway_v1;
 -- External client capabilities are separate from membership and agent grants.
 -- Only exact approved file facts and mutable source availability are exposed.
-GRANT SELECT(id,company_id,project_id,recipient_user_id,created_by,status,package_hash,expires_at) ON studio_client_deliveries TO coatria_storage_gateway_v1;
+GRANT SELECT(id,company_id,project_id,delivery_id,recipient_user_id,created_by,status,package_hash,expires_at) ON studio_client_deliveries TO coatria_storage_gateway_v1;
+-- Only revision topology and pinned file identities. Draft plans and client notes remain private.
+GRANT SELECT(id,company_id,project_id) ON studio_deliveries,studio_shots TO coatria_storage_gateway_v1;
+GRANT SELECT(id,company_id,project_id,number,plan_sha256) ON studio_generated_revision_rounds TO coatria_storage_gateway_v1;
+GRANT SELECT(company_id,project_id,delivery_id,round_id) ON studio_generated_delivery_rounds TO coatria_storage_gateway_v1;
+GRANT SELECT(company_id,project_id,round_id,work_item_id) ON studio_generated_revision_work TO coatria_storage_gateway_v1;
+GRANT SELECT(company_id,project_id,round_id,unit_id,generation_work_item_id,qc_work_item_id,action,artifact_id,review_id,storage_version_id,manifest_sha256,file_sha256) ON studio_generated_revision_items TO coatria_storage_gateway_v1;
 GRANT SELECT(company_id,project_id,share_id,file_id,artifact_id,review_id,storage_version_id,storage_name,storage_sha256,storage_bytes,storage_content_type) ON studio_client_delivery_files TO coatria_storage_gateway_v1;
 GRANT SELECT(company_id,project_id,share_id,recipient_user_id,storage_version_id,connection_id,connection_revision,package_hash,token_hash,expires_at) ON studio_client_storage_grants TO coatria_storage_gateway_v1;
 GRANT SELECT(company_id,project_id,artifact_id,archive_id,request_id,job_id,output_id,storage_version_id,archive_approved_by,file_facts) ON studio_generated_artifact_sources TO coatria_storage_gateway_v1;

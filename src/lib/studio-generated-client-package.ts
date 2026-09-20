@@ -5,11 +5,12 @@ import {canonicalStudioMedia} from './studio-media';
 import {loadStoredGeneratedArtifact,loadStoredGeneratedArtifacts} from './studio-generated-artifacts';
 import {studioGeneratedSpecInput} from './studio-generated-protocol';
 import type {StudioGeneratedClientPackage} from './studio-client-delivery-protocol';
+import {assertGeneratedDeliveryCurrent,generatedRoundScope} from './studio-generated-rounds';
 
 const uuid=z.string().uuid(),sha=z.string().regex(/^[a-f0-9]{64}$/);
 const optionsInput=z.object({requireReady:z.boolean().optional(),requireAvailable:z.boolean().optional()}).strict();
 type Options=z.infer<typeof optionsInput>;
-const manifestInput=z.object({schemaVersion:z.literal(2),kind:z.literal('generated_media_package'),project:z.object({id:uuid,name:z.string().min(1).max(160),clientName:z.string().min(1).max(160),spec:studioGeneratedSpecInput,revision:z.number().int().positive()}).strict(),generatedAt:z.string().datetime(),preparedBy:uuid,transportStatus:z.literal('not_transferred'),artifacts:z.array(z.object({id:uuid}).passthrough()).min(1).max(100),reviewReceipts:z.array(z.object({id:uuid,artifactId:uuid}).passthrough()).min(1).max(100),note:z.string().max(4000)}).strict();
+const manifestInput=z.object({schemaVersion:z.literal(2),kind:z.literal('generated_media_package'),project:z.object({id:uuid,name:z.string().min(1).max(160),clientName:z.string().min(1).max(160),spec:studioGeneratedSpecInput,revision:z.number().int().positive()}).strict(),revisionRound:z.object({roundId:uuid,number:z.number().int().positive(),planSha256:sha}).strict().optional(),generatedAt:z.string().datetime(),preparedBy:uuid,transportStatus:z.literal('not_transferred'),artifacts:z.array(z.object({id:uuid}).passthrough()).min(1).max(100),reviewReceipts:z.array(z.object({id:uuid,artifactId:uuid}).passthrough()).min(1).max(100),note:z.string().max(4000)}).strict();
 const deliveryInput=z.object({id:uuid,company_id:uuid,project_id:uuid,name:z.string().min(1).max(160),created_by:uuid,created_at:z.union([z.date(),z.string().datetime()]),manifest:manifestInput}).passthrough();
 const grantInput=z.object({company_id:uuid,project_id:uuid,delivery_id:uuid,recipient_user_id:uuid,package_snapshot:z.unknown(),package_hash:sha,source_manifest_hash:sha}).passthrough();
 const invalid=():never=>fail(409,'This generated package no longer matches its immutable approved evidence.','CLIENT_PACKAGE_UNAVAILABLE');
@@ -32,20 +33,21 @@ export async function buildGeneratedClientPackage(client:PoolClient,companyId:st
  // Existing and removed memberships both disqualify a client. The parent
  // account-grant service also holds the company invitation advisory lock.
  if((await client.query('SELECT user_id FROM memberships WHERE company_id=$1 AND user_id=$2',[companyId,recipientUserId])).rowCount)excluded();
+ const scope=requireReady?await assertGeneratedDeliveryCurrent(client,companyId,projectId,delivery.id):await generatedRoundScope(client,companyId,projectId,{deliveryId:delivery.id});
  if(requireReady&&(project.gates?.production?.decision!=='approved'||project.ai_policy!=='allowed'))fail(409,'Restore production approval and the client AI-use policy before delivery.','CLIENT_DELIVERY_NOT_READY');
+ if(scope.roundId?!equal(manifest.revisionRound,{roundId:scope.roundId,number:scope.number,planSha256:scope.planSha256}):manifest.revisionRound!==undefined)invalid();
  const work=(await client.query(`SELECT w.id,w.shot_id,w.stage,w.execution,t.status,
  COALESCE((SELECT jsonb_agg(d.predecessor_id ORDER BY d.predecessor_id) FROM studio_dependencies d WHERE d.company_id=w.company_id AND d.project_id=w.project_id AND d.work_item_id=w.id),'[]') AS dependencies
- FROM studio_work_items w JOIN tasks t ON t.company_id=w.company_id AND t.id=w.task_id WHERE w.company_id=$1 AND w.project_id=$2 ORDER BY w.id`,[companyId,projectId])).rows;
+ FROM studio_work_items w JOIN tasks t ON t.company_id=w.company_id AND t.id=w.task_id WHERE w.company_id=$1 AND w.project_id=$2 AND w.id=ANY($3::uuid[]) ORDER BY w.id`,[companyId,projectId,scope.workItemIds])).rows;
+ if(work.length!==scope.workItemIds.length)invalid();
  if(requireReady&&work.some(item=>item.status!=='done'))fail(409,'All production and independent delivery-handoff work must be accepted before client delivery.','CLIENT_DELIVERY_NOT_READY');
  const units=(await client.query('SELECT id FROM studio_shots WHERE company_id=$1 AND project_id=$2 ORDER BY id',[companyId,projectId])).rows;
- const qc=work.filter(item=>item.stage==='qc'),finalIds=new Set<string>();
- if(!units.length||units.length>100||qc.length!==units.length)invalid();
+ const finalIds=new Set<string>();
+ if(!units.length||units.length>100||scope.finals.length!==units.length)invalid();
  for(const unit of units){
-  const reviewWork=qc.filter(item=>item.shot_id===unit.id);
-  if(reviewWork.length!==1||!Array.isArray(reviewWork[0].dependencies)||reviewWork[0].dependencies.length!==1)invalid();
-  const final=work.find(item=>item.id===reviewWork[0].dependencies[0]);
-  if(!final||final.shot_id!==unit.id||final.stage!=='generation'||final.execution!=='creative'||finalIds.has(final.id))invalid();
-  finalIds.add(final.id);
+  const finals=scope.finals.filter(final=>final.unitId===unit.id);if(finals.length!==1||finalIds.has(finals[0].generationWorkItemId))invalid();const selected=finals[0];
+  if(!selected.carry){const final=work.find(item=>item.id===selected.generationWorkItemId),qc=work.find(item=>item.id===selected.qcWorkItemId);if(!final||!qc||final.shot_id!==unit.id||final.stage!=='generation'||final.execution!=='creative'||qc.stage!=='qc'||qc.shot_id!==unit.id||!Array.isArray(qc.dependencies)||qc.dependencies.length!==1||qc.dependencies[0]!==final.id)invalid();}
+  finalIds.add(selected.generationWorkItemId);
  }
  const artifactIds=manifest.artifacts.map(artifact=>artifact.id);
  if(new Set(artifactIds).size!==artifactIds.length||artifactIds.length!==finalIds.size||manifest.reviewReceipts.length!==artifactIds.length||new Set(manifest.reviewReceipts.map(review=>review.id)).size!==artifactIds.length||new Set(manifest.reviewReceipts.map(review=>review.artifactId)).size!==artifactIds.length)invalid();
@@ -70,6 +72,8 @@ export async function buildGeneratedClientPackage(client:PoolClient,companyId:st
   if(!equal(snapshot,{...artifact,reviewStatus:'approved'}))invalid();
   const pinned=manifest.reviewReceipts.find(review=>review.artifactId===artifact.id),stored=reviewRows.find(review=>review.id===pinned?.id&&review.artifactId===artifact.id);
   if(!pinned||!stored||stored.decision!=='approved'||stored.technicalQc!==true||stored.attestationVersion!==1||stored.specSha256!==item.specSha256||stored.manifestSha256!==item.manifestSha256||!item.match.matches||!equal(stored.technicalMatch,item.match))invalid();
+  const carry=scope.finals.find(final=>final.generationWorkItemId===artifact.workItemId)?.carry;
+  if(carry&&(carry.artifactId!==artifact.id||carry.reviewId!==stored.id||carry.storageVersionId!==item.storageVersionId||carry.manifestSha256!==item.manifestSha256||carry.fileSha256!==item.fileFacts.sha256))invalid();
   const reviewed={...stored,createdAt:instant(stored.createdAt),contractVersion:2};
   if(!equal(pinned,reviewed))invalid();
   if([artifact.producedBy,source.requestedBy,source.agentSponsorId,source.providerSponsorId,item.registeredBy].includes(stored.reviewedBy))invalid();
@@ -80,7 +84,7 @@ export async function buildGeneratedClientPackage(client:PoolClient,companyId:st
   artifacts.push({id:artifact.id,name:artifact.name,version:artifact.version,sha256:artifact.sha256});
   files.push({fileId:item.storageVersionId,artifactId:artifact.id,path:`${item.unit.code}_v${artifact.version}.${item.observedMedia.format}`,frame:null,sha256:item.fileFacts.sha256,bytes:item.fileFacts.bytes,contentType:item.fileFacts.contentType,storageVersionId:item.storageVersionId,mediaKind:item.mediaKind,transport:'project_storage' as const});
  }
- return {schemaVersion:2 as const,delivery:{id:delivery.id,name:delivery.name,preparedAt:instant(delivery.created_at)},project:{id:projectId,name:manifest.project.name,clientName:manifest.project.clientName,spec:manifest.project.spec},sourceManifestSha256:digest(manifest),reviewBasis:'independently_approved' as const,artifacts,files};
+ return {schemaVersion:2 as const,...manifest.revisionRound?{revisionRound:manifest.revisionRound}:{},delivery:{id:delivery.id,name:delivery.name,preparedAt:instant(delivery.created_at)},project:{id:projectId,name:manifest.project.name,clientName:manifest.project.clientName,spec:manifest.project.spec},sourceManifestSha256:digest(manifest),reviewBasis:'independently_approved' as const,artifacts,files};
 }
 
 /** Validate before returning even a cached client receipt. Readiness may be

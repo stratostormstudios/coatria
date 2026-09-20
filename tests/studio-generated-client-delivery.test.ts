@@ -10,11 +10,30 @@ import {handleApi} from '../src/lib/api';
 import {studioClientDeliveryRoute} from '../src/lib/studio-client-delivery';
 import {canonicalStudioMedia,type StudioMediaProvider} from '../src/lib/studio-media';
 import {buildGeneratedClientPackage,validateGeneratedClientPackage} from '../src/lib/studio-generated-client-package';
-import {makeGeneratedClientPackageFixture,seedGeneratedClientSource,type GeneratedFixtureKind} from './fixtures/generated-client-delivery';
+import {agentRuntimeOpenApi} from '../src/lib/agent-runtime-openapi';
+import {generatedClientSpecs,makeGeneratedClientPackageFixture,seedGeneratedClientSource,type GeneratedFixtureKind} from './fixtures/generated-client-delivery';
 
 type Row=Record<string,any>;
 const emulate=process.env.COATRIA_TEST_EMULATOR==='1',integration=process.env.COATRIA_INTEGRATION_DATABASE_URL;
 const localPostgres=(()=>{try{return !!integration&&['localhost','127.0.0.1'].includes(new URL(integration).hostname);}catch{return false;}})();
+
+// Compare real service responses with the published allowlist. This is a
+// focused wire-contract assertion, not a second JSON Schema implementation.
+function assertPreparedPackageContract(manifest:Row,round?:{roundId:string;number:number;planSha256:string}){
+ const schemas=(agentRuntimeOpenApi as Row).components.schemas,packageSchema=schemas.StudioGeneratedPackageManifest,reviewSchema=schemas.StudioGeneratedPackageReview;
+ assert.equal(packageSchema.additionalProperties,false);assert.equal(reviewSchema.additionalProperties,false);
+ for(const key of Object.keys(manifest))assert(Object.hasOwn(packageSchema.properties,key),'Undocumented package property: '+key);
+ for(const key of packageSchema.required)assert(Object.hasOwn(manifest,key),'Missing required package property: '+key);
+ assert.equal(reviewSchema.properties.contractVersion.const,2);
+ for(const receipt of manifest.reviewReceipts){
+  for(const key of Object.keys(receipt))assert(Object.hasOwn(reviewSchema.properties,key),'Undocumented package review property: '+key);
+  for(const key of reviewSchema.required)assert(Object.hasOwn(receipt,key),'Missing required package review property: '+key);
+  assert.equal(receipt.contractVersion,reviewSchema.properties.contractVersion.const);
+ }
+ assert(Object.hasOwn(packageSchema.properties,'revisionRound'));assert(!packageSchema.required.includes('revisionRound'));
+ if(!round)assert.equal(Object.hasOwn(manifest,'revisionRound'),false);
+ else{assert.deepEqual(manifest.revisionRound,round);const identity=packageSchema.properties.revisionRound;assert.equal(identity.additionalProperties,false);assert.deepEqual(Object.keys(round).sort(),Object.keys(identity.properties).sort());assert.deepEqual(Object.keys(round).sort(),[...identity.required].sort());}
+}
 
 test('generated client packages enforce source, independent approval, exact account and replay boundaries',{skip:!emulate&&!localPostgres,timeout:240000},async t=>{
  const environment={...process.env},dbName='coatria_generated_client_'+randomUUID().replaceAll('-','');let stop:(()=>Promise<void>)|undefined,control:Pool|undefined,created=false;
@@ -54,6 +73,7 @@ test('generated client packages enforce source, independent approval, exact acco
   await t.test('image, video and audio complete real registration, review, package, client access and exact acknowledgement handlers',async()=>{
    for(const kind of ['image','video','audio'] as const){
     const p=await fresh(kind),input=payload(p),created=await call(admin(p),'POST',input,'owner',201),s=created.share;
+    assertPreparedPackageContract(p.delivery.manifest);
     const replay=await call(admin(p),'POST',input);assert.equal(replay.replayed,true);assert.equal(replay.share.id,s.id);
     await call(admin(p),'POST',{...input,recipientUserId:users.otherClient},'owner',409);
     const detail=await call(portal(s),'GET',undefined,'client'),file=detail.package.files[0];
@@ -149,6 +169,55 @@ test('generated client packages enforce source, independent approval, exact acco
     const current=await call(portal(s),'GET',undefined,'client');assert.deepEqual(current.package,before);assert.equal(current.canRespond,false);
     const response=await call(portal(s)+'/responses','POST',{clientId:randomUUID(),revision:1,decision:'acknowledged',note:'An old package cannot accept newer work.'},'client',409);assert.equal(response.code,'CLIENT_PACKAGE_SUPERSEDED');
     const grant=await savedGrant(s.id);assert.deepEqual(await transaction(client=>validateGeneratedClientPackage(client,grant,{requireReady:false,requireAvailable:false})),before);
+   }
+  });
+
+  await t.test('same-project image/video/audio revisions carry exact approvals while superseding old client actions',async()=>{
+   for(const kind of ['image','video','audio'] as const){
+    const made=await call(`companies/${company}/studio/projects`,'POST',{clientId:randomUUID(),contractVersion:2,productionPath:'higgsfield',name:'Round integration '+kind,clientName:'Synthetic revision client',brief:'Two deliverables, one exact carry and one separately generated correction.',aiPolicy:'allowed',spec:generatedClientSpecs[kind],shots:['MEDIA010','MEDIA020'].map(code=>({kind,code,description:'Synthetic revision unit',...kind==='image'?{}:{durationMs:{min:999,max:1001}}}))},'owner',201),projectId=made.project.id,prefix=`companies/${company}/studio/projects/${projectId}`;
+    const generation=(await query("SELECT w.id,w.task_id,w.shot_id,s.code FROM studio_work_items w JOIN studio_shots s ON s.id=w.shot_id WHERE w.project_id=$1 AND w.stage='generation' ORDER BY s.code",[projectId])).rows;
+    const gates={brief:{decision:'approved'},estimate:{decision:'approved'},production:{decision:'approved'}};
+    await query('UPDATE studio_projects SET gates=$2 WHERE id=$1',[projectId,JSON.stringify(gates)]);
+    await query("UPDATE tasks SET status='done' WHERE id IN(SELECT task_id FROM studio_work_items WHERE project_id=$1 AND stage IN('estimate','breakdown','references'))",[projectId]);
+    let revision=made.project.revision,storage:undefined|{storageId:string;bindingId:string};const originals:Row[]=[];
+    for(const work of generation){
+     const source=await transaction(db=>seedGeneratedClientSource(db,{companyId:company,projectId,workItemId:work.id,taskId:work.task_id,producerId:users.owner,approverId:users.owner,kind,storage}));storage=source;
+     const registered=await call(prefix+'/generated-artifacts','POST',{clientId:randomUUID(),revision,workItemId:work.id,archiveId:source.archiveId,name:'Original '+work.code,notes:'Original verified synthetic source'},'registrar',201);
+     const reviewInput={clientId:randomUUID(),revision:registered.project.revision,artifactId:registered.artifact.id,decision:'approved',note:'Independent original review',technicalQc:true},reviewed=await call(prefix+'/reviews','POST',reviewInput,'reviewer',201);revision=reviewed.project.revision;
+     originals.push({...source,work,artifact:registered.artifact,review:reviewed.review,reviewInput});
+    }
+    await query("UPDATE tasks SET status='done' WHERE id IN(SELECT task_id FROM studio_work_items WHERE project_id=$1)",[projectId]);
+    const initialInput={clientId:randomUUID(),revision,name:'Original package',artifactIds:originals.map(o=>o.artifact.id),note:'Two approved originals'},initial=await call(prefix+'/deliveries','POST',initialInput,'owner',201);
+    assert.equal(initial.delivery.roundId,null);assert.equal(initial.delivery.roundNumber,0);assert.equal(initial.delivery.manifest.revisionRound,undefined);
+    assertPreparedPackageContract(initial.delivery.manifest);
+    const firstInput=payload({revision:initial.project.revision,delivery:initial.delivery}),first=(await call(prefix+'/client-deliveries','POST',firstInput,'owner',201)).share;
+    const historical=(await call(portal(first),'GET',undefined,'client')).package;
+    const changeInput={clientId:randomUUID(),revision:1,decision:'changes_requested',note:'Correct MEDIA010. Keep the approved MEDIA020 unchanged.'},changed=await call(portal(first)+'/responses','POST',changeInput,'client',201);
+    const drafted=await call(prefix+'/generated-revisions','POST',{clientId:randomUUID(),projectRevision:changed.project.revision,shareId:first.id,receiptId:changed.receipt.id,packageSha256:first.packageSha256,summary:'One correction; one exact carry.',items:[{unitId:generation[0].shot_id,action:'regenerate',instructions:'Correct the first unit using a new approval.'},{unitId:generation[1].shot_id,action:'carry'}]},'owner',201);
+    const applyInput={clientId:randomUUID(),projectRevision:changed.project.revision,planSha256:drafted.plan.planSha256},applied=await call(prefix+`/generated-revisions/${drafted.plan.id}/apply`,'POST',applyInput,'owner',201),roundId=applied.round.id;
+    assert.equal((await call(prefix+`/generated-revisions/${drafted.plan.id}/apply`,'POST',applyInput)).round.id,roundId);
+    assert.equal(applied.round.number,1);assert.equal((await query('SELECT count(*)::int n FROM studio_artifacts WHERE project_id=$1',[projectId])).rows[0].n,2);
+    assert.equal((await call(prefix+'/deliveries','POST',initialInput,'owner',409)).code,'CLIENT_PACKAGE_SUPERSEDED');
+    for(const original of originals)assert.equal((await call(prefix+'/reviews','POST',original.reviewInput,'reviewer',409)).code,'STUDIO_REVISION_WORK_SUPERSEDED');
+    assert.deepEqual((await call(portal(first),'GET',undefined,'client')).package,historical);
+    const oldManifest=await request(portal(first)+'/manifest','GET',undefined,'client');assert.equal(hashToken(await oldManifest.text()),first.packageSha256);
+    for(const action of [()=>call(portal(first)+'/responses','POST',changeInput,'client',409),()=>call(portal(first)+`/files/${originals[0].versionId}/access`,'POST',{clientId:randomUUID()},'client',409),()=>call(prefix+'/client-deliveries','POST',firstInput,'owner',409)])assert.equal((await action()).code,'CLIENT_PACKAGE_SUPERSEDED');
+    // Later unfinished historic tasks must not enter the active round's task gate.
+    await query("UPDATE tasks SET status='todo' WHERE id IN(SELECT w.task_id FROM studio_work_items w WHERE w.project_id=$1 AND w.stage='estimate' AND NOT EXISTS(SELECT 1 FROM studio_generated_revision_work rw WHERE rw.work_item_id=w.id))",[projectId]);
+    await query('UPDATE studio_projects SET gates=gates||$2::jsonb WHERE id=$1',[projectId,JSON.stringify(gates)]);
+    const current=(await query("SELECT w.id,w.task_id FROM studio_generated_revision_work rw JOIN studio_work_items w ON w.id=rw.work_item_id WHERE rw.project_id=$1 AND rw.round_id=$2 AND w.stage='generation'",[projectId,roundId])).rows[0];
+    await query("UPDATE tasks SET status='done' WHERE id IN(SELECT w.task_id FROM studio_generated_revision_work rw JOIN studio_work_items w ON w.id=rw.work_item_id WHERE rw.project_id=$1 AND rw.round_id=$2 AND w.stage IN('estimate','breakdown','references'))",[projectId,roundId]);
+    const replacement=await transaction(db=>seedGeneratedClientSource(db,{companyId:company,projectId,workItemId:current.id,taskId:current.task_id,producerId:users.owner,approverId:users.owner,kind,storage}));
+    const registered=await call(prefix+'/generated-artifacts','POST',{clientId:randomUUID(),revision:applied.project.revision,workItemId:current.id,archiveId:replacement.archiveId,name:'Corrected MEDIA010',notes:'Fresh exact source, separate approval'},'registrar',201);
+    const reviewed=await call(prefix+'/reviews','POST',{clientId:randomUUID(),revision:registered.project.revision,artifactId:registered.artifact.id,decision:'approved',note:'Independent correction QC',technicalQc:true},'reviewer',201);
+    await query("UPDATE tasks SET status='done' WHERE id IN(SELECT w.task_id FROM studio_generated_revision_work rw JOIN studio_work_items w ON w.id=rw.work_item_id WHERE rw.project_id=$1 AND rw.round_id=$2)",[projectId,roundId]);
+    const packageInput={clientId:randomUUID(),revision:reviewed.project.revision,name:'Correction package',artifactIds:[registered.artifact.id,originals[1].artifact.id],note:'New correction plus exact approved carry'};
+    await call(prefix+'/deliveries','POST',{...packageInput,clientId:randomUUID(),artifactIds:originals.map(o=>o.artifact.id)},'owner',409);
+    const next=await call(prefix+'/deliveries','POST',packageInput,'owner',201),round={roundId,number:1,planSha256:drafted.plan.planSha256};assert.equal(next.delivery.roundId,roundId);assert.equal(next.delivery.roundNumber,1);assert.deepEqual(next.delivery.manifest.revisionRound,round);
+    assertPreparedPackageContract(next.delivery.manifest,round);
+    assert.deepEqual(next.delivery.manifest.artifacts.find((a:Row)=>a.id===originals[1].artifact.id),initial.delivery.manifest.artifacts.find((a:Row)=>a.id===originals[1].artifact.id));assert.equal(next.delivery.manifest.reviewReceipts.find((r:Row)=>r.artifactId===originals[1].artifact.id).id,originals[1].review.id);
+    const nextShare=(await call(prefix+'/client-deliveries','POST',payload({revision:next.project.revision,delivery:next.delivery}),'owner',201)).share,nextDetail=await call(portal(nextShare),'GET',undefined,'client');assert.deepEqual(nextDetail.package.revisionRound,round);assert.equal(nextDetail.canRespond,true);assert(nextDetail.package.files.some((file:Row)=>file.storageVersionId===originals[1].versionId));assert(nextDetail.package.files.some((file:Row)=>file.storageVersionId===replacement.versionId));
+    const receipt=await call(portal(nextShare)+'/responses','POST',{clientId:randomUUID(),revision:1,decision:'acknowledged',note:'I acknowledge this exact correction package.'},'client',201);assert.equal(receipt.project.status,'delivered');assert.equal((await savedDelivery(initial.delivery.id)).status,'prepared');assert.deepEqual((await call(portal(first),'GET',undefined,'client')).package,historical);
    }
   });
 

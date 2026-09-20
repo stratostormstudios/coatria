@@ -22,6 +22,7 @@ GRANT SELECT,INSERT ON studio_artifacts,studio_reviews,studio_gate_events,studio
 -- Generated-media evidence is append-only. Storage workers receive no studio
 -- publication or independent-review authority from these web runtime grants.
 GRANT SELECT,INSERT ON studio_generated_artifact_sources,studio_generated_review_evidence TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON studio_generated_revision_plans,studio_generated_revision_rounds,studio_generated_revision_items,studio_generated_revision_work,studio_generated_delivery_rounds TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON studio_execution_inputs,studio_execution_job_inputs,studio_execution_manifests,studio_staffing_applications TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON studio_media_files,studio_media_verifications,studio_media_promotions,studio_media_requests TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON studio_deliveries TO coatria_runtime_v1;

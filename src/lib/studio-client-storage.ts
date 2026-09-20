@@ -1,9 +1,10 @@
 /** Server-only external recipient capabilities. These never grant membership,
  * agent storage access, a provider URL, or authority over another file version. */
 import type {PoolClient} from 'pg';
-import {fail,hashToken,id,secret} from './security';
+import {ApiError,fail,hashToken,id,secret} from './security';
 import {storageGatewayOrigin} from './project-storage-config';
 import type {StudioGeneratedClientAccess} from './studio-client-delivery-protocol';
+import {assertGeneratedDeliveryCurrent} from './studio-generated-rounds';
 
 type Row=Record<string,any>;
 const unavailable=():never=>fail(403,'This client file access is unavailable. Request access again from the client portal.','CLIENT_STORAGE_UNAVAILABLE');
@@ -21,8 +22,9 @@ async function currentFile(db:PoolClient,shareId:string,recipientUserId:string,v
  // Project precedes share, matching client acknowledgement and API issuance.
  const project=(await db.query('SELECT contract_version,production_path,ai_policy,gates FROM studio_projects WHERE company_id=$1 AND id=$2 FOR SHARE',[companyId,projectId])).rows[0];
  if(!project||project.contract_version!==2||project.production_path!=='higgsfield'||project.ai_policy!=='allowed'||project.gates?.production?.decision!=='approved')return unavailable();
- const share=(await db.query('SELECT id,company_id,project_id,recipient_user_id,status,package_hash,expires_at FROM studio_client_deliveries WHERE id=$1 AND recipient_user_id=$2 FOR SHARE',[shareId,recipientUserId])).rows[0];
+ const share=(await db.query('SELECT id,company_id,project_id,delivery_id,recipient_user_id,status,package_hash,expires_at FROM studio_client_deliveries WHERE id=$1 AND recipient_user_id=$2 FOR SHARE',[shareId,recipientUserId])).rows[0];
  if(!share||share.status!=='active'||share.company_id!==companyId||share.project_id!==projectId)return unavailable();
+ const scope=await assertGeneratedDeliveryCurrent(db,companyId,projectId,share.delivery_id).catch(error=>{if(error instanceof ApiError&&['CLIENT_PACKAGE_SUPERSEDED','STUDIO_REVISION_SCOPE_INVALID'].includes(error.code??''))return unavailable();throw error;});
  const source=(await db.query(`SELECT f.artifact_id,f.review_id,f.storage_name AS name,f.storage_sha256 AS sha256,f.storage_bytes::float8 AS bytes,f.storage_content_type AS content_type,
   s.archive_id,s.request_id,s.job_id,s.output_id,s.storage_version_id,s.archive_approved_by
   FROM studio_client_delivery_files f JOIN studio_generated_artifact_sources s ON s.company_id=f.company_id AND s.project_id=f.project_id AND s.artifact_id=f.artifact_id AND s.storage_version_id=f.storage_version_id
@@ -32,8 +34,8 @@ async function currentFile(db:PoolClient,shareId:string,recipientUserId:string,v
   WHERE a.company_id=$1 AND a.project_id=$2 AND a.id=$3 AND r.id=$4 AND r.decision='approved' AND r.technical_qc=true
   AND a.id=(SELECT latest.id FROM studio_artifacts latest WHERE latest.company_id=a.company_id AND latest.project_id=a.project_id AND latest.work_item_id=a.work_item_id ORDER BY latest.version DESC LIMIT 1)
   AND r.id=(SELECT latest.id FROM studio_reviews latest WHERE latest.company_id=a.company_id AND latest.project_id=a.project_id AND latest.artifact_id=a.id ORDER BY latest.created_at DESC,latest.id DESC LIMIT 1)`,[companyId,projectId,source.artifact_id,source.review_id])).rows[0];if(!approved)return unavailable();
- const tasks=(await db.query('SELECT t.status FROM studio_work_items w JOIN tasks t ON t.company_id=w.company_id AND t.id=w.task_id WHERE w.company_id=$1 AND w.project_id=$2 FOR SHARE OF t',[companyId,projectId])).rows;
- if(!tasks.length||tasks.some(t=>t.status!=='done'))return unavailable();
+ const tasks=(await db.query('SELECT t.status FROM studio_work_items w JOIN tasks t ON t.company_id=w.company_id AND t.id=w.task_id WHERE w.company_id=$1 AND w.project_id=$2 AND w.id=ANY($3::uuid[]) FOR SHARE OF t',[companyId,projectId,scope.workItemIds])).rows;
+ if(!tasks.length||tasks.length!==scope.workItemIds.length||tasks.some(t=>t.status!=='done'))return unavailable();
  const archive=(await db.query(`SELECT id,request_id,job_id,output_id,version_id,upload_id,locator_identity,approved_by,provider_connection_id,storage_binding_id,storage_connection_id,storage_connection_snapshot,status,revoked_at
   FROM higgsfield_output_archives WHERE company_id=$1 AND project_id=$2 AND id=$3 FOR SHARE`,[companyId,projectId,source.archive_id])).rows[0];
  if(!archive||archive.status!=='verified'||archive.revoked_at||archive.request_id!==source.request_id||archive.job_id!==source.job_id||archive.output_id!==source.output_id||archive.version_id!==versionId||archive.approved_by!==source.archive_approved_by)return unavailable();

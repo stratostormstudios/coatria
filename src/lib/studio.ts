@@ -10,6 +10,7 @@ import {recordGeneratedStudioReview,prepareGeneratedStudioDelivery,assertGenerat
 import {createAgentRunInTransaction} from './agent-runs';
 import {studioCreativeFollowupSnapshot,dispatchStudioCreativeFollowup} from './studio-creative-followup';
 import {studioCreativeFollowupInput} from './studio-creative-followup-protocol';
+import {generatedRoundScope,assertGeneratedWorkCurrent,assertGeneratedDeliveryCurrent} from './studio-generated-rounds';
 
 export type StudioActor={companyId:string;userId:string;agentId?:string;runId?:string;agentSponsorId?:string};
 const projectColumns=`id,contract_version AS "contractVersion",name,client_name AS "clientName",brief,production_path AS "productionPath",due_date::text AS "dueDate",spec,ai_policy AS "aiPolicy",revision,status,gates,created_at AS "createdAt",updated_at AS "updatedAt"`;
@@ -50,7 +51,8 @@ export function studioSnapshot(client:PoolClient,companyId:string,after:string|u
 export async function studioSnapshot(client:PoolClient,companyId:string,after?:string,limit=50,contractVersion:1|2=1):Promise<StudioReadableSnapshot>{
  if(after&&!(await client.query('SELECT id FROM studio_projects WHERE company_id=$1 AND id=$2 AND contract_version<=$3',[companyId,after,contractVersion])).rowCount)fail(404,'Studio cursor not found.');
  const p=(await client.query('SELECT template_id AS "templateId",revision FROM studio_profiles WHERE company_id=$1',[companyId])).rows[0];
- const projects=(await client.query<StoredStudioProject>(`SELECT ${projectColumns},(SELECT count(*)::int FROM studio_shots s WHERE s.company_id=$1 AND s.project_id=p.id) AS "shotCount",(SELECT count(*)::int FROM studio_work_items w WHERE w.company_id=$1 AND w.project_id=p.id) AS "workCount",(SELECT count(*)::int FROM studio_work_items w JOIN tasks t ON t.id=w.task_id WHERE w.company_id=$1 AND w.project_id=p.id AND t.status='done') AS "acceptedCount" FROM studio_projects p WHERE company_id=$1 AND contract_version<=$4 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT $3`,[companyId,after??null,limit+1,contractVersion])).rows.map(projectDto);
+ const revisionWorkScope=contractVersion===2?" AND (p.contract_version=1 OR NOT EXISTS(SELECT 1 FROM studio_generated_revision_rounds rr WHERE rr.company_id=w.company_id AND rr.project_id=w.project_id) OR EXISTS(SELECT 1 FROM studio_generated_revision_work rw WHERE rw.company_id=w.company_id AND rw.project_id=w.project_id AND rw.work_item_id=w.id AND rw.round_id=(SELECT rr.id FROM studio_generated_revision_rounds rr WHERE rr.company_id=w.company_id AND rr.project_id=w.project_id ORDER BY rr.number DESC LIMIT 1)))":'';
+ const projects=(await client.query<StoredStudioProject>(`SELECT ${projectColumns},(SELECT count(*)::int FROM studio_shots s WHERE s.company_id=$1 AND s.project_id=p.id) AS "shotCount",(SELECT count(*)::int FROM studio_work_items w WHERE w.company_id=$1 AND w.project_id=p.id${revisionWorkScope}) AS "workCount",(SELECT count(*)::int FROM studio_work_items w JOIN tasks t ON t.id=w.task_id WHERE w.company_id=$1 AND w.project_id=p.id AND t.status='done'${revisionWorkScope}) AS "acceptedCount" FROM studio_projects p WHERE company_id=$1 AND contract_version<=$4 AND ($2::uuid IS NULL OR id>$2) ORDER BY id LIMIT $3`,[companyId,after??null,limit+1,contractVersion])).rows.map(projectDto);
  return {templates:STUDIO_TEMPLATES,skills:STUDIO_SKILLS,profile:p?{templateId:p.templateId,revision:p.revision,roles:await studioRoles(client,companyId)}:null,projects:projects.slice(0,limit),hasMore:projects.length>limit,nextAfter:projects.length>limit?projects[limit-1].id:null};
 }
 export async function setupStudio(client:PoolClient,actor:StudioActor,input:unknown){
@@ -132,7 +134,7 @@ export async function createStudioProject(client:PoolClient,actor:StudioActor,in
 }
 async function workItems(client:PoolClient,companyId:string,project:StudioReadableProject):Promise<StudioWorkItem[]>{
  await client.query('SELECT role_key FROM studio_role_bindings WHERE company_id=$1 ORDER BY role_key FOR SHARE',[companyId]);
- const rows=(await client.query(`SELECT w.id,w.task_id AS "taskId",w.shot_id AS "shotId",w.stage,w.role_key AS "roleKey",w.execution,t.title,t.status,t.revision,t.submission_summary AS "submissionSummary",t.approved_by AS "approvedBy",t.approved_agent_id AS "approvedAgentId",t.machine_review_id AS "machineReviewId",latest.run_id AS "runId",latest.run_status AS "runStatus",b.agent_id AS "agentId",b.human_id AS "humanId",COALESCE((SELECT jsonb_agg(d.predecessor_id ORDER BY d.predecessor_id) FROM studio_dependencies d WHERE d.company_id=w.company_id AND d.project_id=w.project_id AND d.work_item_id=w.id),'[]') AS dependencies FROM studio_work_items w JOIN tasks t ON t.company_id=w.company_id AND t.id=w.task_id LEFT JOIN studio_role_bindings b ON b.company_id=w.company_id AND b.role_key=w.role_key LEFT JOIN LATERAL (SELECT d.run_id,r.status AS run_status FROM studio_dispatches d JOIN agent_runs r ON r.company_id=d.company_id AND r.id=d.run_id WHERE d.company_id=w.company_id AND d.project_id=w.project_id AND d.work_item_id=w.id ORDER BY d.created_at DESC,d.run_id DESC LIMIT 1) latest ON true WHERE w.company_id=$1 AND w.project_id=$2 ORDER BY w.id`,[companyId,project.id])).rows;
+ const rows=(await client.query(`SELECT w.id,w.task_id AS "taskId",w.shot_id AS "shotId",w.stage,w.role_key AS "roleKey",w.execution,t.title,t.description,t.status,t.revision,t.submission_summary AS "submissionSummary",t.approved_by AS "approvedBy",t.approved_agent_id AS "approvedAgentId",t.machine_review_id AS "machineReviewId",latest.run_id AS "runId",latest.run_status AS "runStatus",b.agent_id AS "agentId",b.human_id AS "humanId",COALESCE((SELECT jsonb_agg(d.predecessor_id ORDER BY d.predecessor_id) FROM studio_dependencies d WHERE d.company_id=w.company_id AND d.project_id=w.project_id AND d.work_item_id=w.id),'[]') AS dependencies FROM studio_work_items w JOIN tasks t ON t.company_id=w.company_id AND t.id=w.task_id LEFT JOIN studio_role_bindings b ON b.company_id=w.company_id AND b.role_key=w.role_key LEFT JOIN LATERAL (SELECT d.run_id,r.status AS run_status FROM studio_dispatches d JOIN agent_runs r ON r.company_id=d.company_id AND r.id=d.run_id WHERE d.company_id=w.company_id AND d.project_id=w.project_id AND d.work_item_id=w.id ORDER BY d.created_at DESC,d.run_id DESC LIMIT 1) latest ON true WHERE w.company_id=$1 AND w.project_id=$2 ORDER BY w.id`,[companyId,project.id])).rows;
  const statuses=new Map(rows.map(w=>[w.id,w.status]));
  return rows.map(w=>{
   let blockedReason:string|null=null;if(project.gates.brief?.decision!=='approved')blockedReason='Client brief approval is required.';
@@ -140,7 +142,8 @@ async function workItems(client:PoolClient,companyId:string,project:StudioReadab
   else if(w.dependencies.some((dep:string)=>statuses.get(dep)!=='done'))blockedReason='An upstream task still needs independent acceptance.';
   else if(w.execution==='creative'&&project.aiPolicy!=='allowed')blockedReason='Higgsfield generation requires the client AI-use policy to allow AI media production.';
   else if(project.aiPolicy==='restricted'&&w.execution==='dcc'&&w.agentId)blockedReason='AI use is restricted. Assign an authorized human for media work.';
-  return {...w,readiness:w.status==='done'?'accepted':w.status==='review'?'review':blockedReason?'blocked':w.runStatus==='queued'?'queued':w.status==='doing'||w.runStatus==='running'?'running':'ready',blockedReason} as StudioWorkItem;
+  const {description,...fields}=w;
+  return {...fields,...project.contractVersion===2?{description}:{},readiness:w.status==='done'?'accepted':w.status==='review'?'review':blockedReason?'blocked':w.runStatus==='queued'?'queued':w.status==='doing'||w.runStatus==='running'?'running':'ready',blockedReason} as StudioWorkItem;
  });
 }
 export async function studioGeneratedShots(client:PoolClient,companyId:string,projectId:string):Promise<StudioGeneratedShot[]>{
@@ -160,9 +163,10 @@ export async function studioProjectDetail(client:PoolClient,companyId:string,pro
   const ids=(await client.query<{id:string}>('SELECT id FROM studio_artifacts WHERE company_id=$1 AND project_id=$2 ORDER BY created_at DESC,id DESC LIMIT 1000',[companyId,projectId])).rows;
   const artifacts=(await loadStoredGeneratedArtifacts(client,companyId,projectId,ids.map(artifact=>artifact.id))).map(stored=>stored.artifact);
   const reviews=(await client.query('SELECT 2 AS "contractVersion",r.id,r.artifact_id AS "artifactId",r.decision,r.note,r.technical_qc AS "technicalQc",r.reviewed_by AS "reviewedBy",r.created_at AS "createdAt",e.spec_sha256 AS "specSha256",e.manifest_sha256 AS "manifestSha256",e.attestation_version AS "attestationVersion",e.technical_match AS "technicalMatch" FROM studio_reviews r JOIN studio_generated_review_evidence e ON e.company_id=r.company_id AND e.project_id=r.project_id AND e.review_id=r.id WHERE r.company_id=$1 AND r.project_id=$2 ORDER BY r.created_at DESC,r.id DESC LIMIT 1000',[companyId,projectId])).rows;
-  const deliveries=(await client.query('SELECT id,name,status,manifest,note,created_at AS "createdAt" FROM studio_deliveries WHERE company_id=$1 AND project_id=$2 ORDER BY created_at DESC,id DESC LIMIT 100',[companyId,projectId])).rows;
+  const deliveries=(await client.query('SELECT d.id,d.name,d.status,d.manifest,d.note,d.created_at AS "createdAt",r.id AS "roundId",COALESCE(r.number,0) AS "roundNumber" FROM studio_deliveries d LEFT JOIN studio_generated_delivery_rounds m ON m.company_id=d.company_id AND m.project_id=d.project_id AND m.delivery_id=d.id LEFT JOIN studio_generated_revision_rounds r ON r.company_id=m.company_id AND r.project_id=m.project_id AND r.id=m.round_id WHERE d.company_id=$1 AND d.project_id=$2 ORDER BY d.created_at DESC,d.id DESC LIMIT 100',[companyId,projectId])).rows;
   const roles=await studioRoles(client,companyId,project.productionPath),skillKeys=new Set(roles.flatMap(role=>role.skills));
-  return {project,shots,workItems:await workItems(client,companyId,project),artifacts,reviews,deliveries,roles,skills:STUDIO_SKILLS.filter(skill=>skillKeys.has(skill.key))};
+  const generatedRound=await generatedRoundScope(client,companyId,projectId),allWork=await workItems(client,companyId,project),activeIds=new Set(generatedRound.workItemIds);
+  return {project,shots,workItems:allWork.filter(work=>activeIds.has(work.id)),historyWorkItems:allWork.filter(work=>!activeIds.has(work.id)),generatedRound,artifacts,reviews,deliveries,roles,skills:STUDIO_SKILLS.filter(skill=>skillKeys.has(skill.key))};
  }
  const shots=(await client.query('SELECT id,code,description,frame_start AS "frameStart",frame_end AS "frameEnd",handles,disciplines FROM studio_shots WHERE company_id=$1 AND project_id=$2 ORDER BY code',[companyId,projectId])).rows;
  const artifacts=(await client.query(`SELECT a.id,a.work_item_id AS "workItemId",a.name,a.version,a.url,a.sha256,a.metadata,a.produced_by AS "producedBy",a.produced_agent_id AS "producedAgentId",a.created_at AS "createdAt",COALESCE((SELECT r.decision FROM studio_reviews r WHERE r.company_id=a.company_id AND r.project_id=a.project_id AND r.artifact_id=a.id ORDER BY r.created_at DESC,r.id DESC LIMIT 1),'pending') AS "reviewStatus" FROM studio_artifacts a WHERE a.company_id=$1 AND a.project_id=$2 ORDER BY a.created_at DESC,a.id DESC LIMIT 1000`,[companyId,projectId])).rows.map(a=>{const {metadata,...rest}=a;return {...rest,...metadata};});
@@ -193,6 +197,7 @@ export async function registerStudioArtifact(client:PoolClient,actor:StudioActor
 export async function assertStudioTaskAction(client:PoolClient,companyId:string,taskId:string,name:string,args:Record<string,any>,run?:Record<string,any>,agent?:Record<string,any>){
  const link=(await client.query('SELECT project_id,id FROM studio_work_items WHERE company_id=$1 AND task_id=$2',[companyId,taskId])).rows[0];if(!link)return;
  const project=await lockedProject(client,companyId,link.project_id),items=await workItems(client,companyId,project),work=items.find(w=>w.id===link.id)!;
+ if(project.contractVersion===2)await assertGeneratedWorkCurrent(client,companyId,project.id,work.id);
  if(project.status==='delivered')fail(409,'Delivered project work is immutable.');
  if(agent){
   if(!agent.capabilities?.includes('studio.write')||!run?.capabilities?.includes('studio.write'))fail(403,'This studio work requires an explicitly approved studio.write grant.','AGENT_CAPABILITY_REQUIRED');
@@ -231,7 +236,7 @@ async function recordGate(client:PoolClient,actor:StudioActor,projectId:string,i
  });
 }
 async function recordReview(client:PoolClient,actor:StudioActor,projectId:string,input:unknown){
- const data=parse(studioReviewInput,input);return requestOnce(client,actor,data.clientId,'review:'+projectId,data,async()=>{
+ const data=parse(studioReviewInput,input);const result=await requestOnce(client,actor,data.clientId,'review:'+projectId,data,async()=>{
   const p=await lockedProject(client,actor.companyId,projectId,data.revision);if(p.status==='delivered')fail(409,'Delivered review history is closed.');
   if(p.contractVersion===2){const result=await recordGeneratedStudioReview(client,actor,p,data);await activity(client,actor,'studio.version_reviewed','An independent administrator reviewed the exact verified generated-media version.');return {...result,project:await bump(client,actor.companyId,projectId)};}
   const a=(await client.query('SELECT * FROM studio_artifacts WHERE company_id=$1 AND project_id=$2 AND id=$3',[actor.companyId,projectId,data.artifactId])).rows[0];if(!a)fail(404,'Artifact not found.');
@@ -248,9 +253,11 @@ async function recordReview(client:PoolClient,actor:StudioActor,projectId:string
   const review=(await client.query('INSERT INTO studio_reviews(company_id,project_id,artifact_id,decision,note,technical_qc,reviewed_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,artifact_id AS "artifactId",decision,note,technical_qc AS "technicalQc",reviewed_by AS "reviewedBy",created_at AS "createdAt"',[actor.companyId,projectId,a.id,data.decision,data.note,data.technicalQc,actor.userId])).rows[0];
   await activity(client,actor,'studio.version_reviewed','An independent administrator recorded a media-version review.');return {review,project:await bump(client,actor.companyId,projectId)};
  });
+ const current=await lockedProject(client,actor.companyId,projectId);if(current.contractVersion===2){const artifact=(await client.query('SELECT work_item_id FROM studio_artifacts WHERE company_id=$1 AND project_id=$2 AND id=$3',[actor.companyId,projectId,data.artifactId])).rows[0];if(!artifact)fail(404,'Artifact not found.');await assertGeneratedWorkCurrent(client,actor.companyId,projectId,artifact.work_item_id);}
+ return result;
 }
 async function prepareDelivery(client:PoolClient,actor:StudioActor,projectId:string,input:unknown){
- const data=parse(studioDeliveryInput,input);return requestOnce(client,actor,data.clientId,'delivery:'+projectId,data,async()=>{
+ const data=parse(studioDeliveryInput,input);const result=await requestOnce(client,actor,data.clientId,'delivery:'+projectId,data,async()=>{
   const p=await lockedProject(client,actor.companyId,projectId,data.revision);if(p.status==='delivered')fail(409,'This project already has recorded client acceptance.');if(p.gates.production?.decision!=='approved')fail(409,'Production authorization is required.','STUDIO_GATE_REQUIRED');
   if(p.contractVersion===2){const result=await prepareGeneratedStudioDelivery(client,actor,p,data);await activity(client,actor,'studio.delivery_prepared','An internal generated-media package manifest was prepared; files have not been transferred to the client.');return {...result,project:await bump(client,actor.companyId,projectId)};}
   const detail=await studioProjectDetail(client,actor.companyId,projectId);if(detail.workItems.some(w=>w.stage!=='delivery'&&w.status!=='done'))fail(409,'All production work needs independent task acceptance before packaging.','STUDIO_WORK_INCOMPLETE');
@@ -263,6 +270,8 @@ async function prepareDelivery(client:PoolClient,actor:StudioActor,projectId:str
   const delivery=(await client.query('INSERT INTO studio_deliveries(company_id,project_id,name,manifest,note,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,name,status,manifest,note,created_at AS "createdAt"',[actor.companyId,projectId,data.name,JSON.stringify(manifest),data.note,actor.userId])).rows[0];
   await client.query("UPDATE studio_projects SET status='delivery' WHERE company_id=$1 AND id=$2",[actor.companyId,projectId]);await activity(client,actor,'studio.delivery_prepared','An approved-version delivery manifest was prepared. Media transfer is a separate operation.');return {delivery,project:await bump(client,actor.companyId,projectId)};
  });
+ const current=await lockedProject(client,actor.companyId,projectId);if(current.contractVersion===2)await assertGeneratedDeliveryCurrent(client,actor.companyId,projectId,result.delivery.id);
+ return result;
 }
 async function updateProject(client:PoolClient,actor:StudioActor,projectId:string,input:unknown){
  const data=parse(studioProjectPatchInput,input);return requestOnce(client,actor,data.clientId,'update:'+projectId,data,async()=>{
@@ -275,7 +284,7 @@ async function updateProject(client:PoolClient,actor:StudioActor,projectId:strin
 }
 export async function dispatchWork(client:PoolClient,member:Membership,projectId:string,input:unknown){
  const data=parse(studioDispatchInput,input),actor={companyId:member.companyId,userId:member.userId};
- return requestOnce(client,actor,data.clientId,'dispatch:'+projectId,data,async()=>{
+ const result=await requestOnce(client,actor,data.clientId,'dispatch:'+projectId,data,async()=>{
   const preview=(await client.query('SELECT w.task_id,w.role_key,w.stage,w.execution,b.agent_id,p.template_id,project.production_path,project.contract_version FROM studio_work_items w JOIN studio_role_bindings b ON b.company_id=w.company_id AND b.role_key=w.role_key JOIN studio_profiles p ON p.company_id=w.company_id JOIN studio_projects project ON project.company_id=w.company_id AND project.id=w.project_id WHERE w.company_id=$1 AND w.project_id=$2 AND w.id=$3',[member.companyId,projectId,data.workItemId])).rows[0];if(!preview)fail(404,'Studio work item not found.');if(!preview.agent_id)fail(409,'Assign and connect an agent to this role first.','STUDIO_AGENT_REQUIRED');
   const template=getStudioTemplate(preview.template_id);if(!template?.roles.some(role=>role.key===preview.role_key))fail(409,'The project role is not present in the current studio template.','STUDIO_TEMPLATE_ROLE_REQUIRED');
   const role=(preview.production_path==='higgsfield'?getStudioTemplate('ai-production')!:template).roles.find(r=>r.key===preview.role_key)!;
@@ -286,6 +295,7 @@ export async function dispatchWork(client:PoolClient,member:Membership,projectId
   // gate or competing-dispatch failure rolls back this ordinary run creation.
   const queued=await createAgentRunInTransaction(client,member,'commons',{clientId:data.clientId,agentId:preview.agent_id,prompt});
   const p=await lockedProject(client,member.companyId,projectId,data.revision),work=(await workItems(client,member.companyId,p)).find(w=>w.id===data.workItemId)!;
+  if(p.contractVersion===2)await assertGeneratedWorkCurrent(client,member.companyId,projectId,data.workItemId);
   if(work.agentId!==preview.agent_id)fail(409,'The role assignment changed. Refresh before dispatch.');
   if(work.execution==='human')fail(409,'This step requires a human production or quality handoff.','STUDIO_EXTERNAL_EXECUTION_REQUIRED');
   if(work.execution==='dcc'&&!queued.run.capabilities.includes('studio.execute'))fail(409,'The specialist needs an explicitly reviewed studio.execute grant to propose connector work.','STUDIO_AGENT_CAPABILITIES');
@@ -298,6 +308,8 @@ export async function dispatchWork(client:PoolClient,member:Membership,projectId
   await client.query('INSERT INTO studio_dispatches(company_id,project_id,work_item_id,run_id) VALUES($1,$2,$3,$4)',[member.companyId,projectId,work.id,queued.run.id]);
   await activity(client,actor,'studio.work_dispatched','Production work was queued for its assigned specialist. Connector execution requires a separately approved job.');return {run:queued.run,project:await bump(client,member.companyId,projectId)};
  });
+ const current=await lockedProject(client,member.companyId,projectId);if(current.contractVersion===2)await assertGeneratedWorkCurrent(client,member.companyId,projectId,data.workItemId);
+ return result;
 }
 export async function studioRoute(request:Request,parts:string[],method:string):Promise<Response|null>{
  if(parts[0]!=='companies'||parts[2]!=='studio')return null;
