@@ -9,7 +9,7 @@ import {ARCHIVE_HOST_SOURCE_FILES,buildArchiveHostBundle} from '../scripts/hosti
 import {archiveHostUnit,inspectArchiveHostBundle} from '../scripts/hosting/install-archive-host.mjs';
 import {createArchiveHostCiCommand,ArchiveHostCiCommandError} from '../scripts/hosting/archive-host-ci-command.mjs';
 import {createArchiveNpmEnvironment,ArchiveRuntimeExportError} from '../scripts/hosting/export-archive-host-runtime.mjs';
-import {ArchiveHostRunError,archiveHostCanarySummary,archiveHostJournalFailure} from '../scripts/hosting/archive-host-diagnostics.mjs';
+import {ArchiveHostRunError,archiveHostCanarySummary,archiveHostJournalFailure,archiveHostStartupSummary} from '../scripts/hosting/archive-host-diagnostics.mjs';
 
 const git=(cwd:string,args:string[])=>{const result=spawnSync('git',['-c','core.autocrlf=false','-c','user.name=Archive Fixture','-c','user.email=archive-fixture@example.invalid','-C',cwd,...args],{encoding:'utf8',timeout:10000,maxBuffer:1024*1024});assert.equal(result.status,0,result.stderr);return result.stdout.trim();};
 async function fixture(){
@@ -87,10 +87,16 @@ test('runtime export failures disclose only allowlisted stage and command outcom
 test('host startup failures preserve only static stages, known error codes and bounded canary counts',()=>{
  const privateText='synthetic-private-path-and-output';const summary=archiveHostCanarySummary({qualified:false,failureCode:'PROCESS_FAILED',tests:[{passed:true,name:privateText},{passed:false}],realFormats:[{path:privateText}],privateText});
  const error=new ArchiveHostRunError('qualification_canary',{code:'EACCES',message:privateText,stderr:privateText},summary);
- assert.deepEqual(error.diagnostic,{event:'archive-host-failed',code:'ARCHIVE_HOST_PRECONDITION_OR_QUALIFICATION_FAILED',stage:'qualification_canary',errorCode:'EACCES',canary:{failureCode:'PROCESS_FAILED',testsPassed:1,formatsPassed:1}});assert.ok(!JSON.stringify(error).includes(privateText));
+ assert.deepEqual(error.diagnostic,{event:'archive-host-failed',code:'ARCHIVE_HOST_PRECONDITION_OR_QUALIFICATION_FAILED',stage:'qualification_canary',errorCode:'EACCES',canary:{failureCode:'PROCESS_FAILED',testsPassed:1,formatsPassed:1,startup:null}});assert.ok(!JSON.stringify(error).includes(privateText));
  assert.equal(new ArchiveHostRunError('delegation_cpu_limit',{message:'ARCHIVE_HOST_PACKAGE_REJECTED'}).diagnostic.errorCode,'CHECK_FAILED');
  assert.equal(new ArchiveHostRunError(privateText,{code:privateText,message:privateText}).diagnostic.stage,'unknown_stage');assert.equal(new ArchiveHostRunError('host_identity',{code:privateText}).diagnostic.errorCode,'UNKNOWN');
  assert.equal(archiveHostCanarySummary({qualified:false,tests:Array(11).fill({passed:true}),realFormats:[]}),null);assert.equal(archiveHostCanarySummary({qualified:true,tests:[],realFormats:[]}),null);
+});
+test('fixed synthetic startup evidence retains helper and stderr classes through current-invocation collection',()=>{
+ const privateText='synthetic-private-startup-message',startup={diagnosticOnly:true,qualified:false,profileKind:'conformance',phases:['pins_checked','cgroup_capped','spawned','exited','drained',privateText],exitCode:125,signal:null,helperExitStage:'RESOURCE_LIMITS',drained:true,stdoutBytes:0,stderrBytes:52,stderrClassification:{classes:['NETWORK_SETUP',privateText],errno:['EPERM',privateText],truncated:false},stderr:privateText,profileSha256:privateText};
+ const safe=archiveHostStartupSummary(startup);assert.equal(safe?.helperExitStage,'RESOURCE_LIMITS');assert.deepEqual(safe?.stderrClassification,{classes:['NETWORK_SETUP'],errno:['EPERM'],truncated:false});assert.equal(safe?.exitCode,125);assert.ok(!JSON.stringify(safe).includes(privateText));
+ const summary=archiveHostCanarySummary({qualified:false,failureCode:'PROCESS_FAILED',tests:[],realFormats:[],startupDiagnostic:startup}),diagnostic=new ArchiveHostRunError('qualification_canary',{code:'PROCESS_FAILED'},summary).diagnostic,id='a'.repeat(32);
+ assert.deepEqual(archiveHostJournalFailure(JSON.stringify({_SYSTEMD_INVOCATION_ID:id,MESSAGE:JSON.stringify(diagnostic)}),id),diagnostic);assert.deepEqual(diagnostic.canary?.startup,safe);assert.equal(archiveHostStartupSummary({...startup,qualified:true}),null);
 });
 test('CI failure evidence accepts fixed JSON only from the latest service invocation',()=>{
  const current='a'.repeat(32),previous='b'.repeat(32),privateText='synthetic-private-journal-material';const diagnostic=new ArchiveHostRunError('delegation_enable',{code:'EPERM'}).diagnostic;

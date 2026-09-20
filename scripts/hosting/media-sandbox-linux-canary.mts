@@ -12,10 +12,10 @@ import {pathToFileURL} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
 import {createLinuxMediaSandbox,MediaSandboxError,type MediaSandboxExitEvidence,type QualifiedLinuxMediaSandbox,type MediaSandboxLimits} from '../../src/lib/higgsfield-media-sandbox';
 import {inspectHiggsfieldArchiveMedia,type HiggsfieldMediaDescriptor} from '../../src/lib/higgsfield-media-inspection';
-import {diagnoseMediaSandboxStartup} from './media-sandbox-startup-diagnostic.mts';
+import {diagnoseMediaSandboxStartup,diagnoseArchiveHostSandboxStartup} from './media-sandbox-startup-diagnostic.mts';
 
 type ProfilePin={profilePath:string;expectedProfileSha256:string};
-export type MediaSandboxCanaryConfig={fixtureRoot?:string;sourceRoot?:string;diagnostics?:boolean;version:number;profiles:{real:ProfilePin;conformance:ProfilePin};serviceRoot:string;supervisorGroup:string;cgroupRoot:string;uid:number;gid:number;hostCanaryPath:string;hostCanarySha256:string;evidence:string};
+export type MediaSandboxCanaryConfig={fixtureRoot?:string;sourceRoot?:string;diagnostics?:boolean;diagnosticScope?:'archive-host-qualification';version:number;profiles:{real:ProfilePin;conformance:ProfilePin};serviceRoot:string;supervisorGroup:string;cgroupRoot:string;uid:number;gid:number;hostCanaryPath:string;hostCanarySha256:string;evidence:string};
 type Config=MediaSandboxCanaryConfig;
 type Observation={group:string;processes:Set<number>;controls:Record<string,string>};
 const digest=(bytes:Buffer|string)=>createHash('sha256').update(bytes).digest('hex');
@@ -102,7 +102,7 @@ export async function runMediaSandboxCanary(config:Config){
    if(value.kind==='image'){assert.equal(value.width,16);assert.equal(value.height,16);}else if(value.kind==='video'){assert.equal(value.durationMs,500);assert.equal(value.frameCount,3);assert.deepEqual(value.frameRate,{numerator:6,denominator:1});assert.equal(value.vfr,false);}else{assert.equal(value.durationMs,100);assert.equal(value.channels,1);assert.equal(value.sampleRateHz,format==='wav'?8000:44100);}descriptors.push(value);
   }
   assert.ok(realEvents.length>=16);assert.ok(realEvents.every(event=>event.drained));assert.equal((await readdir(config.cgroupRoot)).filter(name=>name.startsWith('decoder-')).length,0);report.realFormats=descriptors;report.realDecoderEvents=realEvents;report.adversarialEvents=events;report.qualified=true;
- }catch(error){report.failureCode=code(error);if(startingProfile&&config.diagnostics!==false)report.startupDiagnostic=await diagnoseMediaSandboxStartup(config,startingProfile);throw error;}finally{if(listener)await closed(listener);await writeFile(join(config.evidence,'qualification.json'),JSON.stringify(report,null,2)+'\n',{mode:0o600});}
+ }catch(error){report.failureCode=code(error);if(startingProfile&&config.diagnostics!==false)report.startupDiagnostic=await(config.diagnosticScope==='archive-host-qualification'?diagnoseArchiveHostSandboxStartup(config,startingProfile):diagnoseMediaSandboxStartup(config,startingProfile));throw error;}finally{if(listener)await closed(listener);await writeFile(join(config.evidence,'qualification.json'),JSON.stringify(report,null,2)+'\n',{mode:0o600});}
  console.log('Isolated Linux decoder qualified: boundary/resource/cleanup checks and all seven actual media formats passed.');
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){void(async()=>{
