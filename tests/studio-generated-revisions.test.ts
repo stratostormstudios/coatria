@@ -10,6 +10,7 @@ import {studioGeneratedRevisionRoute,applyStudioGeneratedRevision,draftStudioGen
 import {generatedRoundScope,assertGeneratedWorkCurrent,assertGeneratedDeliveryCurrent} from '../src/lib/studio-generated-rounds';
 import {studioGeneratedRevisionDraftPlanInput} from '../src/lib/studio-generated-revision-protocol';
 import {makeGeneratedClientPackageFixture,type GeneratedFixtureKind} from './fixtures/generated-client-delivery';
+import {dropFixtureDatabase} from './fixtures/postgres-teardown';
 
 const emulate=process.env.COATRIA_TEST_EMULATOR==='1',integration=process.env.COATRIA_INTEGRATION_DATABASE_URL;
 const localPostgres=(()=>{try{return !!integration&&['localhost','127.0.0.1'].includes(new URL(integration).hostname);}catch{return false;}})();
@@ -153,7 +154,12 @@ test('generated revisions preserve accepted evidence and require a new source-bo
    const legacyRead=await call('agent/tools/studio_get','POST',{runId:parent.run.id,leaseToken:parent.leaseToken,requestId:randomUUID(),arguments:{projectId:legacy.project.id,workItemId:legacyDetail.workItems[0].id}},'coordinator');assert(!('historicalWork' in legacyRead.result));assert(!('description' in legacyRead.result.workItem));
   });
  }finally{
-  await database().end();if(stop)await stop();if(control){if(created)await control.query('DROP DATABASE '+dbName+' WITH (FORCE)');await control.end();}
-  for(const name of Object.keys(process.env))if(!(name in environment))delete process.env[name];Object.assign(process.env,environment);
+  try{await database().end();}finally{
+   delete(globalThis as {coatriaPool?:Pool}).coatriaPool;
+   try{await stop?.();}finally{
+    try{if(control){try{if(created)await dropFixtureDatabase(control,dbName);}finally{await control.end();}}}
+    finally{for(const name of Object.keys(process.env))if(!(name in environment))delete process.env[name];Object.assign(process.env,environment);}
+   }
+  }
  }
 });

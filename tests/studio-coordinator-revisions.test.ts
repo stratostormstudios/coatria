@@ -11,6 +11,7 @@ import {studioCoordinatorObjective,STUDIO_GENERATED_COORDINATOR_OBJECTIVE_VERSIO
 import {studioGeneratedRevisionSnapshotInput} from '../src/lib/studio-generated-revision-protocol';
 import {generatedClientSpecs,seedGeneratedClientSource} from './fixtures/generated-client-delivery';
 import {createProviderExecutor} from '../public/downloads/provider-adapter.mjs';
+import {dropFixtureDatabase} from './fixtures/postgres-teardown';
 
 test('stock coordinator objectives fit the real mission contract without raising its limit',()=>{
  assert.equal(hashToken(studioCoordinatorObjective({id:'00000000-0000-4000-8000-000000000001'})),'546edbf7be4e97cbb42738337826b931d4474897f539c78137264f4e95b59591','Legacy coordinator text remains byte-identical.');
@@ -105,5 +106,13 @@ test('stock generated coordinator cycles draft and select exact paged feedback w
    await assert.rejects(()=>cycle(f.projectId,lease,{beforeDraft:async()=>{attempts++;await query('UPDATE studio_projects SET revision=revision+1 WHERE id=$1',[f.projectId]);}}),/tool was denied or failed/);assert.equal(attempts,1);assert.equal((await query('SELECT count(*)::int n FROM studio_generated_revision_plans WHERE project_id=$1',[f.projectId])).rows[0].n,0);
    await call(`agent/runs/${lease.run.id}/fail`,'POST',{clientId:randomUUID(),leaseToken:lease.leaseToken,error:'Synthetic changed-source failure; inspect saved effects.'},'agent');assert.equal((await call(missions+'/'+missionId+'/run-now','POST',{clientId:randomUUID()},'owner',409)).code,'MISSION_REVIEW_REQUIRED');
   });
- }finally{await database().end();delete(globalThis as {coatriaPool?:Pool}).coatriaPool;await stop?.();if(control){await control.query('DROP DATABASE '+dbName+' WITH (FORCE)');await control.end();}for(const key of Object.keys(process.env))if(!(key in environment))delete process.env[key];Object.assign(process.env,environment);}
+ }finally{
+  try{await database().end();}finally{
+   delete(globalThis as {coatriaPool?:Pool}).coatriaPool;
+   try{await stop?.();}finally{
+    try{if(control){try{await dropFixtureDatabase(control,dbName);}finally{await control.end();}}}
+    finally{for(const key of Object.keys(process.env))if(!(key in environment))delete process.env[key];Object.assign(process.env,environment);}
+   }
+  }
+ }
 });
