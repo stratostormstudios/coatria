@@ -42,3 +42,7 @@ Raw-ticket agent calls (`storage_upload_reserve` and `storage_file_access`) requ
 Before claiming live file storage, test the selected Runpod volume with synthetic content: multipart create/upload/complete, streamed read and SHA-256 match, conditional ETag reads, byte ranges, restart/resume, cancellation, revocation, and independent tenant rejection. Range support is experimental until this is confirmed on the actual region. Unit and database fixtures do not prove provider compatibility. Verify actual storage capacity, retention/backup policy, account billing and TLS ingress. Volumes persist and can keep incurring charges with no compute pod; a volume is not a backup.
 
 Official references: [Runpod S3 API](https://docs.runpod.io/storage/s3-api), [network volumes](https://docs.runpod.io/storage/network-volumes), [Runpod pricing](https://www.runpod.io/pricing), [Vercel function limits](https://vercel.com/docs/functions/limitations). Pricing and region availability are provider-controlled; no recurring purchase is made by this feature.
+
+## Generated-output archives
+
+[Higgsfield archives](HIGGSFIELD_ARCHIVES.md) can prepare one exact adopted output for an approved storage destination. A separate worker performs decode and stored-byte verification; its archive uploads are excluded from the ordinary browser-upload verification queue. The feature is disabled until its dedicated role, storage transport and decoder isolation are qualified. It neither purchases a volume nor modifies retained inference storage.

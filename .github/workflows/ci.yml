@@ -75,6 +75,8 @@ jobs:
       - run: npm ci
       - run: npm audit --audit-level=high
       - run: npm run db:migrate
+      - name: Prepare checksum-pinned native media inspection tools
+        run: node scripts/hosting/prepare-media-inspector-ci.mjs
       - run: npm test
       - run: npm run test:agent:fixture
       - run: npm run typecheck

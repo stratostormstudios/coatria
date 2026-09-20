@@ -126,7 +126,7 @@ export function createProjectStorageGateway(options:{providerFactory?:ProviderFa
  /** Restart-safe verification queue: only read/hash is retried, never paid or mutating provider work. */
  async function verifyNext(){
   const actionId=randomUUID(),saved=await transaction(async client=>{
-   const upload=(await client.query("SELECT * FROM project_storage_uploads WHERE status='verifying' AND expires_at>clock_timestamp() AND (action_id IS NULL OR action_expires_at<clock_timestamp()) ORDER BY updated_at,id FOR UPDATE SKIP LOCKED LIMIT 1")).rows[0];if(!upload)return null;
+   const upload=(await client.query("SELECT * FROM project_storage_uploads WHERE archive_id IS NULL AND status='verifying' AND expires_at>clock_timestamp() AND (action_id IS NULL OR action_expires_at<clock_timestamp()) ORDER BY updated_at,id FOR UPDATE SKIP LOCKED LIMIT 1")).rows[0];if(!upload)return null;
    await client.query("UPDATE project_storage_uploads SET action_id=$3,action_expires_at=clock_timestamp()+interval '2 hours',updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2",[upload.company_id,upload.id,actionId]);return upload;
   });if(!saved)return false;
   let adapter:RunpodProjectStorage|undefined;

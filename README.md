@@ -49,6 +49,8 @@ npm test
 npm run build
 ```
 
+Native media inspection tests also require trusted, fd-capable FFmpeg and ffprobe binaries. Set `COATRIA_TEST_FFMPEG_PATH` and `COATRIA_TEST_FFPROBE_PATH` to absolute paths; CI prepares a checksum-pinned build. See [archive workflow and deployment gates](docs/HIGGSFIELD_ARCHIVES.md).
+
 The test suite contains input/session checks, database-readiness behavior, connector boundaries, and opt-in database integration tests. Database tests can be skipped when their environment is absent; inspect the test output rather than treating a skipped test as validation.
 
 For database integration, supply `COATRIA_INTEGRATION_DATABASE_URL` and `DATABASE_URL` for the same dedicated local test PostgreSQL database, apply migrations, and run `npm test`. The runtime-privilege test needs a test administrator that can create a disposable role. `npm run test:integration` runs the narrower baseline API/signaling subset. The CI workflow provisions PostgreSQL 17; it does not prove production capacity or provider configuration.

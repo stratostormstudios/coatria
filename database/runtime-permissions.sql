@@ -44,6 +44,11 @@ GRANT UPDATE(status,provider_upload_id,provider_descriptor,provider_etag,verific
 GRANT SELECT,INSERT ON higgsfield_job_receipts,higgsfield_jobs,higgsfield_job_observations,higgsfield_job_outputs,higgsfield_output_locators TO coatria_runtime_v1;
 GRANT INSERT ON higgsfield_provider_responses TO coatria_runtime_v1;
 GRANT UPDATE(status,diagnostic_code,poll_attempts,next_poll_at,poll_lease_id,poll_lease_expires_at,updated_at) ON higgsfield_jobs TO coatria_runtime_v1;
+-- The web control plane proposes/approves/revokes; only the separate archive
+-- worker may allocate an archive upload or insert received-byte evidence.
+GRANT SELECT,INSERT ON higgsfield_output_archives,higgsfield_archive_receipts,higgsfield_archive_requests TO coatria_runtime_v1;
+GRANT SELECT ON higgsfield_archive_fetches TO coatria_runtime_v1;
+GRANT UPDATE(status,revision,approved_by,approved_at,expires_at,approved_project_revision,approved_binding_revision,revoked_by,revoked_at,lease_id,lease_expires_at,diagnostic_code,updated_at) ON higgsfield_output_archives TO coatria_runtime_v1;
 GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO coatria_runtime_v1;
 ALTER ROLE coatria_runtime_v1 SET statement_timeout='15s';
 ALTER ROLE coatria_runtime_v1 SET idle_in_transaction_session_timeout='20s';
