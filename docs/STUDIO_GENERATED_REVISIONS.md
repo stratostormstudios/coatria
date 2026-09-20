@@ -27,6 +27,12 @@ External agents use the existing authenticated, leased tool API:
 
 There is no agent apply or production-approval tool. Client notes and correction text are project data and never grant permissions. Retry uncertain mutations with the identical request ID and body; changing the plan, source or approval revision requires a new reviewable operation.
 
+## Coordinator missions
+
+Newly scheduled generated-project coordinators use objective version 2. Before reporting that no work is ready, the objective instructs the coordinator to read the current change receipt, exhaust saved-plan and deliverable pages, and select an existing applicable draft or propose one complete selective draft. Immediately before drafting, it repeats the complete plan-summary pagination, checks the same source and project revision on every page, and selects any matching draft that appeared during that refresh. It then stops for human application. Ambiguous feedback, technical scope changes, insufficient context/steps, and uncertain writes remain blockers. This is an instruction to the model, not a uniqueness constraint preventing independently authorized humans or missions from drafting alternatives.
+
+The stock objective fits the existing 3,000-character mission limit. Existing saved missions retain their exact reviewed text; an administrator must review any replacement or edit. A deterministic bridge fixture exercises real mission creation/activation, leases, the full tool catalog, paged reads, one draft, receipt replay, selection on the next cycle, a matching draft appearing on a later refresh page without a second draft, and a stale-source denial with no new round, generation or invitation. Synthetic model replies establish protocol behavior, not live model judgment or prompt-injection immunity.
+
 ## Limits and remaining scope
 
 This slice preserves the existing approved technical specification and deliverable set. Changes to duration requirements, dimensions, codec, unit count, commercial terms or technical scope require a separate scope-change workflow. A studio approval is not a client's acceptance of changed commercial scope.
