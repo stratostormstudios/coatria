@@ -17,9 +17,13 @@ unrelated 150 GB model volume in US-NE-1 and the retained 10 GB Coatria worker-s
 volume in US-NC-2. Neither is a selected media test destination. This was the
 inventory before creation; the approved dedicated volume above now exists.
 
-The public Coatria health endpoint returned ready and its published agent API
-reported version 1.11.1. These reads do not establish its source commit, database
-migration ledger, archive flag, host configuration or credential grants.
+The 2026-09-20 production release is source `e4d5fc1`, deployment
+`dpl_5ww51ibkeL5PsWgGtvEbDsKirowE`. Its public health returned ready and its
+published agent API reported **1.12.0 / 175 paths**. Separate Vercel and Neon
+read-backs verified that source, migrations 030–033 and the real restricted
+application login. Archive and gateway activation remain disabled; their
+production service logins and actual host qualification are still outstanding.
+See [release evidence](RELEASE_STATUS.md).
 
 ## Approved storage resource
 
