@@ -98,7 +98,8 @@ async function packageSnapshot(client:PoolClient,companyId:string,projectId:stri
 async function createShare(client:PoolClient,companyId:string,actorId:string,projectId:string,data:z.infer<typeof studioClientDeliveryCreateInput>){
  const recipient=await externalAccount(client,companyId,data.recipientUserId);
  const result=await once(client,companyId,actorId,data.clientId,'create:'+projectId,data,async()=>{
-  const project=(await client.query('SELECT revision,status,created_by FROM studio_projects WHERE company_id=$1 AND id=$2 FOR UPDATE',[companyId,projectId])).rows[0];if(!project)fail(404,'Studio project not found.');if(project.revision!==data.revision)fail(409,'The studio project changed. Refresh before sharing.','STUDIO_REVISION_CONFLICT');
+  const project=(await client.query('SELECT revision,status,created_by,contract_version FROM studio_projects WHERE company_id=$1 AND id=$2 FOR UPDATE',[companyId,projectId])).rows[0];if(!project)fail(404,'Studio project not found.');if(project.revision!==data.revision)fail(409,'The studio project changed. Refresh before sharing.','STUDIO_REVISION_CONFLICT');
+  if(project.contract_version===2)fail(409,'Generated-media client delivery requires the external recipient storage transport. An internal prepared manifest does not grant file access.','STUDIO_GENERATED_CLIENT_TRANSPORT_UNAVAILABLE');
   if(project.status==='delivered')fail(409,'Create follow-up work for a project already accepted by the client.','CLIENT_DELIVERY_CLOSED');
   await assertClientExpiry(client,data.expiresAt);
   if(data.recipientUserId===actorId||data.recipientUserId===project.created_by)fail(403,'The studio operator cannot act as the external client.','CLIENT_IDENTITY_REQUIRED');

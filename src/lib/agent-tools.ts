@@ -16,7 +16,9 @@ import {layoutInput,roomInput,submissionUrl,text} from './model';
 import {readFloorPlan} from './floor-plan';
 import {releaseChangedSeats} from './company';
 import type {AgentCapability} from './agent-policy';
-import {STUDIO_TEMPLATES,studioProjectPlanInput,studioArtifactRegisterInput,studioCompanyPlanInput,planStudioCompany,type StudioProjectDetail,type StudioSnapshot} from './studio-protocol';
+import {STUDIO_TEMPLATES,studioProjectPlanInput,studioArtifactRegisterInput,studioCompanyPlanInput,planStudioCompany,type StudioProjectDetail,type StudioReadableProjectDetail,type StudioReadableSnapshot} from './studio-protocol';
+import {studioGeneratedProjectPlanInput,studioGeneratedArtifactRegisterInput} from './studio-generated-protocol';
+import {registerStudioGeneratedArtifact} from './studio-generated-artifacts';
 import {studioSnapshot,studioProjectDetail,createStudioProject,registerStudioArtifact,assertStudioTaskAction} from './studio';
 import {studioStaffingPlanInput} from './studio-staffing-protocol';
 import {proposeStudioStaffing,getStudioStaffingProposal,listStudioStaffingProposals} from './studio-staffing';
@@ -41,7 +43,7 @@ const page=z.object({after:uuid.optional(),limit:z.number().int().min(1).max(100
 const empty=z.object({}).strict();
 const openingInput=z.object({title:text(160),description:text(12000),type:z.enum(['human','agent','either']),compensation:z.enum(['paid','volunteer']),budget:z.string().trim().max(160).default('')}).strict();
 const taskVersion={taskId:uuid,revision:z.number().int().min(1).max(2147483646)};
-type ToolDefinition={capability:AgentCapability;description:string;mutating:boolean;schema:z.ZodType};
+type ToolDefinition={capability:AgentCapability;additionalCapabilities?:AgentCapability[];description:string;mutating:boolean;schema:z.ZodType};
 export const AGENT_TOOLS:Record<string,ToolDefinition>={
  storage_get:{capability:'storage.read',description:'Read this project storage binding and transfer availability. No provider credentials or original bytes.',mutating:false,schema:z.object({projectId:uuid}).strict()},
  storage_files_list:{capability:'storage.read',description:'Browse project folders and immutable file-version summaries. Follow page.nextAfter. Verified means server-read bytes passed integrity checks, not creative approval.',mutating:false,schema:projectStorageListInput.extend({projectId:uuid}).strict()},
@@ -82,14 +84,15 @@ export const AGENT_TOOLS:Record<string,ToolDefinition>={
  hiring_list:{capability:'hiring.read',description:'Page company openings, excluding applicants and their private information.',mutating:false,schema:page},
  proposals_list:{capability:'workspace.read',description:'Page this agent run’s proposals and human review decisions.',mutating:false,schema:page},
  studio_templates:{capability:'studio.read',description:'Read curated studio templates and their supported stages. Templates are planning data and never grant permissions.',mutating:false,schema:empty},
- studio_get:{capability:'studio.read',description:'Read paged company project summaries or, with projectId, a compact work-item page and latest artifact summaries. Use after and nextAfter for remaining work. With projectId and workItemId, read the exact assigned work and current dependency summaries directly, without paging. With projectId and artifactId, read one exact full artifact reference. Follow truncation flags; this API does not fetch or verify media.',mutating:false,schema:z.object({projectId:uuid.optional(),workItemId:uuid.optional(),artifactId:uuid.optional(),after:uuid.optional(),limit:z.number().int().min(1).max(100).default(50)}).strict().refine(v=>!(v.artifactId||v.workItemId)||Boolean(v.projectId),'Exact studio detail requires a project.').refine(v=>[v.artifactId,v.workItemId,v.after].filter(Boolean).length<=1,'Choose one exact detail or a work-item page.')},
+ studio_get:{capability:'studio.read',description:'Read paged company project summaries or, with projectId, a compact work-item page and latest artifact summaries. Set contractVersion:2 to understand both legacy frame projects and explicitly tagged generated image/video/audio projects; omission lists legacy projects only and rejects exact v2 reads. Use after and nextAfter for remaining work. With projectId and workItemId, read the exact assigned work and current dependency summaries directly, without paging. With projectId and artifactId, read one exact full artifact reference. Follow truncation flags; this API does not fetch or verify media.',mutating:false,schema:z.object({contractVersion:z.literal(2).optional(),projectId:uuid.optional(),workItemId:uuid.optional(),artifactId:uuid.optional(),after:uuid.optional(),limit:z.number().int().min(1).max(100).default(50)}).strict().refine(v=>!(v.artifactId||v.workItemId)||Boolean(v.projectId),'Exact studio detail requires a project.').refine(v=>[v.artifactId,v.workItemId,v.after].filter(Boolean).length<=1,'Choose one exact detail or a work-item page.')},
  studio_company_plan:{capability:'studio.read',description:'Return a company structure blueprint from a curated studio template. Does not create agents, install skills, grant access, schedule work or spend money.',mutating:false,schema:studioCompanyPlanInput},
  studio_staffing_propose:{capability:'studio.write',description:'Prepare an exact company staffing proposal from the administrator brief, disciplines, team size and curated model settings. Optionally group roles into named specialists. Saves a reviewable plan; a human administrator must apply it before identities or role assignments change. Workers and paid inference remain separate.',mutating:true,schema:studioStaffingPlanInput},
  studio_staffing_get:{capability:'studio.read',description:'Read saved company staffing proposals for a current administrator requester. Supply proposalId for the exact reviewed role and skill plan. Does not reveal credentials or apply the proposal.',mutating:false,schema:z.object({proposalId:uuid.optional(),after:uuid.optional(),limit:z.number().int().min(1).max(25).default(10)}).strict().refine(v=>!(v.proposalId&&v.after),'Choose an exact proposal or a page.')},
  studio_execution_get:{capability:'studio.read',description:'Read a company execution page: kind=connectors, inputs, or jobs. Follow page.nextAfter for remaining records. With jobId, read its exact profile, pinned inputs, status and output files, paginated by fileOffset. With inputId read one pinned file reference. Connector file checks are not independent artistic QC. Does not fetch media or return credentials.',mutating:false,schema:z.object({projectId:uuid.optional(),jobId:uuid.optional(),inputId:uuid.optional(),kind:z.enum(['jobs','inputs','connectors']).default('jobs'),after:uuid.optional(),fileOffset:z.number().int().min(0).max(1000).default(0),limit:z.number().int().min(1).max(50).default(25)}).strict().refine(v=>!v.fileOffset||Boolean(v.jobId),'A file offset requires a job.').refine(v=>[v.jobId,v.inputId,v.after].filter(Boolean).length<=1,'Choose an exact resource or a page.')},
  studio_execution_submit:{capability:'studio.execute',description:'Propose a bounded DCC job for this specialist’s currently reserved production task. Uses an administrator-registered connector, exact profile version, pinned input hashes and current project revision. The job waits for human approval; it cannot provision compute, execute arbitrary code, accept media or deliver files.',mutating:true,schema:executionPlanInput},
- studio_plan:{capability:'studio.write',description:'Create a draft studio project and server-generated production plan for an owner or administrator request. Requires separate human approval; never activates work or approves delivery.',mutating:true,schema:studioProjectPlanInput},
+ studio_plan:{capability:'studio.write',description:'Create a draft studio project and server-generated production plan for an owner or administrator request. Omit contractVersion for the unchanged legacy frame plan. Explicit contractVersion:2 and productionPath:higgsfield create an image, video or audio plan with matching deliverable kinds; no invented frame ranges. Requires separate human approval; never activates work or approves delivery. Generated v2 client sharing and automatic creative follow-ups remain unsupported.',mutating:true,schema:z.union([studioGeneratedProjectPlanInput,studioProjectPlanInput])},
  studio_artifact_register:{capability:'studio.write',description:'Register an immutable external artifact reference against a project revision for an owner or administrator request. Metadata is declared, not independently verified. Does not download, render, approve or deliver files.',mutating:true,schema:studioArtifactRegisterInput.safeExtend({projectId:uuid})},
+ studio_generated_artifact_register:{capability:'studio.write',additionalCapabilities:['creative.read','creative.write','storage.read'],description:'Register one already verified archive as an immutable image/video/audio artifact for an exact contractVersion:2 project and assigned work item. Also requires creative.read, creative.write and storage.read in current grants and this live run. The server loads and checks stored source, file and media evidence; do not supply URLs, hashes or verification claims. Replays recheck current role, project and storage authority. Does not generate, transfer files, submit a task, approve media or share with clients.',mutating:true,schema:studioGeneratedArtifactRegisterInput.omit({clientId:true}).extend({projectId:uuid}).strict()},
  office_presence:{capability:'office.write',description:'Move only this agent and set availability. Requires recurring contact; does not start audio, capture a screen, or control a human.',mutating:true,schema:z.object({roomId:uuid.nullable(),x:z.number().min(-20).max(20),z:z.number().min(-20).max(20),status:z.enum(['available','focus','away'])}).strict()},
  tasks_create:{capability:'tasks.write',description:'Create a task owned by this run. No assignment of another person and no approval.',mutating:true,schema:z.object({title:text(160),description:z.string().trim().max(12000).default('')}).strict()},
  tasks_claim:{capability:'tasks.write',description:'Reserve one unassigned to-do task for this run using its current revision. Competing runs cannot claim it.',mutating:true,schema:z.object(taskVersion).strict()},
@@ -100,6 +103,9 @@ export const AGENT_TOOLS:Record<string,ToolDefinition>={
  hiring_propose:{capability:'hiring.propose',description:'Propose one draft job opening. A human administrator must apply it and separately publish it. No applicant acceptance, invitations or payments.',mutating:true,schema:openingInput},
 };
 function parse<T>(schema:z.ZodType<T>,value:unknown):T{const result=schema.safeParse(value);if(!result.success)fail(400,result.error.issues.map(i=>i.message).join(' '));return result.data;}
+/** Every tool accepts an object. Keep the strict versioned branches intact,
+ * while exposing the top-level object type expected by provider tool APIs. */
+export function agentToolInputSchema(definition:Pick<ToolDefinition,'schema'>){return {...z.toJSONSchema(definition.schema,{unrepresentable:'any',io:'input'}),type:'object' as const};}
 function canonical(value:unknown):string{if(Array.isArray(value))return '['+value.map(canonical).join(',')+']';if(value&&typeof value==='object')return '{'+Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>JSON.stringify(k)+':'+canonical(v)).join(',')+'}';return JSON.stringify(value);}
 const proposalColumns=`p.id,p.agent_id AS "agentId",a.name AS "agentName",p.run_id AS "runId",p.requested_by AS "requestedBy",p.kind,p.data,p.status,p.created_at AS "createdAt",p.expires_at AS "expiresAt",p.reviewed_at AS "reviewedAt",p.reviewed_by AS "reviewedBy",p.result`;
 const taskProjection=`id,title,description,status,assignee_id AS "assigneeId",created_agent_id AS "createdAgentId",agent_run_id AS "agentRunId",revision,submission_url AS "submissionUrl",submission_summary AS "submissionSummary",approved_by AS "approvedBy",approved_agent_id AS "approvedAgentId",machine_review_id AS "machineReviewId",created_at AS "createdAt",updated_at AS "updatedAt"`;
@@ -110,13 +116,13 @@ const studioAgentPageBytes=96*1024;
 const jsonBytes=(value:unknown)=>Buffer.byteLength(JSON.stringify(value));
 const preview=(value:string|undefined,max=320)=>({text:(value??'').slice(0,max),truncated:(value?.length??0)>max});
 /** Keep model context bounded without mutating the complete browser/API record. */
-export function studioAgentSnapshot(snapshot:StudioSnapshot){
+export function studioAgentSnapshot(snapshot:StudioReadableSnapshot){
  const projects=snapshot.projects.map(({brief,gates,...project})=>({...project,gates:Object.fromEntries(Object.entries(gates).map(([key,value])=>[key,{decision:value.decision,recordedBy:value.recordedBy,at:value.at,...value.deliveryId?{deliveryId:value.deliveryId}:{}}])),briefAvailableInProjectDetail:true}));
  const view=()=>({...snapshot,projects,projectsAreSummaries:true,hasMore:snapshot.hasMore||projects.length<snapshot.projects.length,nextAfter:snapshot.hasMore||projects.length<snapshot.projects.length?projects.at(-1)?.id??null:null});
  while(projects.length>1&&jsonBytes(view())>studioAgentPageBytes)projects.pop();
  const result=view();if(jsonBytes(result)>studioAgentPageBytes)fail(413,'The studio overview exceeds its bounded context. Request a smaller page.','STUDIO_CONTEXT_LIMIT');return result;
 }
-export function studioAgentProject(detail:StudioProjectDetail,{after,limit=50,artifactId,workItemId}:{after?:string;limit?:number;artifactId?:string;workItemId?:string}={}){
+export function studioAgentProject(detail:StudioReadableProjectDetail,{after,limit=50,artifactId,workItemId}:{after?:string;limit?:number;artifactId?:string;workItemId?:string}={}){
  if(!Number.isInteger(limit)||limit<1||limit>100)fail(400,'Choose a studio page limit from 1 to 100.');
  if([after,artifactId,workItemId].filter(Boolean).length>1)fail(400,'Choose one exact detail or a work-item page.');
  const reviewSummary=(item:StudioProjectDetail['reviews'][number])=>{const{note,...rest}=item,notePreview=preview(note);return {...rest,notePreview:notePreview.text,noteTruncated:notePreview.truncated};};
@@ -132,7 +138,8 @@ export function studioAgentProject(detail:StudioProjectDetail,{after,limit=50,ar
  if(artifactId){
   const artifact=detail.artifacts.find(item=>item.id===artifactId);if(!artifact)fail(404,'Artifact not found in this project.');
   const reviews=detail.reviews.filter(item=>item.artifactId===artifactId);
-  return {project:{id:detail.project.id,name:detail.project.name,revision:detail.project.revision,spec:detail.project.spec},artifact,reviews:reviews.slice(0,50).map(reviewSummary),reviewCount:reviews.length,reviewsTruncated:reviews.length>50,contentInspectedByThisResponse:false};
+  const result={project:{id:detail.project.id,name:detail.project.name,revision:detail.project.revision,spec:detail.project.spec,...detail.project.contractVersion===2?{contractVersion:2,productionPath:'higgsfield'}:{}},artifact,reviews:reviews.slice(0,50).map(reviewSummary),reviewCount:reviews.length,reviewsTruncated:reviews.length>50,contentInspectedByThisResponse:false};
+  if(jsonBytes(result)>studioAgentPageBytes)fail(413,'The exact studio artifact exceeds its bounded context. Request administrator review.','STUDIO_CONTEXT_LIMIT');return result;
  }
  const sorted=[...detail.workItems].sort((a,b)=>a.id.localeCompare(b.id));
  const cursor=after?sorted.findIndex(item=>item.id===after):-1;if(after&&cursor<0)fail(404,'Work-item cursor not found in this project.');
@@ -163,12 +170,20 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
  const hash=createHash('sha256').update(canonical({tool:name,runId:command.runId,arguments:hashArgs})).digest('hex');
  return transaction(async client=>{
   const context=await authorizeRunTool(client,agent,command.runId,command.leaseToken);await assertRenderFollowupTool(client,context.agent,context.run,name,args);await assertCreativeFollowupTool(client,context.agent,context.run,name,args);
-  if(!context.capabilities.includes(definition.capability))fail(403,'This run does not have permission for this tool.','AGENT_CAPABILITY_REQUIRED');
+  if(![definition.capability,...definition.additionalCapabilities??[]].every(capability=>context.capabilities.includes(capability)))fail(403,'This run does not have permission for this tool.','AGENT_CAPABILITY_REQUIRED');
   if((['studio.write','studio.execute','studio.review','creative.write'].includes(definition.capability)||name==='studio_staffing_get')&&!['owner','admin'].includes(context.requesterRole))fail(403,'Studio changes, planning review and staffing require a current owner or administrator request.','STUDIO_REQUESTER_ACCESS');
   // All operations on a run are serialized after current authority and lease checks.
   await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`agent-tool:${agent.company_id}:${agent.id}:${command.requestId}`]);
   const previous=(await client.query('SELECT request_hash,response FROM agent_tool_receipts WHERE company_id=$1 AND agent_id=$2 AND request_id=$3',[agent.company_id,agent.id,command.requestId])).rows[0];
-  if(previous){if(previous.request_hash!==hash)fail(409,'This tool request ID was used for different arguments.','IDEMPOTENCY_CONFLICT');return {result:await recordStudioInferenceToolReceipt(client,context.agent,command.runId,command.requestId,name,command.arguments,previous.response),replayed:true};}
+  if(previous){
+   if(previous.request_hash!==hash)fail(409,'This tool request ID was used for different arguments.','IDEMPOTENCY_CONFLICT');
+   // A generated artifact receipt is historical evidence, not continuing access
+   // to its source. Its service must recheck current source/role/storage gates.
+   if(name==='studio_generated_artifact_register'){
+    const{projectId,...artifact}=args;await registerStudioGeneratedArtifact(client,{companyId:agent.company_id,userId:context.run.requested_by,agentId:agent.id,runId:context.run.id,agentSponsorId:agent.created_by},projectId,{...artifact,clientId:command.requestId});
+   }
+   return {result:await recordStudioInferenceToolReceipt(client,context.agent,command.runId,command.requestId,name,command.arguments,previous.response),replayed:true};
+  }
   if(definition.mutating&&Number((await client.query('SELECT count(*) FROM agent_tool_receipts WHERE company_id=$1 AND run_id=$2',[agent.company_id,command.runId])).rows[0].count)>=200)fail(409,'This run reached its limit of 200 committed tool actions. Start a new reviewed request.','AGENT_TOOL_BUDGET');
   const run=context.run,companyId=agent.company_id,limit=args.limit||50,values=[companyId,args.after||null,limit+1];let result:unknown;
   switch(name){
@@ -214,7 +229,7 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
    case 'studio_review_decide':result=await decideStudioPlanningReview(client,context.agent,context.run,args);break;
    case 'studio_work_dispatch':result=await dispatchStudioWork(client,agent,run,args);break;
    case 'studio_templates':result={templates:STUDIO_TEMPLATES};break;
-   case 'studio_get':result=args.projectId?studioAgentProject(await studioProjectDetail(client,companyId,args.projectId),args):studioAgentSnapshot(await studioSnapshot(client,companyId,args.after,args.limit));break;
+   case 'studio_get':result=args.projectId?studioAgentProject(await studioProjectDetail(client,companyId,args.projectId,args.contractVersion??1),args):studioAgentSnapshot(await studioSnapshot(client,companyId,args.after,args.limit,args.contractVersion??1));break;
    case 'studio_company_plan':result=planStudioCompany(args);break;
    case 'studio_staffing_propose':result=await proposeStudioStaffing(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id,agentSponsorId:agent.created_by},{...args,clientId:command.requestId});break;
    case 'studio_staffing_get':{
@@ -231,6 +246,7 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
    case 'studio_execution_submit':result=await submitStudioExecution(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id,agentSponsorId:agent.created_by},{...args,clientId:command.requestId});break;
    case 'studio_plan':result=await createStudioProject(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id,agentSponsorId:agent.created_by},{...args,clientId:command.requestId});break;
    case 'studio_artifact_register':{const{projectId,...artifact}=args;result=await registerStudioArtifact(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id,agentSponsorId:agent.created_by},projectId,{...artifact,clientId:command.requestId});break;}
+   case 'studio_generated_artifact_register':{const{projectId,...artifact}=args;result=await registerStudioGeneratedArtifact(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id,agentSponsorId:agent.created_by},projectId,{...artifact,clientId:command.requestId});break;}
    case 'office_presence':{
     if(args.roomId&&!(await client.query('SELECT id FROM rooms WHERE id=$1 AND company_id=$2',[args.roomId,companyId])).rowCount)fail(404,'Room not found.');
     const floor=readFloorPlan((await client.query('SELECT layout FROM companies WHERE id=$1',[companyId])).rows[0].layout).floor;
@@ -277,7 +293,7 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
 
 export async function agentToolsRoute(request:Request,parts:string[],method:string):Promise<Response|null>{
  if(parts[0]!=='agent'||parts[1]!=='tools')return null;const agent=await authenticateAgent(request);
- if(parts.length===2&&method==='GET')return json({protocolVersion:'1.0',requiresRunLease:true,tools:Object.entries(AGENT_TOOLS).filter(([,v])=>agent.capabilities?.includes(v.capability)).map(([name,v])=>({name,description:v.description,capability:v.capability,mutating:v.mutating,inputSchema:z.toJSONSchema(v.schema,{unrepresentable:'any',io:'input'})}))});
+ if(parts.length===2&&method==='GET')return json({protocolVersion:'1.0',requiresRunLease:true,tools:Object.entries(AGENT_TOOLS).filter(([,v])=>[v.capability,...v.additionalCapabilities??[]].every(capability=>agent.capabilities?.includes(capability))).map(([name,v])=>({name,description:v.description,capability:v.capability,mutating:v.mutating,inputSchema:agentToolInputSchema(v)}))});
  if(parts.length===3&&method==='POST'){
   // Older model adapters forward unrecognized tool results verbatim. Raw file
   // tickets require an explicit promise by the trusted transport to keep them

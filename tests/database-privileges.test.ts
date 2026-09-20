@@ -73,6 +73,7 @@ test('runtime role supports accounts and durable conversations without verificat
     // Exercise the production role, including immutable planning, compute-cost,
     // and client receipts. Empty statements still require real SQL privileges.
     const immutableStudioTables=['studio_planning_reviews','studio_planning_review_reads','studio_planning_review_decisions','studio_host_compute_reservations','studio_host_provision_requests','studio_client_delivery_files','studio_client_delivery_receipts','studio_client_delivery_requests','studio_inference_reservations','studio_inference_tool_receipts','studio_coordination_followups'];
+    immutableStudioTables.push('studio_generated_artifact_sources','studio_generated_review_evidence');
     for(const table of immutableStudioTables){
       assert.deepEqual((await client.query("SELECT has_table_privilege(current_user,$1,'SELECT') AS read,has_table_privilege(current_user,$1,'INSERT') AS append,has_any_column_privilege(current_user,$1,'UPDATE') AS edit,has_table_privilege(current_user,$1,'DELETE') AS remove",[table])).rows[0],{read:true,append:true,edit:false,remove:false},table);
       await client.query(`SELECT company_id FROM ${table} WHERE false`);

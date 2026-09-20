@@ -19,6 +19,9 @@ GRANT SELECT,INSERT,UPDATE,DELETE ON
  studio_staffing_proposals,studio_managed_hosts,studio_host_credentials,studio_host_requests
  TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON studio_artifacts,studio_reviews,studio_gate_events,studio_requests TO coatria_runtime_v1;
+-- Generated-media evidence is append-only. Storage workers receive no studio
+-- publication or independent-review authority from these web runtime grants.
+GRANT SELECT,INSERT ON studio_generated_artifact_sources,studio_generated_review_evidence TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON studio_execution_inputs,studio_execution_job_inputs,studio_execution_manifests,studio_staffing_applications TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON studio_media_files,studio_media_verifications,studio_media_promotions,studio_media_requests TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON studio_deliveries TO coatria_runtime_v1;

@@ -9,6 +9,11 @@ type Row=Record<string,any>;
 const required=['studio.read','studio.write','tasks.write','creative.read','creative.write'];
 const canonical=(value:unknown):string=>Array.isArray(value)?'['+value.map(canonical).join(',')+']':value&&typeof value==='object'?'{'+Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([key,item])=>JSON.stringify(key)+':'+canonical(item)).join(',')+'}':JSON.stringify(value);
 const unavailable=()=>fail(409,'This exact generation handoff is not ready. Finish or reconcile the source run, register its actual output, then refresh the project.','CREATIVE_FOLLOWUP_UNAVAILABLE');
+async function supportedProject(client:PoolClient,companyId:string,projectId:string){
+ const project=(await client.query('SELECT id,contract_version FROM studio_projects WHERE company_id=$1 AND id=$2',[companyId,projectId])).rows[0];
+ if(!project)fail(404,'Studio project not found.');
+ if(project.contract_version===2)fail(409,'Generated-media continuation requires a version-aware verified-source handoff. Submit the registered output through the normal authorized task workflow.','STUDIO_GENERATED_FOLLOWUP_UNAVAILABLE');
+}
 
 async function evidence(client:PoolClient,companyId:string,projectId:string,workItemId:string,requestId:string,artifactId:string,followup?:StudioCreativeFollowupReceipt){
  const row=(await client.query(`SELECT q.id AS request_id,q.request_hash,q.status AS request_status,q.result,q.agent_id AS source_agent_id,q.run_id AS source_run_id,q.task_revision AS request_task_revision,q.role_agent_id,q.role_human_id,
@@ -49,7 +54,7 @@ async function priorPair(client:PoolClient,companyId:string,projectId:string,wor
 }
 /** A preview of eligible identities, never a provider-completion or pixel claim. */
 export async function studioCreativeFollowupSnapshot(client:PoolClient,companyId:string,projectId:string):Promise<StudioCreativeFollowupSnapshot>{
- id(companyId);id(projectId);if(!(await client.query('SELECT id FROM studio_projects WHERE company_id=$1 AND id=$2',[companyId,projectId])).rowCount)fail(404,'Studio project not found.');
+ id(companyId);id(projectId);await supportedProject(client,companyId,projectId);
  const rows=(await client.query(`SELECT q.id,q.work_item_id,q.run_id,a.id AS artifact_id FROM higgsfield_requests q JOIN LATERAL (SELECT id FROM studio_artifacts a WHERE a.company_id=q.company_id AND a.work_item_id=q.work_item_id ORDER BY version DESC LIMIT 1) a ON true WHERE q.company_id=$1 AND q.project_id=$2 AND q.status='returned' AND q.run_id IS NOT NULL ORDER BY q.created_at,q.id LIMIT 200`,[companyId,projectId])).rows;
  const candidates=[];
  for(const row of rows)try{await evidence(client,companyId,projectId,row.work_item_id,row.id,row.artifact_id);if(!await priorPair(client,companyId,projectId,row.work_item_id,row.id,row.artifact_id))candidates.push({workItemId:row.work_item_id,requestId:row.id,artifactId:row.artifact_id,sourceRunId:row.run_id});}catch(error){if(!(error instanceof ApiError)||error.status>=500)throw error;}
@@ -60,6 +65,7 @@ export async function studioCreativeFollowupSnapshot(client:PoolClient,companyId
 export async function dispatchStudioCreativeFollowup(client:PoolClient,member:Membership,projectId:string,input:unknown){
  id(projectId);const data=studioCreativeFollowupInput.parse(input),actorKey='human:'+member.userId,requestHash=hashToken(canonical({operation:'creative-followup',projectId,...data}));
  if(!(await client.query("SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2 AND role IN ('owner','admin') FOR SHARE",[member.companyId,member.userId])).rowCount)fail(403,'A current administrator must attest this handoff.');
+ await supportedProject(client,member.companyId,projectId);
  await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`studio-request:${member.companyId}:${actorKey}:${data.clientId}`]);
  const previous=(await client.query('SELECT request_hash,response FROM studio_requests WHERE company_id=$1 AND actor_key=$2 AND client_id=$3',[member.companyId,actorKey,data.clientId])).rows[0];
  if(previous){if(previous.request_hash!==requestHash)fail(409,'This request key belongs to a different handoff.','IDEMPOTENCY_CONFLICT');return {...previous.response,replayed:true};}
