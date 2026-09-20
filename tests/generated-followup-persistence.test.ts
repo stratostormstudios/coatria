@@ -132,6 +132,17 @@ test('generated continuation persistence is immutable, scoped and source-bound',
    for(const table of['studio_generated_followups','studio_generated_followup_steps'])for(const command of['DELETE FROM '+table+' WHERE false','UPDATE '+table+' SET company_id=company_id WHERE false'])await assert.rejects(()=>tx(client=>client.query(command),true),(error:any)=>error.code==='42501');
   });
  }finally{
-  await close?.();if(control){if(created)await control.query('DROP DATABASE '+dbName+' WITH (FORCE)');if(roleCreated)await control.query('DROP ROLE '+role);await control.end();}
+  try{await close?.();}finally{if(control){
+   try{if(created){
+    // Pool.end empties the pool before every backend finishes disconnecting.
+    // A forced DROP can kill an idle socket after the concurrency test passes.
+    // Wait only for this fixture database; fail visibly if a session leaks.
+    const deadline=performance.now()+10000;
+    while((await control.query('SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname=$1',[dbName])).rows[0].count){
+     assert(performance.now()<deadline,'Generated continuation fixture sessions must drain before teardown');await new Promise(resolve=>setTimeout(resolve,20));
+    }
+    await control.query('DROP DATABASE '+dbName);
+   }}finally{try{if(roleCreated)await control.query('DROP ROLE '+role);}finally{await control.end();}}
+  }}
  }
 });
