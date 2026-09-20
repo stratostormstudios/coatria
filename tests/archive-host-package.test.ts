@@ -8,6 +8,7 @@ import {ARCHIVE_HOST_PINS,archiveHostHash,parseArchiveRuntime,parseArchiveBundle
 import {ARCHIVE_HOST_SOURCE_FILES,buildArchiveHostBundle} from '../scripts/hosting/build-archive-host-bundle.mjs';
 import {archiveHostUnit,inspectArchiveHostBundle} from '../scripts/hosting/install-archive-host.mjs';
 import {createArchiveHostCiCommand,ArchiveHostCiCommandError} from '../scripts/hosting/archive-host-ci-command.mjs';
+import {createArchiveNpmEnvironment,ArchiveRuntimeExportError} from '../scripts/hosting/export-archive-host-runtime.mjs';
 
 const git=(cwd:string,args:string[])=>{const result=spawnSync('git',['-c','core.autocrlf=false','-c','user.name=Archive Fixture','-c','user.email=archive-fixture@example.invalid','-C',cwd,...args],{encoding:'utf8',timeout:10000,maxBuffer:1024*1024});assert.equal(result.status,0,result.stderr);return result.stdout.trim();};
 async function fixture(){
@@ -71,4 +72,14 @@ test('CI command diagnostics retain numeric status and redact unknown error code
  const command=createArchiveHostCiCommand((()=>({status:12,error:{code:'synthetic-private-errno'},stdout:'private',stderr:'private'})) as unknown as typeof spawnSync);
  assert.throws(()=>command('install_acl',[]),(error:unknown)=>{assert.ok(error instanceof ArchiveHostCiCommandError);assert.deepEqual(error.diagnostic,{operation:'install_acl',status:12,errorCode:'UNKNOWN'});return true;});
  const success=createArchiveHostCiCommand((()=>({status:0,stdout:' inactive\n'})) as unknown as typeof spawnSync);assert.equal(success('read_unit_state',[]),'inactive');
+});
+test('offline npm uses distinct empty configuration sources instead of loading one source twice',async t=>{
+ const temp=await mkdtemp(join(tmpdir(),'coatria-archive-npm-'));t.after(()=>rm(temp,{recursive:true,force:true}));const env=await createArchiveNpmEnvironment(temp);
+ assert.notEqual(env.NPM_CONFIG_USERCONFIG,env.NPM_CONFIG_GLOBALCONFIG);assert.equal(dirname(env.NPM_CONFIG_USERCONFIG),temp);assert.equal(dirname(env.NPM_CONFIG_GLOBALCONFIG),temp);assert.equal((await readFile(env.NPM_CONFIG_USERCONFIG)).length,0);assert.equal((await readFile(env.NPM_CONFIG_GLOBALCONFIG)).length,0);assert.equal(env.HOME,temp);assert.ok(!('DATABASE_URL'in env));
+ await assert.rejects(createArchiveNpmEnvironment(temp),(error:unknown)=>(error as NodeJS.ErrnoException).code==='EEXIST','existing reviewed config must never be overwritten');
+});
+test('runtime export failures disclose only allowlisted stage and command outcome facts',()=>{
+ const privateText='synthetic-private-path-and-output';const error=new ArchiveRuntimeExportError('npm_install',{code:'ENOENT',message:privateText,stderr:privateText},'npm_ci_offline',1);
+ assert.deepEqual(error.diagnostic,{stage:'npm_install',code:'COMMAND_FAILED',operation:'npm_ci_offline',status:1,errorCode:'ENOENT'});assert.ok(!JSON.stringify(error).includes(privateText));
+ const unknown=new ArchiveRuntimeExportError(privateText,{code:privateText,message:privateText},privateText,999);assert.deepEqual(unknown.diagnostic,{stage:'unknown_stage',code:'COMMAND_FAILED',operation:'unknown_operation',status:null,errorCode:'UNKNOWN'});
 });

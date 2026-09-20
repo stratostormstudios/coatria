@@ -3,7 +3,7 @@ import {randomUUID} from 'node:crypto';
 import {mkdir,readdir,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {ARCHIVE_HOST_PINS,archiveHostHash,archiveHostNoExtendedAcls,archiveHostRead,archiveHostReceiptCurrent} from './archive-host-package.mjs';
-import {exportArchiveHostRuntime} from './export-archive-host-runtime.mjs';
+import {exportArchiveHostRuntime,ArchiveRuntimeExportError} from './export-archive-host-runtime.mjs';
 import {buildArchiveHostBundle} from './build-archive-host-bundle.mjs';
 import {installArchiveHost,acceptArchiveHostQualification} from './install-archive-host.mjs';
 import {createArchiveHostCiCommand,ArchiveHostCiCommandError} from './archive-host-ci-command.mjs';
@@ -33,7 +33,7 @@ try{
  await acceptArchiveHostQualification(second.path,archiveHostHash(second.raw),archiveHostHash(previous));const receipt=JSON.parse(await archiveHostRead('/etc/coatria-archive/qualified.json'));if(archiveHostReceiptCurrent(receipt,build.bundleSha256,'synthetic-different-boot'))throw Error('ARCHIVE_HOST_CI_STALE_BOOT_ACCEPTED');
  report.phase='worker-remains-disabled';command('start_disabled_worker',['start','coatria-archive-worker.service']);if(command('read_unit_state',['show','coatria-archive-worker.service','--property=ActiveState','--value'])!=='inactive')throw Error('ARCHIVE_HOST_CI_UNAPPROVED_WORKER_START');
  const unit=await archiveHostRead('/etc/systemd/system/coatria-archive-qualify.service');Object.assign(report,{qualified:true,phase:'complete',commit:build.commit,tree:build.tree,bundleSha256:build.bundleSha256,runtimeManifestSha256:runtime.runtimeManifestSha256,nodeVersion:ARCHIVE_HOST_PINS.nodeVersion,unitSha256:archiveHostHash(unit),aclGuardProved:true,workerRemainedInactive:true,repeatQualificationPassed:true,receiptCasProved:true,staleBootRejected:true,systemd:command('read_systemd_version',['--version']).split('\n')[0],first:first.host,second:second.host});exports.set('archive-host-qualification.json',second.proof);
-}catch(error){failed=true;report.failureCode='ARCHIVE_HOST_CI_FAILED';if(error instanceof ArchiveHostCiCommandError)report.commandFailure=error.diagnostic;try{report.unitStatus=command('read_failure_state',['show','coatria-archive-qualify.service','--property=ActiveState,Result,ExecMainStatus']);}catch{report.unitStatus='unavailable';}}
+}catch(error){failed=true;report.failureCode='ARCHIVE_HOST_CI_FAILED';if(error instanceof ArchiveHostCiCommandError)report.commandFailure=error.diagnostic;if(error instanceof ArchiveRuntimeExportError)report.exportFailure=error.diagnostic;try{report.unitStatus=command('read_failure_state',['show','coatria-archive-qualify.service','--property=ActiveState,Result,ExecMainStatus']);}catch{report.unitStatus='unavailable';}}
 finally{
  exports.set('archive-host-bundle.json',Buffer.from(JSON.stringify(report,null,2)+'\n'));
  // Root never follows a workspace or service-owned destination. First preserve
