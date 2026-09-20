@@ -36,6 +36,11 @@ GRANT SELECT,INSERT ON higgsfield_oauth_attempts,higgsfield_connections,higgsfie
 GRANT UPDATE(consumed_at) ON higgsfield_oauth_attempts TO coatria_runtime_v1;
 GRANT UPDATE(id,revision,status,connected_by,sealed,expires_at,tools,connected_at,updated_at) ON higgsfield_connections TO coatria_runtime_v1;
 GRANT UPDATE(status,approved_by,dispatched_at,result,error_code,updated_at) ON higgsfield_requests TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON project_storage_connections,project_storage_bindings,project_storage_folders,project_storage_files,project_storage_versions,project_storage_uploads,project_storage_upload_parts,project_storage_verifications,project_storage_folder_plans,project_storage_plan_applications,project_storage_requests,project_storage_access_receipts TO coatria_runtime_v1;
+GRANT UPDATE(status,secret_envelope,revision) ON project_storage_connections TO coatria_runtime_v1;
+GRANT UPDATE(revision) ON project_storage_bindings TO coatria_runtime_v1;
+GRANT UPDATE(parent_id,name,name_key) ON project_storage_folders,project_storage_files TO coatria_runtime_v1;
+GRANT UPDATE(status,provider_upload_id,provider_descriptor,provider_etag,verification_grant_id,active_part,action_id,action_expires_at,updated_at) ON project_storage_uploads TO coatria_runtime_v1;
 GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO coatria_runtime_v1;
 ALTER ROLE coatria_runtime_v1 SET statement_timeout='15s';
 ALTER ROLE coatria_runtime_v1 SET idle_in_transaction_session_timeout='20s';

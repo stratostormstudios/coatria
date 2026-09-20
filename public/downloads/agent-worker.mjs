@@ -71,9 +71,11 @@ export function createRuntimeClient({token=process.env.COATRIA_AGENT_TOKEN,url=p
   complete:(runId,payload,signal)=>post(runPath(runId)+'/complete',payload,signal),
   fail:(runId,payload,signal)=>post(runPath(runId)+'/fail',payload,signal),
   listTools:signal=>request('/api/agent/tools',{signal}),
-  callTool:(name,{runId,leaseToken,requestId,arguments:args},signal)=>{
+  /** @param {string} name @param {{runId:string,leaseToken:string,requestId:string,arguments:Record<string,any>,storageTransportVersion?:string}} payload @param {AbortSignal=} signal */
+  callTool:(name,{runId,leaseToken,requestId,arguments:args,storageTransportVersion=undefined},signal)=>{
    if(typeof name!=='string'||!/^[-a-zA-Z0-9_]{1,80}$/.test(name)||!UUID.test(runId)||!UUID.test(requestId)||!args||typeof args!=='object'||Array.isArray(args))throw new Error('A named tool, run UUID, request UUID and arguments object are required.');
-   return post('/api/agent/tools/'+encodeURIComponent(name),{runId,leaseToken,requestId,arguments:args},signal);
+   if(storageTransportVersion!==undefined&&(storageTransportVersion!=='1'||!['storage_upload_reserve','storage_file_access'].includes(name)))throw new Error('Unsupported storage transport protocol or tool.');
+   return request('/api/agent/tools/'+encodeURIComponent(name),{method:'POST',body:{runId,leaseToken,requestId,arguments:args},signal,headers:storageTransportVersion==='1'?{'X-Coatria-Storage-Transport':'1'}:{}});
   }};
 }
 
@@ -166,7 +168,7 @@ export async function workOnce({client,state,execute,signal,heartbeatMs=15000,lo
    // Adapters may shorten a tool request with their own deadline, but cannot
    // detach it from lease cancellation. Aborted writes still require reconciliation.
    const toolSignal=extra=>extra?AbortSignal.any([control.signal,extra]):control.signal;
-   const tools={key:key=>stableRequestId(job.run.id,key),list:({signal:extra}={})=>{const signal=toolSignal(extra);signal.throwIfAborted();return client.listTools(signal);},call:async(name,args,{requestId,signal:extra}={})=>{const signal=toolSignal(extra);signal.throwIfAborted();if(!UUID.test(requestId||''))throw new Error('Pass a stable requestId, for example tools.key("logical-step").');const response=await client.callTool(name,{runId:job.run.id,leaseToken:job.leaseToken,requestId,arguments:args},signal);return response.result;}};
+   const tools={storageTransportVersion:'1',key:key=>stableRequestId(job.run.id,key),list:({signal:extra}={})=>{const signal=toolSignal(extra);signal.throwIfAborted();return client.listTools(signal);},call:async(name,args,{requestId,signal:extra,storageTransportVersion}={})=>{const signal=toolSignal(extra);signal.throwIfAborted();if(!UUID.test(requestId||''))throw new Error('Pass a stable requestId, for example tools.key("logical-step").');const response=await client.callTool(name,{runId:job.run.id,leaseToken:job.leaseToken,requestId,arguments:args,...storageTransportVersion===undefined?{}:{storageTransportVersion}},signal);return response.result;}};
    const inference=createRunInferenceClient({client,runId:job.run.id,leaseToken:job.leaseToken,signal:control.signal});
    // Trusted adapter configuration is separate from model-visible run context.
    const mcpEnvironment={COATRIA_URL:client.origin,COATRIA_RUN_ID:job.run.id,COATRIA_RUN_LEASE:job.leaseToken};

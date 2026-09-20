@@ -20,7 +20,7 @@ function Production({companyId,projectId,workItemId,isAdmin}:ProductionProps){
  async function act(fn:()=>Promise<void>){if(pending.current)return;pending.current=true;setBusy(true);setError('');try{await fn();}catch(e){if(alive.current)setError(e instanceof Error?e.message:'The request could not be completed.');}finally{pending.current=false;if(alive.current)setBusy(false);}}
  async function connect(){const result=await api<{authorizationUrl:string}>(base+'/connect','POST',{});if(alive.current)window.location.assign(result.authorizationUrl);}
  async function propose(){let parsed:unknown;try{parsed=JSON.parse(args);}catch{throw Error('Use valid JSON arguments for the selected official tool.');}const value={projectId,projectRevision:revision,...selectedWork?{workItemId:selectedWork}:{},tool,arguments:parsed,note};const hash=JSON.stringify(value);if(signature.current!==hash){signature.current=hash;clientId.current=crypto.randomUUID();}await api(base+'/requests','POST',{...value,clientId:clientId.current});await load();}
- async function read(name:string){const response=await api<{result:unknown}>(base+'/read','POST',{tool:name,arguments:{}});if(alive.current)setProviderRead(response.result);}
+ async function read(name:string){const response=await api<{result:unknown}>(base+'/read','POST',{tool:name,arguments:name==='models_explore'?{action:'list'}:{}});if(alive.current)setProviderRead(response.result);}
  const modelTool=connection?.tools.find(t=>t.name==='models_list')?.name??connection?.tools.find(t=>t.name==='models_explore')?.name;
  const hasTool=(name:string)=>!!connection?.tools.some(t=>t.name===name);
  const generationTools=connection?.tools.filter(t=>['generate_image','generate_video','generate_audio'].includes(t.name))??[];

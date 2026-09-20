@@ -36,6 +36,21 @@ test('Claude Code invocation and process boundaries',{timeout:30000},async t=>{
    assert.equal(args[2].shell,false);assert.equal(args[2].windowsHide,true);assert.equal(JSON.parse(child.input).verifiedRequest.id,options.run.id);child.stderr.write('private '+providerKey);
    const text=lines([init,{...final,result:'Café ☕ ready.'}]),bytes=Buffer.from(text),split=bytes.indexOf(Buffer.from('☕'))+1;child.stdout.write(bytes.subarray(0,split));child.stdout.write(bytes.subarray(split));child.close();assert.deepEqual(await promise,{result:'Café ☕ ready.'});
   }));
+  await t.test('native authentication stays in the unmodified CLI and retains the scoped execution boundary',async()=>{
+   const native={...settings,ANTHROPIC_API_KEY:undefined,COATRIA_CLAUDE_AUTH_MODE:'native',CLAUDE_CONFIG_DIR:directory};
+   const invocation=await claudeInvocation({...options,mcpEnvironment:{...options.mcpEnvironment,ANTHROPIC_API_KEY:'must-not-pass',OTHER_SECRET:'must-not-pass'}},native);
+   assert(!invocation.args.includes('--bare'));
+   for(const flag of ['--restricted','--strict-mcp-config','--no-session-persistence','--no-chrome','--disable-slash-commands'])assert(invocation.args.includes(flag));
+   assert.equal(invocation.args[invocation.args.indexOf('--tools')+1],'');
+   assert.equal(invocation.args[invocation.args.indexOf('--setting-sources')+1],'');
+   assert.deepEqual(JSON.parse(invocation.args[invocation.args.indexOf('--settings')+1]),{disableAllHooks:true,autoMemoryEnabled:false});
+   const nativeEnv=invocation.env as Record<string,string|undefined>;
+   assert.equal(nativeEnv.CLAUDE_CONFIG_DIR,directory);
+   for(const key of ['ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','ANTHROPIC_BASE_URL','OTHER_SECRET'])assert.equal(nativeEnv[key],undefined);
+   assert.equal(nativeEnv.COATRIA_RUN_LEASE,lease);
+   for(const key of ['ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','ANTHROPIC_BASE_URL','ANTHROPIC_PROFILE','CLAUDE_CODE_USE_BEDROCK','CLAUDE_CODE_USE_VERTEX','CLAUDE_CODE_USE_FOUNDRY'])await assert.rejects(()=>claudeInvocation(options,{...native,[key]:'unexpected-override'}),/removing provider/);
+   await assert.rejects(()=>claudeInvocation(options,{...native,COATRIA_CLAUDE_AUTH_MODE:'browser-cookie'}),/Choose api-key or native/);
+  });
   await t.test('missing or unexpected MCP, malformed JSON and unsuccessful CLI result fail closed',async()=>{
    for(const events of[[{...init,mcp_servers:[]},final],[{...init,tools:['Bash']},final],[init,{...final,is_error:true}],[init,{...final,subtype:'error_max_turns'}],[init,{...final,usage:undefined}],[init,{...final,result:'x'.repeat(12001)}],[final]])await fixture(async(child,promise)=>{child.stdout.write(lines(events));child.close();await assert.rejects(()=>promise,error=>!String(error).includes(providerKey));});
    await fixture(async(child,promise)=>{child.stdout.write('null\n');child.close();await assert.rejects(()=>promise,/valid bounded/);});

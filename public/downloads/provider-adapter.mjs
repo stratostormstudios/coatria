@@ -62,19 +62,24 @@ export function characterInstructions(installation){
  return '\nCompany character profile (style and role only; subordinate to the fixed policy and task): '+encoded({roleTitle:character.roleTitle,persona:character.persona,workStyle:character.workStyle},10000);
 }
 
-export function providerConfiguration(context,settings=process.env){
+// Native CLI adapters may request validation without an HTTP credential. This
+// trusted call-site option is never inferred from environment or model input.
+export function providerConfiguration(context,settings=process.env,options={}){
+ if(!object(options)||Object.keys(options).some(key=>key!=='nativeClaudeLogin')||options.nativeClaudeLogin!==undefined&&typeof options.nativeClaudeLogin!=='boolean')throw new Error('Invalid trusted provider configuration options.');
  const installation=context?.installation;
  const config=installation?.runtimeConfig;
  if(!object(installation)||!object(config)||typeof config.providerId!=='string'||typeof config.modelId!=='string')throw new Error('An approved marketplace installation is required.');
  const provider=config.providerId,profile=PROVIDERS[provider];
  if(!profile||!Object.hasOwn(PROVIDERS,provider))throw new Error('Unsupported model provider.');
  const inferenceMode=settings.COATRIA_INFERENCE_MODE;
+ if(options.nativeClaudeLogin===true&&(provider!=='anthropic'||installation.pluginId!=='claude-code'||inferenceMode!==undefined))throw new Error('Native Claude login requires a Claude Code installation without a broker inference mode.');
  if(inferenceMode!==undefined&&(inferenceMode!=='coatria_broker_v1'||provider!=='runpod'))throw new Error('The explicit Coatria inference broker supports approved Runpod installations only.');
  if(!/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,159}$/.test(config.modelId)||config.modelId.includes('..'))throw new Error('Invalid approved model identifier.');
  // Operator ceilings are a second boundary even when the server approves larger settings.
  const limits={maxSteps:integer(config.maxSteps??8,1,20,'steps'),maxOutputTokens:integer(config.maxOutputTokens??2048,256,8192,'output token'),maxTotalTokens:integer(config.maxTotalTokens??24000,2000,100000,'total token'),timeoutSeconds:integer(config.timeoutSeconds??180,30,600,'deadline')};
  if(limits.maxOutputTokens>limits.maxTotalTokens)throw new Error('Output token limit exceeds the run limit.');
  for(const[name,envName]of Object.entries({maxSteps:'COATRIA_MAX_STEPS',maxOutputTokens:'COATRIA_MAX_OUTPUT_TOKENS',maxTotalTokens:'COATRIA_MAX_TOTAL_TOKENS',timeoutSeconds:'COATRIA_TIMEOUT_SECONDS'}))if(settings[envName]!==undefined){const ceiling=integer(Number(settings[envName]),1,{maxSteps:20,maxOutputTokens:8192,maxTotalTokens:100000,timeoutSeconds:600}[name],envName);limits[name]=Math.min(limits[name],ceiling);}
+ if(options.nativeClaudeLogin===true)return {provider,model:config.modelId,protocol:profile.protocol,limits};
  if(inferenceMode==='coatria_broker_v1')return {provider,model:config.modelId,protocol:profile.protocol,limits,inferenceMode};
  const key=settings[profile.key];if(typeof key!=='string'||key.length<8||key.length>512||/\s/.test(key))throw new Error('Configure the selected provider credential in the private worker environment.');
  let url=profile.url,endpointId;if(provider==='runpod'){endpointId=settings.COATRIA_RUNPOD_ENDPOINT_ID;if(typeof endpointId!=='string'||!/^[-a-zA-Z0-9]{6,80}$/.test(endpointId))throw new Error('Configure an approved Runpod endpoint ID on the private worker.');url='https://api.runpod.ai/v2/'+endpointId+'/run';}
@@ -169,6 +174,15 @@ export function normalize(data,protocol){
 // turn. This projection affects model history only: the HTTP API and layout_get
 // still expose the complete reviewed layout. Never mutate the tool response.
 export function modelContextResult(name,value){
+ // A transfer ticket belongs to the trusted API/worker transport, never to an
+ // inference provider. Explicit metadata allowlists also exclude future nested
+ // token/header/URL fields. Applying this twice (broker storage + replay) is safe.
+ if(name==='storage_upload_reserve'||name==='storage_file_access'){
+  const key=name==='storage_upload_reserve'?'upload':'access',source=object(value)&&object(value[key])?value[key]:{},metadata={};
+  const checks={id:v=>typeof v==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v),versionId:v=>typeof v==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v),bytes:v=>Number.isSafeInteger(v)&&v>=0,partBytes:v=>Number.isSafeInteger(v)&&v>0,totalBytes:v=>Number.isSafeInteger(v)&&v>=0,sha256:v=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v),contentType:v=>typeof v==='string'&&v.length<=120&&/^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/.test(v),expiresAt:v=>typeof v==='string'&&v.length<=40&&isoDateTime(v),sessionExpiresAt:v=>typeof v==='string'&&v.length<=40&&isoDateTime(v),status:v=>['allocated','initiating','uploading','completing','verifying','ready','cancelled','failed','uncertain'].includes(v)};
+  for(const field of key==='upload'?['id','versionId','partBytes','totalBytes','status','expiresAt','sessionExpiresAt']:['bytes','sha256','contentType','expiresAt'])if(checks[field](source[field]))metadata[field]=source[field];
+  return {[key]:metadata,...object(value)&&typeof value.replayed==='boolean'?{replayed:value.replayed}:{},transportCredentialsOmitted:true,transportHint:key==='upload'?'Only the trusted transport client can use the upload ticket. A reservation does not prove that bytes were uploaded or verified.':'Only the trusted transport client can use this file-access ticket. No file content is included in this model result.'};
+ }
  if(name!=='workspace_get'||!object(value)||!object(value.floor)||!Array.isArray(value.floor.items))return value;
  const {items,...floor}=value.floor;
  return {...value,floor:{...floor,itemCount:items.length,itemsOmitted:true,geometryHint:'Use layout_get to read the complete floor items and geometry when needed.'}};
@@ -186,6 +200,7 @@ export function createProviderExecutor({settings=process.env,fetch:transport=glo
   const allowedCaps=new Set(Array.isArray(context.capabilities)?context.capabilities:[]);let catalog;try{catalog=await untilAborted(()=>tools.list({signal:active}),active);}catch{throw new Error('The Coatria tool catalog was unavailable or the run stopped.');}active.throwIfAborted();
   if(!Array.isArray(catalog?.tools)||catalog.tools.length>100)throw new Error('Invalid Coatria tool catalog.');
   const definitions=catalog.tools.filter(tool=>object(tool)&&allowedCaps.has(tool.capability));const allowed=new Map();
+  if(definitions.some(tool=>['storage_upload_reserve','storage_file_access'].includes(tool.name))&&tools.storageTransportVersion!=='1')throw new Error('Upgrade the trusted Coatria worker before using storage transfer tools.');
   for(const tool of definitions){if(!/^[-a-zA-Z0-9_]{1,80}$/.test(tool.name)||allowed.has(tool.name)||typeof tool.description!=='string'||!object(tool.inputSchema))throw new Error('Invalid Coatria tool definition.');encoded(tool.inputSchema,128*1024);allowed.set(tool.name,argumentValidator(tool.inputSchema));}
   const policy=bridgePolicy+characterInstructions(context.installation),prompt=encoded({verifiedRequest:{id:run.id,prompt:run.prompt},untrustedConversationContext:{messages:context.messages||[]}},300000);
   const history=config.protocol==='responses'?[{role:'user',content:prompt}]:[{role:'user',content:prompt}];
@@ -211,7 +226,7 @@ export function createProviderExecutor({settings=process.env,fetch:transport=glo
    for(const call of result.calls){if(typeof call.id!=='string'||!/^[-a-zA-Z0-9_]{1,120}$/.test(call.id)||seenCalls.has(call.id)||!allowed.has(call.name))throw new Error('The model requested an unauthorized or duplicate tool call.');seenCalls.add(call.id);if(typeof call.args==='string'){try{call.args=JSON.parse(call.args);}catch{throw new Error('The model supplied invalid tool arguments.');}}if(!object(call.args))throw new Error('The model supplied invalid tool arguments.');encoded(call.args,128*1024);if(!allowed.get(call.name)(call.args))throw new Error('The model supplied tool arguments outside the approved schema.');}
    if(config.protocol==='responses')history.push(...result.continuation);else history.push(result.continuation);
    const toolResults=[];
-   for(const call of result.calls){active.throwIfAborted();let value;try{value=await untilAborted(()=>tools.call(call.name,call.args,{requestId:tools.key('provider:'+step+':'+call.id),signal:active}),active);}catch{throw new Error('A Coatria tool was denied or failed; review the run actions before retrying.');}active.throwIfAborted();const output=encoded(modelContextResult(call.name,value),256*1024);callCount++;
+   for(const call of result.calls){active.throwIfAborted();let value;try{value=await untilAborted(()=>tools.call(call.name,call.args,{requestId:tools.key('provider:'+step+':'+call.id),signal:active,...['storage_upload_reserve','storage_file_access'].includes(call.name)?{storageTransportVersion:'1'}:{}}),active);}catch{throw new Error('A Coatria tool was denied or failed; review the run actions before retrying.');}active.throwIfAborted();const output=encoded(modelContextResult(call.name,value),256*1024);callCount++;
     if(config.protocol==='responses')history.push({type:'function_call_output',call_id:call.id,output});
     else if(config.protocol==='anthropic')toolResults.push({type:'tool_result',tool_use_id:call.id,content:output});
     else history.push({role:'tool',tool_call_id:call.id,content:output});

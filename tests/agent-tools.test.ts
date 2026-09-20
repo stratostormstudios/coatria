@@ -13,7 +13,7 @@ test('leased tools enforce authority, durable effects, review boundaries and iso
  process.env.DATABASE_URL=url;process.env.DATABASE_POOL_MAX='1';let stop:(()=>Promise<void>)|undefined;
  if(emulate){const {PGlite}=await import('@electric-sql/pglite');const {PGLiteSocketServer}=await import('@electric-sql/pglite-socket');const db=await PGlite.create();for(const f of(await readdir('database')).filter(x=>/^\d.*\.sql$/.test(x)).sort())await db.exec(await readFile('database/'+f,'utf8'));const server=new PGLiteSocketServer({db,host:'127.0.0.1',port:0,maxConnections:1});await server.start();process.env.DATABASE_URL=`postgresql://postgres:postgres@${server.getServerConn()}/postgres`;stop=async()=>{await server.stop();await db.close();};}
  const company=randomUUID(),foreign=randomUUID(),owner=randomUUID(),member=randomUUID(),reviewer=randomUUID(),outsider=randomUUID(),agent=randomUUID(),token='ca_'+randomUUID(),sessions={owner:randomUUID(),member:randomUUID(),reviewer:randomUUID(),outsider:randomUUID()},origin='http://localhost:4180';let runId='',leaseToken='';
- async function call(path:string,method='GET',payload?:unknown,actor:'owner'|'member'|'reviewer'|'outsider'|'agent'='agent',expected=200){const headers:Record<string,string>={};if(actor==='agent')headers.Authorization='Bearer '+token;else{headers.Cookie='coatria_session='+sessions[actor];headers.Origin=origin;}if(payload!==undefined)headers['Content-Type']='application/json';const response=await handleApi(new Request(origin+'/api/'+path,{method,headers,body:payload===undefined?undefined:JSON.stringify(payload)}),path.split('?')[0].split('/'));const data=await response.json();assert.equal(response.status,expected,`${method} ${path}: ${JSON.stringify(data)}`);return data;}
+ async function call(path:string,method='GET',payload?:unknown,actor:'owner'|'member'|'reviewer'|'outsider'|'agent'='agent',expected=200,extraHeaders:Record<string,string>={}){const headers:Record<string,string>={...extraHeaders};if(actor==='agent')headers.Authorization='Bearer '+token;else{headers.Cookie='coatria_session='+sessions[actor];headers.Origin=origin;}if(payload!==undefined)headers['Content-Type']='application/json';const response=await handleApi(new Request(origin+'/api/'+path,{method,headers,body:payload===undefined?undefined:JSON.stringify(payload)}),path.split('?')[0].split('/'));const data=await response.json();assert.equal(response.status,expected,`${method} ${path}: ${JSON.stringify(data)}`);return data;}
  const tool=(name:string,args:unknown,expected=200,requestId=randomUUID())=>call('agent/tools/'+name,'POST',{runId,leaseToken,requestId,arguments:args},'agent',expected);
  try{
   for(const [userId,name]of[[owner,'Owner'],[member,'Requester'],[reviewer,'Independent reviewer'],[outsider,'Outsider']])await query('INSERT INTO users(id,name,email,password_hash) VALUES($1,$2,$3,$4)',[userId,name,userId+'@example.invalid','fixture']);
@@ -32,6 +32,20 @@ test('leased tools enforce authority, durable effects, review boundaries and iso
    assert.equal((await tool('workspace_get',{})).result.company.id,company);
   });
   let task:any;
+  await t.test('raw storage tickets require trusted transport opt-in without bypassing capability or lease checks',async()=>{
+   const args={projectId:randomUUID(),versionId:randomUUID(),disposition:'attachment'},payload={runId,leaseToken,requestId:randomUUID(),arguments:args};
+   for(const name of ['storage_upload_reserve','storage_file_access'])for(const version of [undefined,'0','2','1, 1']){
+    const denied=await call('agent/tools/'+name,'POST',payload,'agent',409,version===undefined?{}:{'X-Coatria-Storage-Transport':version});assert.equal(denied.code,'STORAGE_TRANSPORT_UPGRADE_REQUIRED');
+   }
+   assert.equal((await query('SELECT count(*)::int AS count FROM agent_tool_receipts WHERE company_id=$1 AND request_id=$2',[company,payload.requestId])).rows[0].count,0);
+   const headers={'X-Coatria-Storage-Transport':'1'};
+   await call('agent/tools/storage_file_access','POST',{...payload,leaseToken:'incorrect-fixture-lease-proof'},'agent',409,headers);
+   await query("UPDATE agents SET capabilities='[\"workspace.read\"]'::jsonb WHERE id=$1",[agent]);
+   const denied=await call('agent/tools/storage_file_access','POST',payload,'agent',403,headers);assert.equal(denied.code,'AGENT_CAPABILITY_REQUIRED');
+   await query('UPDATE agents SET capabilities=$2 WHERE id=$1',[agent,JSON.stringify(AGENT_CAPABILITIES)]);
+   await call('agent/tools/storage_file_access','POST',payload,'agent',404,headers);
+   assert.equal((await query('SELECT count(*)::int AS count FROM agent_tool_receipts WHERE company_id=$1 AND request_id=$2',[company,payload.requestId])).rows[0].count,0);
+  });
   await t.test('a member cannot borrow the sponsor’s authority to claim another person’s task',async()=>{
    const otherTask=(await call(`companies/${company}/tasks`,'POST',{title:'Owner task'},'owner',201)).task;
    await tool('tasks_claim',{taskId:otherTask.id,revision:1},403);

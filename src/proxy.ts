@@ -1,8 +1,10 @@
 import {NextRequest,NextResponse} from 'next/server';
+import {storageGatewayOrigin} from './lib/project-storage-config';
 
 export function proxy(request:NextRequest) {
   const nonce=Buffer.from(crypto.randomUUID()).toString('base64');
   const development=process.env.NODE_ENV==='development';
+  const storageOrigin=storageGatewayOrigin();
   const policy=[
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${development?" 'unsafe-eval'":''}`,
@@ -12,7 +14,7 @@ export function proxy(request:NextRequest) {
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data: blob:",
     "media-src 'self' blob:",
-    `connect-src 'self' blob:${development?' ws: wss:':''}`,
+    `connect-src 'self' blob:${development?' ws: wss:':''}${storageOrigin?' '+storageOrigin:''}`,
     "worker-src 'self' blob:",
     "object-src 'none'",
     "base-uri 'none'",

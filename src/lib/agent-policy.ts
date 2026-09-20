@@ -1,9 +1,12 @@
 /** Explicit grants for external workers. Empty grants never inherit sponsor privileges. */
-export const AGENT_CAPABILITIES = ['workspace.read','tasks.write','infrastructure.read','hiring.read','office.write','layout.propose','rooms.propose','hiring.propose','studio.read','studio.write','studio.execute','studio.review','creative.read','creative.write'] as const;
+export const AGENT_CAPABILITIES = ['workspace.read','tasks.write','infrastructure.read','hiring.read','office.write','layout.propose','rooms.propose','hiring.propose','studio.read','studio.write','studio.execute','studio.review','creative.read','creative.write','storage.read','storage.write','storage.organize'] as const;
 export type AgentCapability = typeof AGENT_CAPABILITIES[number];
 export const AGENT_CAPABILITY_LABELS:Record<AgentCapability,string>={
  'workspace.read':'Read company workspace, people, rooms, tasks and activity',
  'tasks.write':'Create and prepare tasks for review; acceptance requires a separate authorized reviewer',
+ 'storage.read':'Read project folders and obtain temporary access to verified project files',
+ 'storage.write':'Upload immutable project file versions through the authenticated transfer service',
+ 'storage.organize':'Create, rename and move project folders; preview and apply additive folder plans',
  'infrastructure.read':'Read shared drive metadata, without original files or credentials',
  'hiring.read':'Read company openings, without applicant personal information',
  'office.write':'Move this agent and set its office availability',

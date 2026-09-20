@@ -23,6 +23,9 @@ import {studioHostProvisioningRoute} from './studio-host-provisioning-api';
 import {studioInferenceRoute} from './studio-inference';
 import {higgsfieldRoute} from './higgsfield';
 import {studioCreativeAssetsRoute} from './studio-creative-assets';
+import {projectStorageRoute} from './project-storage';
+import {projectStorageTransfer} from './project-storage-transfer';
+const storageRoute=(request:Request,parts:string[],method:string)=>projectStorageRoute(request,parts,method,projectStorageTransfer);
 import {HiggsfieldMcpError} from './higgsfield-mcp';
 
 export async function handleApi(request: Request, parts: string[]): Promise<Response> {
@@ -52,7 +55,7 @@ export async function handleApi(request: Request, parts: string[]): Promise<Resp
     if(!['GET','HEAD'].includes(method)&&!bearerEndpoint&&!['auth'].includes(parts[0])) {
       const user=await currentUser(request);if(user)await rateLimit(`write:${user.id}`,240,60);
     }
-    for(const handler of [identityRoute,higgsfieldRoute,studioCreativeAssetsRoute,pluginMarketplaceRoute,agentMissionRoute,studioInferenceRoute,agentRunRoute,agentToolsRoute,agentProposalRoute,studioMediaRoute,studioExecutionRoute,studioStaffingRoute,studioHostingRoute,studioHostProvisioningRoute,studioCoordinationRoute,studioReviewPolicyRoute,studioClientDeliveryRoute,studioRoute,conversationRoute,companyRoute,workRoute,integrationRoute,talentRoute]) {
+    for(const handler of [identityRoute,storageRoute,higgsfieldRoute,studioCreativeAssetsRoute,pluginMarketplaceRoute,agentMissionRoute,studioInferenceRoute,agentRunRoute,agentToolsRoute,agentProposalRoute,studioMediaRoute,studioExecutionRoute,studioStaffingRoute,studioHostingRoute,studioHostProvisioningRoute,studioCoordinationRoute,studioReviewPolicyRoute,studioClientDeliveryRoute,studioRoute,conversationRoute,companyRoute,workRoute,integrationRoute,talentRoute]) {
       const result=await handler(request,parts,method);if(result)return finish(result);
     }
     fail(404,'API endpoint not found.');

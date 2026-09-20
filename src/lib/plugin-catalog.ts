@@ -31,7 +31,7 @@ export const PLUGIN_CATALOG:PluginCatalogEntry[]=[
   providers:[{id:'anthropic',models:claudeModels,allowCustomModel:false}],
   docsUrl:'https://code.claude.com/docs/en/cli-reference',credentialEnv:'ANTHROPIC_API_KEY',
   setupFiles:['/downloads/agent-worker.mjs','/downloads/claude-code-adapter.mjs','/downloads/provider-adapter.mjs','/downloads/agent-mcp.mjs','/downloads/PROVIDER_BRIDGES.md'],
-  limitations:['Requires Claude Code CLI and an Anthropic API key on your worker.','The restricted bridge does not use saved Claude subscription or OAuth credentials.','CLI token accounting differs from the direct API bridge; set provider spending limits.']},
+  limitations:['Requires Claude Code CLI on a running worker. Choose native CLI login or your Anthropic API key.','Native login stays inside the unmodified Claude Code CLI on your worker; browser sign-in alone does not connect Coatria.','CLI token accounting differs from the direct API bridge; set provider spending limits.']},
  {...common,id:'openai',name:'Astra & OpenAI',vendor:'OpenAI',category:'assistant',harness:'custom',runtime:'responses',
   summary:'Choose Astra, Terra or Luna for your company.',description:'Use the Responses API for a bounded tool-calling assistant with your selected model, role and permissions.',
   providers:[{id:'openai',models:openaiModels,allowCustomModel:false}],

@@ -60,6 +60,19 @@ test('safe tool retries preserve IDs and content, enforce deadlines and bound re
  await assert.rejects(()=>createRuntimeClient({token,retryBaseMs:0,fetch:async()=>new Response('x'.repeat(1024*1024+1))}).listTools(),{code:'RESPONSE_TOO_LARGE'});
 });
 
+test('file ticket transport opt-in is explicit, survives retries, and never becomes a model argument',async()=>{
+ const requests:any[]=[];let lost=true;
+ const client=createRuntimeClient({token,retryBaseMs:0,fetch:(async(url:any,options:any)=>{requests.push({url:String(url),...options});if(lost){lost=false;throw Error('Lost response');}return Response.json({result:{upload:{token:'stg_transport_fixture'}},replayed:true});}) as typeof fetch});
+ const payload={runId,leaseToken:lease,requestId:stableRequestId(runId,'storage'),arguments:{projectId:otherRun}};
+ const result=await client.callTool('storage_upload_reserve',{...payload,storageTransportVersion:'1'},undefined);assert.equal(result.result.upload.token,'stg_transport_fixture');assert.equal(requests.length,2);
+ for(const request of requests){assert.equal(request.headers['X-Coatria-Storage-Transport'],'1');assert.deepEqual(JSON.parse(request.body),payload);}
+ await client.callTool('storage_file_access',payload,undefined);assert.equal(requests.at(-1).headers['X-Coatria-Storage-Transport'],undefined,'old adapters cannot accidentally opt in through an updated client');
+ for(const [name,version]of [['storage_file_access','2'],['workspace_get','1']])assert.throws(()=>client.callTool(name,{...payload,storageTransportVersion:version},undefined),/Unsupported storage transport/);
+ const calls:any[]=[];await workOnce({client:fakeClient({callTool:async(name:string,body:any)=>{calls.push({name,body});return{result:{ok:true}};}}),state:memoryState(),execute:async({tools}:any)=>{
+  assert.equal(tools.storageTransportVersion,'1');await tools.call('storage_file_access',{}, {requestId:tools.key('access'),storageTransportVersion:'1'});await tools.call('workspace_get',{}, {requestId:tools.key('workspace')});return{result:'Transport fixture completed.'};
+ }});assert.equal(calls[0].body.storageTransportVersion,'1');assert(!Object.hasOwn(calls[1].body,'storageTransportVersion'));
+});
+
 test('private state is identity-bound, exclusively locked and writes cannot finish out of order',async()=>{
  const directory=await mkdtemp(join(tmpdir(),'coatria-worker-state-')),path=join(directory,'worker.json'),client=createRuntimeClient({token});
  try{const state=await openWorkerState(path,client);try{await assert.rejects(()=>openWorkerState(path,client),/Another worker/);state.data.claimId=stableRequestId(runId,'first');const first=state.save();state.data.claimId=stableRequestId(runId,'last');const last=state.save();await Promise.all([first,last]);assert.equal(JSON.parse(await readFile(path,'utf8')).claimId,state.data.claimId);}finally{await state.close();}await assert.rejects(()=>openWorkerState(path,createRuntimeClient({token:'ca_other-runtime-fixture-only'})),/different origin, credential or format/);}finally{const inside=relative(tmpdir(),directory);assert(inside&&!inside.startsWith('..')&&!isAbsolute(inside));await rm(directory,{recursive:true,force:true});}

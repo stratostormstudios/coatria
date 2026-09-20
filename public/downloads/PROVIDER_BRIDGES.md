@@ -1,6 +1,6 @@
 # Connect model providers and Claude Code to Coatria
 
-An administrator installs a bridge, reviews its capabilities and company character, then connects an operator-owned worker. A model credential stays in the worker's private environment. Coatria stores the installation's provider/model choice, permissions and limits, not that credential.
+An administrator installs a bridge, reviews its capabilities and company character, then connects an operator-owned worker. API credentials stay in the worker's private environment; native Claude Code manages its own saved login. Coatria stores the installation's provider/model choice, permissions and limits, not those credentials.
 
 Download reviewed copies of `agent-worker.mjs` and `provider-adapter.mjs` into a private worker directory. Use Node22 or newer. Follow [the runtime guide](./AGENT_RUNTIME.md) for the Coatria agent token, private state and operation of the worker.
 
@@ -40,6 +40,8 @@ For `workspace_get`, the HTTP bridge puts a compact overview into model history:
 
 The adapter checks every tool name, call ID and the advertised input-schema constraints for the whole batch before acting, allows at most 8 calls in that batch and 64 in a run, and executes them sequentially. Coatria also applies its authoritative refinements, revisions, lease and permissions. A batch is not one atomic transaction: earlier successful actions remain recorded if a later semantic or authorization check fails. A recovered or later-attempt run requires review of committed effects and a new human request; the adapter does not invent new action keys and repeat uncertain work. Adapter deadlines shorten pending tool requests without detaching them from lease cancellation.
 
+Project storage requires upgrading `agent-worker.mjs` and `provider-adapter.mjs` together. Temporary upload/download credentials are available only through the trusted storage transport opt-in and are stripped from model history. Generic MCP adapters, including the Claude Code bridge, do not opt in to raw storage-ticket calls; those calls are denied until a compatible byte-transfer integration is provided. Folder organization remains governed by its separate capabilities. See [project storage](https://github.com/stratostormstudios/coatria/blob/main/docs/PROJECT_STORAGE.md) for the transport contract.
+
 ## Runpod Qwen preset
 
 The marketplace offers `Qwen/Qwen3.8-27B-FP8`, tested with the official pinned worker in [the deployment example](./runpod-qwen38.example.json). New Runpod installations default to eight model steps, 2,048 output tokens per step, an 80,000-token run allowance and a 600-second deadline. The larger allowance accommodates repeated tool schemas and the conservative byte-based preflight; it is not expected consumption. Existing installations retain their reviewed settings.
@@ -52,22 +54,42 @@ Conversation text and tool results are untrusted inputs. The company character c
 
 ## Connect Claude Code
 
-Download `agent-worker.mjs`, `agent-mcp.mjs`, `provider-adapter.mjs` and `claude-code-adapter.mjs` into the same private directory. Install Claude Code2.1.248 or later yourself on a dedicated worker. Set:
+Download `agent-worker.mjs`, `agent-mcp.mjs`, `provider-adapter.mjs` and `claude-code-adapter.mjs` into the same private directory. Install unmodified Claude Code 2.1.248 or later yourself on a dedicated worker. Set:
 
-- `COATRIA_AGENT_TOKEN` and `ANTHROPIC_API_KEY` in the private environment.
+- `COATRIA_AGENT_TOKEN` in the private environment.
 - `COATRIA_CLAUDE_WORKSPACE` to an absolute, approved worker directory.
 - `COATRIA_CLAUDE_BIN` if the native `claude` executable is not on PATH. On Windows, use the native `.exe` rather than a shell wrapper.
 - Optionally `COATRIA_CLAUDE_MAX_BUDGET_USD` for Claude's own cost guard; default1USD per invocation. This guard is not a guaranteed exact charge ceiling.
+
+Choose authentication explicitly on the worker host:
+
+| Mode | Worker configuration | Credential owner |
+| --- | --- | --- |
+| Native Claude Code login | Set `COATRIA_CLAUDE_AUTH_MODE=native`. Run `claude auth status` under the worker's OS account; use `claude auth login` if sign-in is needed. | Claude Code manages its own saved login through Anthropic's flow. |
+| Claude API key | Default `COATRIA_CLAUDE_AUTH_MODE=api-key`; set `ANTHROPIC_API_KEY` privately. | Your Claude Console account owns and pays for the key. |
+
+Being signed in to claude.ai in a browser does not sign this worker in. Native mode requires `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` and provider overrides to be unset, so it cannot silently use a different account. An optional `CLAUDE_CONFIG_DIR` can select the CLI-owned configuration directory. The adapter never reads, copies, exports or uploads saved Claude credentials. Complete sign-in in the official CLI, not through a Coatria password or cookie form. Native account model access and usage limits still apply. [Claude authentication](https://code.claude.com/docs/en/authentication), [Anthropic credential-use guidance](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use)
 
 ```text
 node agent-worker.mjs --adapter ./claude-code-adapter.mjs
 ```
 
-This adapter deliberately uses API-key authentication. `--bare` does not use a saved Claude consumer OAuth login. It removes built-in shell/file/web tools, grants only the selected Coatria MCP tools, disables session persistence and skips ambient customizations. It never uses `--dangerously-skip-permissions`. Machine-managed policy can still affect the CLI; provision a controlled worker with no unreviewed managed hooks or tools. [Claude CLI documentation](https://code.claude.com/docs/en/cli-reference)
+API-key mode uses `--bare`; native mode omits that flag so the CLI can use its own login. Both modes remove built-in shell/file/web tools, grant only the selected Coatria MCP tools, disable hooks and session persistence, and restrict configuration sources. Neither uses `--dangerously-skip-permissions`. Machine-managed policy can still affect the CLI; provision a controlled worker with no unreviewed managed hooks or tools. This worker must stay online. A local login does not deploy or authenticate a cloud worker. [Claude CLI documentation](https://code.claude.com/docs/en/cli-reference)
 
 Model turns, deadline, output-token environment setting and observed JSONL usage are bounded. The CLI owns its internal inference loop; the bridge can stop only after observing emitted usage and cannot reserve tokens before every hidden internal request. Use the direct Anthropic HTTP bridge when per-request token accounting is required. The CLI cost and output controls are documented environment/print-mode features. [Claude environment controls](https://code.claude.com/docs/en/env-vars)
 
 The bridge requires a connected Coatria MCP startup event before reporting success. Cancellation ends the direct child with a two-second shutdown grace period. Operating-system isolation and worker supervision are still required; this is not a promise to terminate every descendant process or undo an already committed action.
+
+## Connect Claude API
+
+Choose **Claude** in Coatria's plugin directory for the direct Messages API bridge. Choose **Claude Code** for the native CLI integration described above. The direct API bridge requires `ANTHROPIC_API_KEY`; it does not consume a Claude browser session or subscription login.
+
+1. Create a key scoped to the intended workspace in [Claude Console API keys](https://platform.claude.com/settings/keys). For shared unattended work, use an appropriately scoped service account key. API billing is separate from a Claude subscription. [Official API authentication](https://platform.claude.com/docs/en/manage-claude/authentication)
+2. Install the bridge in Coatria with the model, company role and permissions you intend. Save its one-time Coatria agent token privately.
+3. Put `COATRIA_AGENT_TOKEN` and `ANTHROPIC_API_KEY` in your worker's private environment, then run `node agent-worker.mjs --url https://coatria.com --adapter ./provider-adapter.mjs`.
+4. In **Plugins → Installed**, open that bridge and select **Run connection test**. The test uses provider tokens. Wait for **Model response received** before assigning work; **Recent API contact** alone does not verify a model response.
+
+Use a workspace-scoped key with this bridge. A multi-workspace key needs the `anthropic-workspace-id` header, which this adapter does not configure. Never paste either key into a company conversation or a source repository. The direct bridge uses bounded HTTP tool calls and does not install or run the Claude Code CLI.
 
 ## Runtime installation contract
 
