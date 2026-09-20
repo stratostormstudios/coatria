@@ -61,6 +61,10 @@ async function validateClosure(profile:MediaSandboxProfile){
  await walk(profile.runtimeRoot,'');if(expected.size)fail('INVALID_PROFILE');
  for(const pin of [profile.launcher,profile.bubblewrap]){if(await digestFile(pin.path)!==pin.sha256)fail('INVALID_PROFILE');await access(pin.path,constants.X_OK);}
  for(const tool of ['ffprobe','ffmpeg'])await access(join(profile.runtimeRoot,'bin',tool),constants.X_OK);
+ // A declared ELF interpreter is itself executed by the kernel. Checking only
+ // decoder X_OK misses a sealed-but-unexecutable loader; static profiles have
+ // no interpreter and retain the existing minimal closure contract.
+ if(profile.files.some(file=>file.path==='/lib64/ld-linux-x86-64.so.2'))await access(join(profile.runtimeRoot,'lib64','ld-linux-x86-64.so.2'),constants.X_OK);
 }
 const CGROUP2=0x63677270;
 const text=async(path:string)=>(await readFile(path,'utf8')).trim();

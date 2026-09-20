@@ -2,6 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {assertReviewedProfile,hasBwrapDeclaration,relevantLoadedProfiles} from './prepare-media-apparmor-ci.mjs';
 import {classifyMediaAppArmorDenials} from './collect-media-apparmor-ci.mjs';
+import {mediaClosureFileMode} from './prepare-media-sandbox-ci.mjs';
+test('only exact decoders and the kernel ELF interpreter receive executable permission',()=>{
+ for(const path of ['/bin/ffprobe','/bin/ffmpeg','/lib64/ld-linux-x86-64.so.2'])assert.equal(mediaClosureFileMode(path),0o555,path);
+ for(const path of ['/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2','/lib/x86_64-linux-gnu/libc.so.6','/lib/x86_64-linux-gnu/libm.so.6','/bin/unexpected'])assert.equal(mediaClosureFileMode(path),0o444,path);
+});
 test('only exact reviewed profile bytes are eligible for scoped activation',()=>{
  for(const value of ['profile bwrap /usr/bin/bwrap flags=(unconfined) {userns,}','profile unpriv_bwrap {allow capability,}',''])assert.throws(()=>assertReviewedProfile(Buffer.from(value)),/POLICY_REJECTED/);
 });

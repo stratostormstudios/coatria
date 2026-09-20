@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes,randomUUID} from 'node:crypto';
 import {readFile,readdir} from 'node:fs/promises';
+import {setTimeout as delay} from 'node:timers/promises';
 import {Pool,type PoolClient} from 'pg';
 import {query,transaction} from '../src/lib/db';
 import {handleApi} from '../src/lib/api';
@@ -152,7 +153,17 @@ test('PostgreSQL runtime grants preserve Higgsfield execution, evidence and conc
   globalThis.fetch=prior.fetch;if(prior.pool)(globalThis as any).coatriaPool=prior.pool;else delete(globalThis as any).coatriaPool;
   for(const[key,value]of Object.entries({DATABASE_URL:prior.url,COATRIA_HOSTING_KEYRING:prior.key})){if(value===undefined)delete process.env[key];else process.env[key]=value;}
   try{await runtime?.end();await owner?.end();}finally{
-   try{if(databaseCreated)await control.query(`DROP DATABASE ${dbName} WITH (FORCE)`);}finally{try{if(roleCreated)await control.query(`DROP ROLE ${role}`);}finally{await control.end();}}
+   try{if(databaseCreated){
+    // Pool.end can resolve after its client list empties but before every backend
+    // has finished disconnecting. A forced DROP then terminates an idle client's
+    // socket and emits an error after the concurrent-adoption subtest passed.
+    // Wait for this unique fixture database to drain; never hide leaked sessions.
+    const deadline=performance.now()+10000;
+    while((await control.query('SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname=$1',[dbName])).rows[0].count){
+     assert(performance.now()<deadline,'Fixture database sessions must drain before teardown');await delay(20);
+    }
+    await control.query(`DROP DATABASE ${dbName}`);
+   }}finally{try{if(roleCreated)await control.query(`DROP ROLE ${role}`);}finally{await control.end();}}
   }
  }
 });

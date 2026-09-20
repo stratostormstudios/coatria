@@ -55,6 +55,10 @@ does not weaken runtime trust or change shared host-directory permissions.
   `node@sha256:e5a8dee7bc1e6a215d224a7ef8206f7e77271bc3cabd5febf2beafac0674f174`.
   ELF headers and transitive dependency names are checked without `ldd`;
   libraries are copied as regular files, never host-library bind mounts.
+  Only `/bin/ffmpeg`, `/bin/ffprobe` and the kernel's exact ELF interpreter
+  `/lib64/ld-linux-x86-64.so.2` receive mode0555. Ordinary DSOs, including the
+  duplicate loader used as a library, remain0444. Setup records/checks each mode;
+  runtime qualification checks the declared interpreter's execute permission.
 - Ubuntu signed APT package `bubblewrap=0.9.0-1ubuntu0.3`; missing pins fail the
   build. The baseline includes the symlink fix documented in
   [USN-8779-1](https://ubuntu.com/security/notices/USN-8779-1).
@@ -123,8 +127,9 @@ The root collector creates its report exclusively under the protected package
 directory, then drops UID/GID/groups before an exclusive no-follow artifact write.
 
 Startup failures retain numeric resource events even before the first test.
-In CI only, a separate diagnostic runs the pinned original conformance probe's
-fixed FD-help command through the same capped helper/ready/gate flow. It records
+In CI only, a separate startup diagnostic runs the selected pinned conformance
+probe or real decoder's fixed FD-help command through the same capped
+helper/ready/gate flow. Input is its known executable, never arbitrary media. It records
 static phases, fixed helper exit-stage codes, numeric exit/signal data and
 allowlisted setup-error categories. Raw stderr and arbitrary paths/tokens are
 discarded. Host user-namespace/AppArmor policy is observed without changing it.

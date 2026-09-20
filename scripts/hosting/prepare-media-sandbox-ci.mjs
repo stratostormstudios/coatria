@@ -1,7 +1,7 @@
 // Explicit root CI host preparation, never a worker startup download/install.
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
-import {createReadStream} from 'node:fs';
-import {appendFile,chmod,chown,copyFile,lstat,mkdir,readFile,readdir,realpath,writeFile} from 'node:fs/promises';
+import {constants,createReadStream} from 'node:fs';
+import {access,appendFile,chmod,chown,copyFile,lstat,mkdir,readFile,readdir,realpath,writeFile} from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
 import {dirname,join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -34,7 +34,8 @@ export function elfNeeded(bytes){
 async function filesAt(root,directory=root){
  const files=[];for(const name of (await readdir(directory)).sort()){const path=join(directory,name),info=await lstat(path);if(info.isSymbolicLink())throw Error('No symlinks in media closure.');if(info.isDirectory())files.push(...await filesAt(root,path));else if(info.isFile()&&info.nlink===1)files.push({path:path.slice(root.length),bytes:info.size,sha256:await sha(path)});else throw Error('Invalid media closure member.');}return files;
 }
-async function sealTree(root){for(const name of await readdir(root)){const path=join(root,name),info=await lstat(path);if(info.isDirectory())await sealTree(path);else await chmod(path,path.includes('/bin/')?0o555:0o444);}await chmod(root,0o555);}
+export function mediaClosureFileMode(path){return ['/bin/ffprobe','/bin/ffmpeg','/lib64/ld-linux-x86-64.so.2'].includes(path)?0o555:0o444;}
+async function sealTree(root,directory=root){for(const name of await readdir(directory)){const path=join(directory,name),info=await lstat(path);if(info.isDirectory())await sealTree(root,path);else await chmod(path,mediaClosureFileMode(path.slice(root.length)));}await chmod(directory,0o555);}
 
 async function protectedAncestors(directory,uid,gid,evidence){
  const records=[];let path=directory;
@@ -83,9 +84,11 @@ export async function prepareMediaSandboxCI(){
   const from=join(roots.real,item.path),to=join(roots.conformance,item.path);await copyFile(item.path.startsWith('/bin/')?probe:from,to);
   if(!item.path.startsWith('/bin/')){const elf=elfNeeded(await readFile(from));if(elf.needed.some(name=>!MEDIA_ELF_LIBRARIES.includes(name)))throw Error('Unreviewed transitive ELF dependency.');}
  }
- const profiles={};for(const[kind,runtimeRoot]of Object.entries(roots)){
+ const profiles={},closurePermissions={};for(const[kind,runtimeRoot]of Object.entries(roots)){
   await sealTree(runtimeRoot);const limits=kind==='real'?{memoryBytes:512*1024**2,cpuQuotaMicros:100000,cpuPeriodMicros:100000,pids:64,openFiles:64,wallTimeMs:60000}:{memoryBytes:64*1024**2,cpuQuotaMicros:20000,cpuPeriodMicros:100000,pids:16,openFiles:64,wallTimeMs:10000};
-  const profile={version:1,platform:'linux-x64',runtimeRoot,files:await filesAt(runtimeRoot),launcher:{path:launcher,sha256:await sha(launcher)},bubblewrap:{path:bwrap,sha256:await sha(bwrap)},limits},path=join(base,kind+'.json');await writeFile(path,JSON.stringify(profile,null,2)+'\n',{flag:'wx',mode:0o444});profiles[kind]={profilePath:path,expectedProfileSha256:await sha(path)};
+  const profile={version:1,platform:'linux-x64',runtimeRoot,files:await filesAt(runtimeRoot),launcher:{path:launcher,sha256:await sha(launcher)},bubblewrap:{path:bwrap,sha256:await sha(bwrap)},limits},path=join(base,kind+'.json');
+  closurePermissions[kind]=[];for(const file of profile.files){const member=join(runtimeRoot,file.path),expected=mediaClosureFileMode(file.path),mode=(await lstat(member)).mode&0o7777;if(mode!==expected)throw Error('MEDIA_CI_CLOSURE_MODE_MISMATCH');if(expected===0o555)await access(member,constants.X_OK);closurePermissions[kind].push({path:file.path,mode:mode.toString(8),role:file.path==='/lib64/ld-linux-x86-64.so.2'?'elf-interpreter':file.path.startsWith('/bin/')?'decoder':'shared-library'});}
+  await writeFile(path,JSON.stringify(profile,null,2)+'\n',{flag:'wx',mode:0o444});profiles[kind]={profilePath:path,expectedProfileSha256:await sha(path)};
  }
  // Delegate only one empty subtree; fixed aggregate parent caps remain root-owned.
  const controllers=(await readFile('/sys/fs/cgroup/cgroup.controllers','utf8')).trim().split(/\s+/);if(['cpu','memory','pids'].some(name=>!controllers.includes(name)))throw Error('Required cgroup v2 controllers are absent.');
@@ -99,7 +102,7 @@ export async function prepareMediaSandboxCI(){
  const hostCanaryPath=join(base,'host-private-key-canary'),canary=randomBytes(32).toString('hex');await writeFile(hostCanaryPath,canary,{flag:'wx',mode:0o600});await chown(hostCanaryPath,uid,gid);
  const qualification={version:1,profiles,serviceRoot,supervisorGroup,cgroupRoot,uid,gid,hostCanaryPath,hostCanarySha256:createHash('sha256').update(canary).digest('hex'),evidence};const qualificationPath=join(base,'qualification.json');await writeFile(qualificationPath,JSON.stringify(qualification,null,2)+'\n',{flag:'wx',mode:0o444});
  await chown(evidence,uid,gid);const sourceHashes={};for(const file of ['scripts/hosting/media-sandbox-launch.c','scripts/hosting/media-sandbox-probe.c','scripts/hosting/prepare-media-sandbox-ci.mjs','scripts/hosting/run-media-sandbox-ci.mjs','scripts/hosting/media-sandbox-linux-canary.mts','scripts/hosting/media-sandbox-startup-diagnostic.mts','scripts/hosting/prepare-media-apparmor-ci.mjs','scripts/hosting/collect-media-apparmor-ci.mjs','src/lib/higgsfield-media-sandbox.ts','src/lib/higgsfield-media-inspection.ts'])sourceHashes[file]=await sha(join(repo,file));
- await writeFile(join(evidence,'setup.json'),JSON.stringify({prepared:true,qualified:false,packageAncestors,apparmor,sourceHashes,ffmpeg:MEDIA_INSPECTOR_CI_BUILD,runtimeImage:MEDIA_RUNTIME_IMAGE,bubblewrapPackage:installed,bubblewrapSha256:await sha(bwrap),hostPackages:command('/usr/bin/dpkg-query',['-W','gcc','libc6','libc6-dev','libgcc-s1','libcap2','bubblewrap','apparmor']),profiles,aggregateParentLimits:{memoryBytes:2*1024**3,pids:256,cpu:'200000 100000',swapBytes:0},noHostSecurityDisabled:true,noProviderCalls:true},null,2)+'\n',{mode:0o444});
+ await writeFile(join(evidence,'setup.json'),JSON.stringify({prepared:true,qualified:false,packageAncestors,apparmor,closurePermissions,sourceHashes,ffmpeg:MEDIA_INSPECTOR_CI_BUILD,runtimeImage:MEDIA_RUNTIME_IMAGE,bubblewrapPackage:installed,bubblewrapSha256:await sha(bwrap),hostPackages:command('/usr/bin/dpkg-query',['-W','gcc','libc6','libc6-dev','libgcc-s1','libcap2','bubblewrap','apparmor']),profiles,aggregateParentLimits:{memoryBytes:2*1024**3,pids:256,cpu:'200000 100000',swapBytes:0},noHostSecurityDisabled:true,noProviderCalls:true},null,2)+'\n',{mode:0o444});
  if(process.env.GITHUB_ENV)await appendFile(process.env.GITHUB_ENV,'COATRIA_MEDIA_QUALIFICATION='+qualificationPath+'\n');console.log('Pinned media closure and delegated cgroup prepared; adversarial qualification is still required.');return qualificationPath;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)await prepareMediaSandboxCI();
