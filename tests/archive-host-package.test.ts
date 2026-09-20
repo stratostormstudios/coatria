@@ -6,7 +6,7 @@ import {dirname,join,resolve} from 'node:path';
 import test from 'node:test';
 import {ARCHIVE_HOST_PINS,ARCHIVE_RUNTIME_EMPTY_DIRECTORIES,archiveHostHash,parseArchiveRuntime,parseArchiveBundle,verifyArchiveTree,archiveHostProfiles,archiveHostReceiptCurrent,archiveHostDelegatedPath,copyArchiveFiles,createArchiveEmptyDirectories} from '../scripts/hosting/archive-host-package.mjs';
 import {ARCHIVE_HOST_SOURCE_FILES,buildArchiveHostBundle} from '../scripts/hosting/build-archive-host-bundle.mjs';
-import {archiveHostUnit,inspectArchiveHostBundle} from '../scripts/hosting/install-archive-host.mjs';
+import {archiveHostUnit,inspectArchiveHostBundle,archiveHostQualificationInvocation} from '../scripts/hosting/install-archive-host.mjs';
 import {createArchiveHostCiCommand,ArchiveHostCiCommandError} from '../scripts/hosting/archive-host-ci-command.mjs';
 import {createArchiveNpmEnvironment,ArchiveRuntimeExportError} from '../scripts/hosting/export-archive-host-runtime.mjs';
 import {ArchiveHostRunError,archiveHostCanarySummary,archiveHostJournalFailure,archiveHostStartupSummary} from '../scripts/hosting/archive-host-diagnostics.mjs';
@@ -75,9 +75,16 @@ test('disabled systemd service delegates only its own subtree with bounded resou
  const sha='a'.repeat(64),release='/var/lib/coatria-archive-releases/'+sha;
  for(const mode of ['qualify','preflight','worker']){const unit=archiveHostUnit(mode,release,sha);assert.match(unit,/^User=coatria-archive$/m);assert.match(unit,/^Delegate=cpu memory pids$/m);assert.match(unit,/^DelegateSubgroup=supervisor$/m);assert.match(unit,/^KillMode=control-group$/m);assert.match(unit,/^Restart=no$/m);assert.match(unit,/^NoNewPrivileges=yes$/m);assert.match(unit,/^MemoryMax=2G$/m);assert.match(unit,/^MemorySwapMax=0$/m);assert.match(unit,/^TasksMax=256$/m);assert.doesNotMatch(unit,/^\[Install\]|^WantedBy=|^User=root|^ExecStart=.*(?:curl|wget|npm|docker|sudo)|^ProtectControlGroups=yes/m);}
  const worker=archiveHostUnit('worker',release,sha);assert.match(worker,/^ConditionPathExists=\/etc\/coatria-archive\/worker-enabled$/m);assert.match(worker,/^EnvironmentFile=\/etc\/coatria-archive\/worker.env$/m);assert.doesNotMatch(archiveHostUnit('qualify',release,sha),/^EnvironmentFile=/m);assert.throws(()=>archiveHostUnit('worker','/tmp/unreviewed',sha));
+ assert.match(archiveHostUnit('qualify',release,sha),/^RemainAfterExit=yes$/m);for(const mode of ['worker','preflight'])assert.doesNotMatch(archiveHostUnit(mode,release,sha),/^RemainAfterExit=/m);
  const p=archiveHostDelegatedPath('0::/system.slice/coatria-archive-qualify.service/supervisor\n','qualify');assert.equal(p.cgroupRoot,'/sys/fs/cgroup/system.slice/coatria-archive-qualify.service/decoders');
  for(const value of ['0::/','0::/system.slice/other.service/supervisor','0::/system.slice/coatria-archive-worker.service/supervisor','0::/system.slice/../coatria-archive-qualify.service/supervisor'])assert.throws(()=>archiveHostDelegatedPath(value,'qualify'));
  const receipt={version:1,bundleSha256:sha,bootId:'current-boot'};assert.equal(archiveHostReceiptCurrent(receipt,sha,'current-boot'),true);assert.equal(archiveHostReceiptCurrent(receipt,sha,'new-boot'),false);assert.equal(archiveHostReceiptCurrent(receipt,'b'.repeat(64),'current-boot'),false);
+});
+test('qualification acceptance binds to a retained completed invocation with no running processes',()=>{
+ const id='a'.repeat(32),facts={ActiveState:'active',SubState:'exited',MainPID:'0',ControlPID:'0',Result:'success',ExecMainStatus:'0',InvocationID:id},raw=(state:Record<string,string>)=>Object.entries(state).map(([key,value])=>key+'='+value).join('\n');
+ assert.equal(archiveHostQualificationInvocation(raw(facts)),id);assert.equal(archiveHostQualificationInvocation(raw(facts),id),id);assert.throws(()=>archiveHostQualificationInvocation(raw(facts),'b'.repeat(32)));
+ for(const change of [{ActiveState:'inactive'},{ActiveState:'failed'},{SubState:'running'},{SubState:'start'},{MainPID:'123'},{ControlPID:'123'},{Result:'exit-code'},{ExecMainStatus:'1'},{InvocationID:''},{InvocationID:'0'.repeat(32)}])assert.throws(()=>archiveHostQualificationInvocation(raw({...facts,...change})),/ARCHIVE_HOST_PACKAGE_REJECTED/);
+ const missing={...facts} as Record<string,string>;delete missing.ControlPID;assert.throws(()=>archiveHostQualificationInvocation(raw(missing)));assert.throws(()=>archiveHostQualificationInvocation(raw(facts)+'\nMainPID=0'));assert.throws(()=>archiveHostQualificationInvocation(raw(facts)+'\nUnreviewed=0'));
 });
 test('CI account setup uses the Ubuntu administrative executable and reports only bounded failure facts',()=>{
  const calls:unknown[][]=[],privateText='synthetic-private-command-material';

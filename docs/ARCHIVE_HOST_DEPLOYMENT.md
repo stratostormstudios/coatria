@@ -106,7 +106,7 @@ sudo "$NODE" "$SOURCE/scripts/hosting/install-archive-host.mjs" \
 sudo systemctl daemon-reload
 sudo systemctl start coatria-archive-qualify.service
 sudo systemctl show coatria-archive-qualify.service \
-  --property=ActiveState,Result,ExecMainStatus,InvocationID
+  --property=ActiveState,SubState,MainPID,ControlPID,Result,ExecMainStatus,InvocationID
 sudo journalctl -u coatria-archive-qualify.service --no-pager -n 30
 ```
 
@@ -140,8 +140,28 @@ installed bundle. It creates root-owned `/etc/coatria-archive/qualified.json`;
 it does not enable the worker. A failed canary or a standalone JSON assertion
 cannot substitute for successful qualification.
 
-After a reboot, or when deliberately renewing qualification, run the qualifier
-again. Review the new evidence and supply the exact SHA-256 of the existing
+Only the qualifier uses `RemainAfterExit=yes`: after success it remains
+`active/exited` with `MainPID=0`, `ControlPID=0`, and its completed invocation ID.
+This retains the exact invocation for root review and acceptance; it does not keep
+a worker running. Acceptance rejects running, stopped, failed, or mismatched
+invocations, including an older successful attempt. Systemd documents that another
+`start` while this oneshot is retained performs no new action. See the primary
+[oneshot lifecycle documentation](https://github.com/systemd/systemd/blob/v255/man/systemd.service.xml#L1425)
+and [service state handling](https://github.com/systemd/systemd/blob/v255/src/core/service.c#L2058).
+
+After accepting the exact completed evidence, explicitly release that retained
+invocation:
+
+```sh
+sudo systemctl stop coatria-archive-qualify.service
+```
+
+Do not stop it before acceptance. Stopping afterward leaves the accepted root-owned
+receipt intact; it does not start or stop the separate worker.
+
+After a reboot, or when deliberately renewing qualification, explicitly stop the
+qualifier if retained, then start it again. This creates a fresh invocation and
+attempt directory. Review the new evidence and supply the exact SHA-256 of the existing
 `qualified.json` as the optional final argument to `accept-qualification`.
 Replacement compares that digest and retains `qualified-<oldReceiptSha256>.json`.
 An old-boot receipt is rejected. Preserve every attempt; an interrupted acceptance
@@ -210,8 +230,9 @@ stop the worker and prepare a separately reviewed replacement of the fixed units
 and configuration; the current installer intentionally refuses silent upgrades.
 
 The new [CI host qualifier](../scripts/hosting/qualify-archive-host-ci.mjs) is designed
-to exercise actual systemd install-disabled behavior, two qualification runs,
-receipt replacement, stale-boot rejection and the absent-marker start gate.
+to exercise actual systemd install-disabled behavior, a retained start that does
+not rerun, an explicit stop and fresh qualification, rejection of stopped/prior
+evidence, receipt replacement, stale-boot rejection and the absent-marker start gate.
 Require a passing result for the exact candidate. A synthetic stale boot is not
 a physical reboot test; this lane has no database/provider credentials and proves neither
 live preflight nor S3 transfer, production capacity, recovery or client delivery.
