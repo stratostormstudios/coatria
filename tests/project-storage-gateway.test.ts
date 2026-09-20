@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createHash,randomUUID} from 'node:crypto';
+import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {readFile,readdir} from 'node:fs/promises';
+import {Pool} from 'pg';
 import {database,query,transaction} from '../src/lib/db';
 import {ApiError,hashToken} from '../src/lib/security';
 import {createProjectStorageGateway} from '../src/lib/project-storage-gateway';
@@ -172,15 +173,21 @@ test('storage gateway uses real scoped database grants and injected byte provide
   });
 
   await t.test('restricted gateway role executes real transfers without authority writes or hosted-agent ciphertext access',{skip:emulate||!integration||!['localhost','127.0.0.1'].includes(new URL(integration).hostname),timeout:30000},async()=>{
-   // Use one fresh connection so session SET ROLE covers every actual gateway
-   // transaction. Fixtures and credential grants are created by the owner first.
-   const previousMaximum=process.env.DATABASE_POOL_MAX,role='coatria_storage_test_'+randomUUID().replaceAll('-','');
-   await database().end();delete(globalThis as any).coatriaPool;process.env.DATABASE_POOL_MAX='1';
-   let roleCreated=false;
+   // A denied Pool.query discards its connection. Session SET ROLE alone would
+   // then silently fall back to the owner on reconnect. Authenticate every
+   // gateway connection as the restricted login, using only fixture credentials.
+   const ownerPool=database(),role='coatria_storage_test_'+randomUUID().replaceAll('-','');
+   const password=randomBytes(32).toString('hex'),restrictedUrl=new URL(integration!);
+   restrictedUrl.username=role;restrictedUrl.password=password;
+   let roleCreated=false,restrictedPool:Pool|undefined;
    try{
     const f=await fixture(),agent=await f.leasedAgent(),saved=await f.reserve(Buffer.from('abcdef'),{},f.projectId,agent.actor);
-    await query(`CREATE ROLE ${role} NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`);roleCreated=true;
-    await query((await readFile('database/storage-gateway-permissions.sql','utf8')).replaceAll('coatria_storage_gateway_v1',role));await query(`SET ROLE ${role}`);assert.equal((await query('SELECT current_user')).rows[0].current_user,role);
+    await query(`CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`);roleCreated=true;
+    await query((await readFile('database/storage-gateway-permissions.sql','utf8')).replaceAll('coatria_storage_gateway_v1',role));
+    restrictedPool=new Pool({connectionString:restrictedUrl.href,max:1,connectionTimeoutMillis:10000,statement_timeout:15000});
+    (globalThis as any).coatriaPool=restrictedPool;
+    const identity=async()=>{const result=(await query('SELECT current_user,session_user,pg_backend_pid() AS pid')).rows[0];assert.equal(result.current_user,role);assert.equal(result.session_user,role);return result.pid;};
+    await identity();
     await f.json(await f.action(saved.upload,'start'));await f.json(await f.part(saved.upload,saved.body));await f.json(await f.action(saved.upload,'complete'),202);assert.equal(await f.gateway.verifyNext(),true);assert.equal((await f.row(saved.upload.id)).status,'ready');
     for(const sql of [
      "UPDATE memberships SET role='owner' WHERE false",
@@ -196,12 +203,13 @@ test('storage gateway uses real scoped database grants and injected byte provide
      'SELECT ciphertext FROM studio_host_credentials WHERE false',
      'DELETE FROM project_storage_versions WHERE false',
      `CREATE ROLE ${role}_escalated NOLOGIN`
-    ])await assert.rejects(query(sql),{code:'42501'},sql);
-    await query('RESET ROLE');const access=await f.readGrant(saved.upload.versionId,agent.actor);await query(`SET ROLE ${role}`);
+    ]){await identity();await assert.rejects(query(sql),{code:'42501'},sql);await identity();}
+    // Exercise replacement independently of the driver's current error policy.
+    const oldPid=await identity(),connection=await restrictedPool.connect();connection.release(true);assert.notEqual(await identity(),oldPid);
+    (globalThis as any).coatriaPool=ownerPool;const access=await f.readGrant(saved.upload.versionId,agent.actor);(globalThis as any).coatriaPool=restrictedPool;await identity();
     const response=await f.gateway.handle(new Request(access.url,{headers:access.headers}));assert.equal(response.status,200);assert.equal(await response.text(),saved.body.toString());assert.equal(f.counts.create,1);assert.equal(f.counts.part,1);assert.equal(f.counts.complete,1);
    }finally{
-    await query('RESET ROLE');if(roleCreated){await query(`DROP OWNED BY ${role}`);await query(`DROP ROLE ${role}`);}
-    await database().end();delete(globalThis as any).coatriaPool;if(previousMaximum===undefined)delete process.env.DATABASE_POOL_MAX;else process.env.DATABASE_POOL_MAX=previousMaximum;
+    (globalThis as any).coatriaPool=ownerPool;await restrictedPool?.end();if(roleCreated){await query(`DROP OWNED BY ${role}`);await query(`DROP ROLE ${role}`);}
    }
   });
   assert.equal(outbound,0);
