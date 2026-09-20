@@ -96,7 +96,7 @@ test('generated project API stores real typed units, preserves v1 receipts and n
    await call(`${prefix}/projects/${generatedIds[0]}?contractVersion=2`,'GET',undefined,404,'outsider');
    const common={clientId:randomUUID(),revision:detail.project.revision};
    assert.equal((await call(`${prefix}/projects/${detail.project.id}/artifacts`,'POST',{...common,workItemId:detail.workItems.find(work=>work.stage==='generation')!.id,name:'Cannot downgrade',url:'https://example.invalid/ref.exr',sha256:'aa'.repeat(32),frameStart:0,frameEnd:10,...legacySpec,notes:'Synthetic legacy bypass attempt'},409)).code,'STUDIO_CONTRACT_UNSUPPORTED');
-   assert.equal((await call(`${prefix}/projects/${detail.project.id}/gates`,'POST',{...common,clientId:randomUUID(),gate:'client_acceptance',decision:'changes_requested',note:'Cannot create unqualified client acceptance'},409)).code,'STUDIO_GENERATED_CLIENT_TRANSPORT_UNAVAILABLE');
+   assert.equal((await call(`${prefix}/projects/${detail.project.id}/gates`,'POST',{...common,clientId:randomUUID(),gate:'client_acceptance',decision:'changes_requested',note:'Cannot create unqualified client acceptance'},409)).code,'STUDIO_GENERATED_CLIENT_IDENTITY_REQUIRED');
    assert.equal((await call(`${prefix}/projects/${detail.project.id}/creative-followup`,'GET',undefined,409)).code,'STUDIO_CONTRACT_UNSUPPORTED');
    assert.equal((await query('SELECT count(*) FROM studio_artifacts WHERE company_id=$1',[company])).rows[0].count,'0');
   });

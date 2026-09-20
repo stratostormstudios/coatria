@@ -212,7 +212,7 @@ export async function assertStudioTaskAction(client:PoolClient,companyId:string,
 }
 async function recordGate(client:PoolClient,actor:StudioActor,projectId:string,input:unknown){
  const data=parse(studioGateInput,input);return requestOnce(client,actor,data.clientId,'gate:'+projectId,data,async()=>{
-  const p=await lockedProject(client,actor.companyId,projectId,data.revision);if(p.contractVersion===2&&data.gate==='client_acceptance')fail(409,'Generated-media client acceptance requires a qualified account-bound storage delivery transport.','STUDIO_GENERATED_CLIENT_TRANSPORT_UNAVAILABLE');if(p.status==='delivered')fail(409,'Client acceptance is already recorded; create follow-up work for changes.');
+  const p=await lockedProject(client,actor.companyId,projectId,data.revision);if(p.contractVersion===2&&data.gate==='client_acceptance')fail(409,'Only the designated authenticated external client can respond to a generated delivery invitation.','STUDIO_GENERATED_CLIENT_IDENTITY_REQUIRED');if(p.status==='delivered')fail(409,'Client acceptance is already recorded; create follow-up work for changes.');
   if(data.decision==='approved'){
    if(data.gate!=='brief'&&p.gates.brief?.decision!=='approved')fail(409,'Approve the client brief first.','STUDIO_GATE_REQUIRED');
    if(data.gate==='production'&&(p.gates.estimate?.decision!=='approved'||p.aiPolicy==='unknown'))fail(409,'Approve scope and estimate, and resolve the client AI-use policy before production.','STUDIO_GATE_REQUIRED');

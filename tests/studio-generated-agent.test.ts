@@ -51,9 +51,9 @@ test('OpenAPI keeps generated image/video/audio schemas separate from legacy fra
  assert.deepEqual(spec.paths[base+'/projects'].post.requestBody.content['application/json'].schema,input(studioVersionedProjectInput));
  const manifest=spec.paths[projectPath+'/generated-artifacts/{artifactId}/manifest'].get;assert.deepEqual(manifest.security,[{sessionCookie:[]}]);assert.equal(manifest.responses['200'].headers['X-Content-SHA256'].schema.pattern,'^[a-f0-9]{64}$');assert.match(manifest.description,/canonical UTF-8 JSON bytes/);
  const review=schemas.StudioGeneratedReview;for(const field of['specSha256','manifestSha256','attestationVersion','technicalMatch'])assert(review.required.includes(field));assert.equal(review.properties.attestationVersion.const,1);
- assert.equal(schemas.StudioGeneratedPackageManifest.properties.transportStatus.const,'not_transferred');assert.match(spec.paths[projectPath+'/deliveries'].post.description,/client transport.*unsupported/);
+ assert.equal(schemas.StudioGeneratedPackageManifest.properties.transportStatus.const,'not_transferred');assert.match(spec.paths[projectPath+'/deliveries'].post.description,/client access is a separate explicit account-bound invitation/);
  assert.deepEqual(schemas.StudioGeneratedSource,input(studioGeneratedSourceInput));assert.deepEqual(schemas.StudioGeneratedArtifactManifest,input(studioGeneratedManifestInput));
- assert.match(spec.paths[projectPath+'/creative-followup'].get.description,/STUDIO_GENERATED_FOLLOWUP_UNAVAILABLE/);assert.match(spec.paths[projectPath+'/creative-followup'].post.description,/STUDIO_GENERATED_FOLLOWUP_UNAVAILABLE/);assert.match(spec.paths[projectPath+'/client-deliveries'].post.description,/STUDIO_GENERATED_CLIENT_TRANSPORT_UNAVAILABLE/);
+ assert.match(spec.paths[projectPath+'/creative-followup'].get.description,/STUDIO_GENERATED_FOLLOWUP_UNAVAILABLE/);assert.match(spec.paths[projectPath+'/creative-followup'].post.description,/STUDIO_GENERATED_FOLLOWUP_UNAVAILABLE/);assert.match(spec.paths[projectPath+'/client-deliveries'].post.description,/schemaVersion2 external package/);
 });
 
 test('generated model-context projections preserve version evidence without claiming inspection or inventing frames',()=>{

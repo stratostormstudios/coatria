@@ -8,6 +8,7 @@ import type {ProjectStorageActor} from './project-storage-protocol';
 import {authorizeStorageGrantAgent} from './project-storage-authority';
 import {authorityReader} from './project-storage-stream';
 import {STORAGE_MAX_FILE_BYTES} from './project-storage-config';
+import {authorizeStudioClientStorageGrant} from './studio-client-storage';
 import {createRunpodProjectStorage,RunpodStorageError,type RunpodProjectStorage,type RunpodProjectStorageConfig} from './project-storage-runpod';
 
 type Row=Record<string,any>;
@@ -123,6 +124,45 @@ export function createProjectStorageGateway(options:{providerFactory?:ProviderFa
   const stream=new ReadableStream<Uint8Array>({async pull(controller){try{const chunk=await reader.read();if(chunk.done){controller.close();adapter.close();await reader.close();}else controller.enqueue(chunk.value);}catch(error){controller.error(error);await reader.close();adapter.close();}},async cancel(){await reader.close();adapter.close();}}, {highWaterMark:0});
   return new Response(stream,{status:interval?206:200,headers:{'Content-Type':'application/octet-stream','Content-Length':String(object.bytes),'Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(saved.context.version.name)}`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox",'Referrer-Policy':'no-referrer','X-Content-SHA256':saved.verified.sha256,...interval?{'Content-Range':`bytes ${interval.start}-${interval.end}/${bytes}`}:{}}});
  }
+ async function clientDownload(request:Request,versionId:string){
+  const header=request.headers.get('authorization');if(!header||!/^Bearer sct_[A-Za-z0-9_-]{43}$/.test(header))fail(401,'A current client file token is required.','CLIENT_STORAGE_TOKEN_REQUIRED');
+  const value=header.slice(7),started=performance.now();
+  const saved=await transaction(async client=>{const current=await authorizeStudioClientStorageGrant(client,value,versionId),connection=await openProjectStorageCredentials(client,current.companyId,current.connectionId);
+   // Credential opening can wait for another authority lock. Recheck after it.
+   const final=await authorizeStudioClientStorageGrant(client,value,versionId);if(connection.connection.revision!==final.connectionRevision)fail(403,'Client storage authority changed.','CLIENT_STORAGE_UNAVAILABLE');return {...final,connection};});
+  const bytes=saved.bytes,range=request.headers.get('range');let interval:{start:number;end:number}|undefined;
+  if(range){const match=/^bytes=(\d+)-(\d*)$/.exec(range);if(!match)fail(416,'Use one bounded byte range.');interval={start:Number(match[1]),end:match[2]?Number(match[2]):bytes-1};if(!Number.isSafeInteger(interval.start)||!Number.isSafeInteger(interval.end)||interval.start>interval.end||interval.end>=bytes)fail(416,'The byte range is outside this file.');}
+  const expected=interval?interval.end-interval.start+1:bytes,deadline=new AbortController(),signal=AbortSignal.any([request.signal,deadline.signal]);
+  // Subtract the entire preparation duration conservatively. No host wall-clock
+  // comparison can extend the absolute, database-issued 60-second capability.
+  const remaining=Math.floor(saved.remainingMs-(performance.now()-started));if(remaining<=0)fail(403,'Client storage authority expired.','CLIENT_STORAGE_UNAVAILABLE');
+  const adapter=factory({companyId:saved.companyId,projectId:saved.projectId,region:saved.connection.connection.region,volumeId:saved.connection.connection.volumeId,credentials:{accessKeyId:saved.connection.accessKeyId,secretAccessKey:saved.connection.secretAccessKey},partBytes:64*1024**2,maxObjectBytes:STORAGE_MAX_FILE_BYTES,timeoutMs:remaining});
+  const timer=setTimeout(()=>deadline.abort(),remaining);timer.unref?.();
+  let reader:ReturnType<typeof authorityReader>|undefined,ended=false,seen=0,closing:Promise<void>|undefined;
+  const close=():Promise<void>=>{if(closing)return closing;ended=true;clearTimeout(timer);signal.removeEventListener('abort',abort);adapter.close();return closing=reader?.close()??Promise.resolve();};
+  const abort=()=>{void close();};signal.addEventListener('abort',abort,{once:true});
+  try{
+   signal.throwIfAborted();const object=await adapter.get({versionId,maxBytes:bytes,...interval?{range:interval}:{},ifMatch:saved.etag,signal});
+   if(ended||signal.aborted){await object.stream.cancel().catch(()=>{});fail(403,'Client storage authority expired.','CLIENT_STORAGE_UNAVAILABLE');}
+   const contentRange=interval?`bytes ${interval.start}-${interval.end}/${bytes}`:null;
+   if(object.bytes!==expected||object.totalBytes!==bytes||object.etag!==saved.etag||object.contentRange!==contentRange||Boolean(object.range)!==Boolean(interval)||interval&&(object.range?.start!==interval.start||object.range?.end!==interval.end)){
+    await object.stream.cancel().catch(()=>{});fail(502,'Stored file response does not match the approved version.','CLIENT_STORAGE_RESPONSE_INVALID');
+   }
+   const validate=()=>transaction(client=>authorizeStudioClientStorageGrant(client,value,versionId));
+   // Fresh authority before the first chunk and periodically while active or
+   // stalled. Revocation takes at most one 5-second check interval within an
+   // already opened range; the independent deadline abort never extends it.
+   reader=authorityReader(object.stream.getReader(),validate);await validate();
+   if(signal.aborted||ended)fail(403,'Client storage authority expired.','CLIENT_STORAGE_UNAVAILABLE');
+   const stream=new ReadableStream<Uint8Array>({async pull(controller){try{
+    if(signal.aborted||ended)fail(403,'Client storage authority expired.','CLIENT_STORAGE_UNAVAILABLE');
+    const chunk=await reader!.read();if(signal.aborted||ended)fail(403,'Client storage authority expired.','CLIENT_STORAGE_UNAVAILABLE');
+    if(chunk.done){if(seen!==expected)fail(502,'The stored response ended before its complete length.','CLIENT_STORAGE_RESPONSE_INVALID');controller.close();await close();}
+    else{seen+=chunk.value.byteLength;if(seen>expected)fail(502,'The stored response exceeds its approved length.','CLIENT_STORAGE_RESPONSE_INVALID');controller.enqueue(chunk.value);}
+   }catch(error){controller.error(error);await close();}},async cancel(){await close();}},{highWaterMark:0});
+   return new Response(stream,{status:interval?206:200,headers:{'Content-Type':'application/octet-stream','Content-Length':String(expected),'Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(saved.name)}`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox",'Referrer-Policy':'no-referrer','X-Content-SHA256':saved.sha256,...interval?{'Content-Range':contentRange!}:{}}});
+  }catch(error){await close();throw error;}
+ }
  /** Restart-safe verification queue: only read/hash is retried, never paid or mutating provider work. */
  async function verifyNext(){
   const actionId=randomUUID(),saved=await transaction(async client=>{
@@ -155,10 +195,11 @@ export function createProjectStorageGateway(options:{providerFactory?:ProviderFa
    if(origin&&!origins.has(origin))fail(403,'This browser origin is not allowed.');
    const url=new URL(request.url);if(url.search)fail(400,'Transfer credentials belong in Authorization headers.');
    if(request.method==='OPTIONS'){if(!origin)fail(403,'A browser origin is required.');return new Response(null,{status:204,headers:{'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Methods':'GET, POST, PUT, OPTIONS','Access-Control-Allow-Headers':'Authorization, Content-Type, Range','Access-Control-Max-Age':'300','Vary':'Origin'}});}
-   if(url.pathname==='/health'&&request.method==='GET'){const ready=await transaction(async client=>(await client.query("SELECT 1 FROM schema_migrations WHERE name='027_project_storage.sql'")).rowCount);return json({service:'coatria-storage-gateway',status:ready?'ready':'schema_required',schemaVersion:1},ready?200:503);}
-   const parts=url.pathname.split('/').filter(Boolean);if(parts[0]!=='v1'||!['uploads','files'].includes(parts[1])||parts.length<3)fail(404,'Transfer endpoint not found.');
-   const resourceId=id(parts[2]),value=token(request);
-   if(parts[1]==='files'&&parts.length===3&&request.method==='GET')response=await download(request,value,resourceId);
+   if(url.pathname==='/health'&&request.method==='GET'){const ready=await transaction(async client=>Number((await client.query("SELECT count(*)::int AS count FROM schema_migrations WHERE name IN ('027_project_storage.sql','032_studio_generated_client_delivery.sql')")).rows[0].count)===2);return json({service:'coatria-storage-gateway',status:ready?'ready':'schema_required',schemaVersion:2},ready?200:503);}
+   const parts=url.pathname.split('/').filter(Boolean);if(parts[0]!=='v1'||!['uploads','files','client-files'].includes(parts[1])||parts.length<3)fail(404,'Transfer endpoint not found.');
+   const resourceId=id(parts[2]),value=parts[1]==='client-files'?'':token(request);
+   if(parts[1]==='client-files'&&parts.length===3&&request.method==='GET')response=await clientDownload(request,resourceId);
+   else if(parts[1]==='files'&&parts.length===3&&request.method==='GET')response=await download(request,value,resourceId);
    else if(parts[1]==='uploads'&&parts.length===3&&request.method==='GET')response=json(await inspect(value,resourceId));
    else if(parts[1]==='uploads'&&parts.length===4&&request.method==='POST'&&parts[3]==='start')response=await start(request,value,resourceId);
    else if(parts[1]==='uploads'&&parts.length===4&&request.method==='POST'&&parts[3]==='complete')response=await complete(request,value,resourceId);

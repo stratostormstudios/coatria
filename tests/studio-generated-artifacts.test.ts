@@ -7,6 +7,7 @@ import {Pool,type PoolClient} from 'pg';
 import {buildStudioGeneratedArtifactManifest,loadStoredGeneratedArtifact,loadStoredGeneratedArtifacts,loadVerifiedGeneratedSource,registerStudioGeneratedArtifact,studioGeneratedSourceInput} from '../src/lib/studio-generated-artifacts';
 import {studioProjectDetail} from '../src/lib/studio';
 import {studioGeneratedSpecInput} from '../src/lib/studio-generated-protocol';
+import {updateProjectStorageFile} from '../src/lib/project-storage';
 
 const emulate=process.env.COATRIA_TEST_EMULATOR==='1',integration=process.env.COATRIA_INTEGRATION_DATABASE_URL;
 const localPostgres=(()=>{try{return !!integration&&['localhost','127.0.0.1'].includes(new URL(integration).hostname);}catch{return false;}})();
@@ -137,6 +138,28 @@ test('generated registration authenticates verified synthetic storage and preser
   });
   await t.test('concurrent distinct requests cannot allocate duplicate artifacts for one source',{skip:emulate},async()=>{
    const f=await fixture(),results=await Promise.allSettled([f.register(),f.register({...f.input,clientId:randomUUID()})]);assert.equal(results.filter(r=>r.status==='fulfilled').length,1);const failed=results.find(r=>r.status==='rejected') as PromiseRejectedResult;assert.equal(failed.reason.code,'STUDIO_REVISION_CONFLICT');assert.equal((await db.query('SELECT count(*)::int AS count FROM studio_generated_artifact_sources WHERE archive_id=$1',[f.archiveId])).rows[0].count,1);
+  });
+  await t.test('a concurrent file rename cannot deadlock a verified source read on the storage binding',{skip:emulate,timeout:20000},async()=>{
+   const f=await fixture(),registered=await f.register(),rename=await pool!.connect(),read=await pool!.connect();
+   const fileId=(await db.query('SELECT file_id FROM project_storage_versions WHERE id=$1',[f.versionId])).rows[0].file_id;
+   let pending:Promise<Awaited<ReturnType<typeof loadStoredGeneratedArtifact>>>|undefined;
+   try{
+    await rename.query('BEGIN');await read.query('BEGIN');
+    // These are the actual first storage locks held by writableBinding before
+    // updateProjectStorageFile changes a file. Keep the binding held until the
+    // concurrent source reader demonstrably blocks behind this transaction.
+    await rename.query('SELECT id FROM project_storage_connections WHERE id=$1 FOR SHARE',[f.storageId]);
+    await rename.query('SELECT id FROM project_storage_bindings WHERE id=$1 FOR UPDATE',[f.bindingId]);
+    const blocker=(await rename.query('SELECT pg_backend_pid() AS pid')).rows[0].pid,pid=(await read.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+    pending=loadStoredGeneratedArtifact(read,f.company,f.p.id,registered.artifact.id,{requireAvailable:true});pending.catch(()=>{});
+    const until=performance.now()+10000;
+    while(!(await db.query('SELECT $2::int=ANY(pg_blocking_pids($1)) AS waiting',[pid,blocker])).rows[0].waiting){assert(performance.now()<until,'Source reader must reach the held binding lock.');await delay(20);}
+    const renamed=await updateProjectStorageFile(rename,{companyId:f.company,userId:f.producer},f.p.id,fileId,{clientId:randomUUID(),revision:1,parentId:null,name:'renamed-after-approval.png'});
+    assert.equal(renamed.binding.revision,2);await rename.query('COMMIT');
+    const loaded=await pending;await read.query('COMMIT');assert.deepEqual(loaded.artifact,registered.artifact);
+    assert.equal((await db.query('SELECT name FROM project_storage_files WHERE id=$1',[fileId])).rows[0].name,'renamed-after-approval.png');
+    assert.equal(loaded.storageVersionId,f.versionId);assert.equal(loaded.manifestSha256,registered.artifact.manifestSha256);
+   }finally{await rename.query('ROLLBACK');await pending?.catch(()=>{});await read.query('ROLLBACK');rename.release();read.release();}
   });
   await t.test('DB-expired agent lease after a project lock wait cannot publish despite host skew',{skip:emulate},async()=>{
    const f=await fixture('image',{agent:true}),blocker=await pool!.connect(),originalNow=Date.now;let pending:Promise<any>|undefined,pid=0;

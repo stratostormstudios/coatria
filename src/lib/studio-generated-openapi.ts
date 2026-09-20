@@ -28,7 +28,7 @@ export function studioGeneratedOpenApiSchemas(legacy:Record<string,Schema>):Reco
  const review=object({...legacy.StudioReview.properties,contractVersion:{const:2},...evidence});
  const packageReview=object({...legacy.StudioReview.properties,...evidence,decision:{const:'approved'},technicalQc:{const:true}});
  const packageManifest=object({schemaVersion:{const:2},kind:{const:'generated_media_package'},project:object({id:uuid,name:text,clientName:text,spec:ref('StudioGeneratedSpec'),revision}),generatedAt:date,preparedBy:uuid,transportStatus:{const:'not_transferred'},artifacts:{type:'array',minItems:1,maxItems:100,items:ref('StudioGeneratedArtifact')},reviewReceipts:{type:'array',minItems:1,maxItems:100,items:ref('StudioGeneratedPackageReview')},note:text});
- const delivery=object({...legacy.StudioDelivery.properties,status:{const:'prepared'},manifest:ref('StudioGeneratedPackageManifest')});
+ const delivery=object({...legacy.StudioDelivery.properties,manifest:ref('StudioGeneratedPackageManifest')});
  return {
   StudioGeneratedSpec:schema(studioGeneratedSpecInput),StudioGeneratedShot:shot,StudioGeneratedSource:source,StudioGeneratedFileFacts:file,StudioGeneratedObservedMedia:media,StudioGeneratedArtifact:artifact,StudioGeneratedArtifactManifest:manifest,
   StudioGeneratedProject:project,

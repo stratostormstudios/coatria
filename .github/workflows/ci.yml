@@ -124,7 +124,7 @@ jobs:
         env:
           COATRIA_BROWSER_START: '1'
           COATRIA_TEST_URL: http://127.0.0.1:4180
-        run: node node_modules/@playwright/test/cli.js test tests/browser/studio-generated.spec.ts tests/browser/studio-generated-workflow.spec.ts tests/browser/studio-generated-coordination.spec.ts tests/browser/generated-project-wizard.spec.ts tests/browser/studio-roles.spec.ts tests/browser/higgsfield-archives.spec.ts tests/browser/higgsfield-tracking.spec.ts
+        run: node node_modules/@playwright/test/cli.js test tests/browser/studio-generated.spec.ts tests/browser/studio-generated-workflow.spec.ts tests/browser/studio-generated-coordination.spec.ts tests/browser/studio-generated-client.spec.ts tests/browser/generated-project-wizard.spec.ts tests/browser/studio-roles.spec.ts tests/browser/higgsfield-archives.spec.ts tests/browser/higgsfield-tracking.spec.ts
       - name: Preserve synthetic studio browser evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

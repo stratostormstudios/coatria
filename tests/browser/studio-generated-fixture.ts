@@ -52,6 +52,7 @@ export async function mockGenerated(page:Page,state:GeneratedFixture){
   else if(path.endsWith('/files'))data={binding:null,items:[],breadcrumbs:[],page:{limit:50,hasMore:false,nextAfter:null},transfers:{available:false,code:'STORAGE_GATEWAY_UNAVAILABLE',message:'Storage is offline in this fixture.'}};
   else if(path.endsWith('/coordination'))data={policy:null,dispatches:[]};
   else if(path.endsWith('/review-policy'))data={policy:null,reviews:[]};
+  else if(path.endsWith('/client-deliveries')&&method==='GET')data={shares:[],page:{hasMore:false,nextAfter:null,limit:20}};
   if(!data)state.unexpected.push(method+' '+path);
   await route.fulfill({status:data?200:501,json:data||{error:'Unmatched synthetic fixture request: '+path}});
  });

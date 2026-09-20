@@ -75,8 +75,17 @@ export async function loadVerifiedGeneratedSource(db:PoolClient,companyId:string
  FROM higgsfield_archive_fetches f JOIN project_storage_versions v ON v.company_id=f.company_id AND v.project_id=f.project_id AND v.id=$4 JOIN project_storage_verifications ok ON ok.company_id=v.company_id AND ok.project_id=v.project_id AND ok.version_id=v.id JOIN project_storage_uploads u ON u.company_id=v.company_id AND u.project_id=v.project_id AND u.version_id=v.id AND u.id=$5
  WHERE f.company_id=$1 AND f.project_id=$2 AND f.archive_id=$3${requireAvailable?' FOR SHARE OF u':''}`,[companyId,projectId,archiveId,a.version_id,a.upload_id])).rows[0];
  assertStoredFile(a,archiveId,stored,requireAvailable);
+ if(requireAvailable){
+  // Match writableBinding/file rename: connection, binding, then file. A
+  // joined FOR SHARE OF f,b,c can hold f while waiting for a rename's binding
+  // lock; that rename then waits for f. Separate statements make the order
+  // independent of the join plan while retaining stable file membership.
+  const connection=(await db.query('SELECT id FROM project_storage_connections WHERE company_id=$1 AND id=$2 FOR SHARE',[companyId,a.storage_connection_id])).rows[0];
+  const binding=(await db.query('SELECT id FROM project_storage_bindings WHERE company_id=$1 AND project_id=$2 AND id=$3 AND connection_id=$4 FOR SHARE',[companyId,projectId,a.storage_binding_id,a.storage_connection_id])).rows[0];
+  if(!connection||!binding)invalid();
+ }
  const storage=(await db.query(requireAvailable?`SELECT b.id AS binding_id,b.connection_id,c.id,c.region,c.volume_id,c.created_by,c.status,c.secret_envelope IS NOT NULL AS credentials_present,c.provider
- FROM project_storage_files f JOIN project_storage_bindings b ON b.company_id=f.company_id AND b.project_id=f.project_id AND b.id=f.binding_id JOIN project_storage_connections c ON c.company_id=b.company_id AND c.id=b.connection_id WHERE f.company_id=$1 AND f.project_id=$2 AND f.id=$3 FOR SHARE OF f,b,c`:'SELECT binding_id FROM project_storage_files WHERE company_id=$1 AND project_id=$2 AND id=$3',[companyId,projectId,stored.file_id])).rows[0];
+ FROM project_storage_files f JOIN project_storage_bindings b ON b.company_id=f.company_id AND b.project_id=f.project_id AND b.id=f.binding_id JOIN project_storage_connections c ON c.company_id=b.company_id AND c.id=b.connection_id WHERE f.company_id=$1 AND f.project_id=$2 AND f.id=$3 FOR SHARE OF f`:'SELECT binding_id FROM project_storage_files WHERE company_id=$1 AND project_id=$2 AND id=$3',[companyId,projectId,stored.file_id])).rows[0];
  const snapshot=a.storage_connection_snapshot;
  if(!storage||storage.binding_id!==a.storage_binding_id)invalid();
  if(requireAvailable){
