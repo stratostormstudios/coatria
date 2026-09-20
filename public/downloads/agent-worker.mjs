@@ -9,6 +9,17 @@ import {parseArgs} from 'node:util';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const terminalCodes=new Set(['RUN_LEASE_LOST','RUN_CANCELLED','COORDINATION_AUTHORITY_ENDED','STUDIO_REVIEW_AUTHORITY_ENDED']);
+// A trusted local Claude adapter can mark an unreplayable outcome terminal.
+// Never copy arbitrary Error.message, code, stack, cause or CLI diagnostics.
+const terminalClaudeFailures=new Set(['CLAUDE_REPLAY_UNSAFE','CLAUDE_CONFIGURATION','CLAUDE_CONTEXT_LIMIT','CLAUDE_TOOL_CATALOG','CLAUDE_START_FAILED','CLAUDE_CANCELLED','CLAUDE_TIMEOUT','CLAUDE_TOKEN_LIMIT','CLAUDE_OUTPUT_LIMIT','CLAUDE_PROTOCOL_INVALID','CLAUDE_MCP_UNAVAILABLE','CLAUDE_TOOL_SCOPE','CLAUDE_RESULT_INVALID','CLAUDE_TURN_LIMIT','CLAUDE_COST_LIMIT','CLAUDE_EXIT_FAILED']);
+function adapterFailure(error){
+ let code;
+ if(error&&typeof error==='object'){
+  const own=key=>Object.getOwnPropertyDescriptor(error,key)?.value;
+  if(own('name')==='ClaudeAdapterError'&&own('retryable')===false&&terminalClaudeFailures.has(own('code')))code=own('code');
+ }
+ return code?{code,retryable:false,error:code==='CLAUDE_TOKEN_LIMIT'?'Claude Code reached the configured cumulative token limit, including cached context. Review the run limits and any committed actions before creating a new request.':`Claude Code stopped (${code}). Review the configuration and any committed actions before creating a new request; automatic replay was disabled.`}:{code:'ADAPTER_FAILED',error:'The external adapter failed. Inspect its private local diagnostics; external effects may require reconciliation.'};
+}
 const fingerprint=value=>createHash('sha256').update(value).digest('hex');
 export function stableRequestId(runId,key){
  if(!UUID.test(runId)||typeof key!=='string'||!key||key.length>200)throw new Error('A run UUID and a nonempty logical operation key are required.');
@@ -179,7 +190,7 @@ export async function workOnce({client,state,execute,signal,heartbeatMs=15000,lo
     if(!result||typeof result.result!=='string'||!result.result.trim()||result.result.length>12000)throw new Error('Adapter must return {result: nonempty text up to 12000 characters, artifactUrl?}.');
     if(result.artifactUrl!==undefined){const artifact=new URL(result.artifactUrl);if(!['https:','http:'].includes(artifact.protocol)||artifact.username||artifact.password)throw new Error('Adapter artifact URL is invalid.');}
     job.outcome={kind:'complete',payload:{leaseToken:job.leaseToken,clientId:randomUUID(),result:result.result,...(result.artifactUrl?{artifactUrl:result.artifactUrl}:{})}};
-   }catch(error){if(control.signal.aborted||ended(error))throw error;job.outcome={kind:'fail',payload:{leaseToken:job.leaseToken,clientId:randomUUID(),error:'The external adapter failed. Inspect its private local diagnostics; external effects may require reconciliation.'}};log({event:'adapter-failed',runId:job.run.id});}
+   }catch(error){if(control.signal.aborted||ended(error))throw error;const failure=adapterFailure(error);job.outcome={kind:'fail',payload:{leaseToken:job.leaseToken,clientId:randomUUID(),error:failure.error,...failure.retryable===false?{retryable:false}:{}}};log({event:'adapter-failed',runId:job.run.id,code:failure.code});}
    finally{control.signal.removeEventListener('abort',abortHandler);}
    await state.save();
   }

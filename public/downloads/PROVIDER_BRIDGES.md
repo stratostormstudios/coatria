@@ -78,6 +78,8 @@ API-key mode uses `--bare`; native mode omits that flag so the CLI can use its o
 
 Model turns, deadline, output-token environment setting and observed JSONL usage are bounded. The CLI owns its internal inference loop; the bridge can stop only after observing emitted usage and cannot reserve tokens before every hidden internal request. Use the direct Anthropic HTTP bridge when per-request token accounting is required. The CLI cost and output controls are documented environment/print-mode features. [Claude environment controls](https://code.claude.com/docs/en/env-vars)
 
+Coatria exposes all four Claude Code limits in **Plugins → Installed → Bound each request**: model steps, output tokens per step, total token allowance and timeout. Total usage is cumulative across turns and includes input, output, cache creation and cache reads. New Claude Code installations created in the marketplace default to 96,000 total tokens, eight steps, 2,048 output tokens per step and 180 seconds. The larger allowance accommodates company tool instructions repeated across turns; it is not expected consumption. Existing installations retain their saved settings until an administrator explicitly reviews and saves a change. Private worker ceilings can lower these limits. Observed token accounting is an execution guard, not a guaranteed billing cap.
+
 The bridge requires a connected Coatria MCP startup event before reporting success. Cancellation ends the direct child with a two-second shutdown grace period. Operating-system isolation and worker supervision are still required; this is not a promise to terminate every descendant process or undo an already committed action.
 
 ## Connect Claude API

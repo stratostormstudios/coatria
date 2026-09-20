@@ -56,5 +56,16 @@ test('agent leases and tools recheck authority after real PostgreSQL lock conten
    assert.equal((await query('SELECT count(*)::int AS count FROM messages WHERE company_id=$1 AND body=$2',[companyId,body.result])).rows[0].count,1);
    assert.equal((await query('SELECT count(*)::int AS count FROM agent_run_receipts WHERE company_id=$1 AND run_id=$2',[companyId,run.id])).rows[0].count,1);
   });
+  await t.test('concurrent terminal failures commit one receipt without requeueing or a second attempt',async()=>{
+   const{run,leaseToken}=await leased(),body={leaseToken,clientId:randomUUID(),error:'This runtime configuration cannot proceed',retryable:false};
+   const results=await Promise.all(Array.from({length:4},()=>finishAgentRun(identity,run.id,'fail',body)));
+   assert.equal(results.filter(result=>!result.replayed).length,1);assert(results.every(result=>result.run.status==='failed'&&result.run.attempts===1&&result.run.finishedAt&&result.run.resultMessageId===null));
+   assert.equal((await query('SELECT count(*)::int AS count FROM agent_run_receipts WHERE company_id=$1 AND run_id=$2',[companyId,run.id])).rows[0].count,1);
+   assert.equal((await claimAgentRun(identity,{workerId:'retry-worker',claimId:randomUUID()})).run,null);
+  });
+  await t.test('terminal failure still observes a cancellation committed while waiting for the run lock',async()=>{
+   const{run,leaseToken}=await leased();await blockedMutation(client=>client.query("UPDATE agent_runs SET status='cancelled',worker_id=NULL,lease_token_hash=NULL,lease_expires_at=NULL WHERE company_id=$1 AND id=$2",[companyId,run.id]),()=>finishAgentRun(identity,run.id,'fail',{leaseToken,clientId:randomUUID(),error:'Too late to change cancellation',retryable:false}),result=>assert.equal((result.error as {code:string})?.code,'RUN_CANCELLED'));
+   assert.equal((await query('SELECT count(*)::int AS count FROM agent_run_receipts WHERE company_id=$1 AND run_id=$2',[companyId,run.id])).rows[0].count,0);
+  });
  }finally{await query('DELETE FROM companies WHERE id=$1',[companyId]);await query('DELETE FROM users WHERE id=ANY($1::uuid[])',[[ownerId,requesterId]]);await database().end();delete(globalThis as any).coatriaPool;}
 });

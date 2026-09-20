@@ -45,14 +45,45 @@ test('invoked agent runs enforce leases, retries, cancellation and explicit auth
   await t.test('cancellation fences late heartbeats, tool calls and completion',async()=>{
    const queued=await create(),held=await claim();await call(outsider,base+'/agent-runs/'+queued.run.id+'/cancel','POST',{},404);await call(member,base+'/agent-runs/'+queued.run.id+'/cancel','POST',{});await call(member,base+'/agent-runs/'+queued.run.id+'/cancel','POST',{});
    assert.equal((await call(null,`agent/runs/${queued.run.id}/heartbeat`,'POST',{leaseToken:held.leaseToken},409)).code,'RUN_CANCELLED');await call(null,`agent/runs/${queued.run.id}/complete`,'POST',{leaseToken:held.leaseToken,clientId:randomUUID(),result:'Too late'},409);
+   assert.equal((await call(null,`agent/runs/${queued.run.id}/fail`,'POST',{leaseToken:held.leaseToken,clientId:randomUUID(),error:'Terminal error after cancellation',retryable:false},409)).code,'RUN_CANCELLED');
    const identity=(await query('SELECT * FROM agents WHERE id=$1',[agentId])).rows[0];await assert.rejects(()=>transaction(client=>authorizeRunTool(client,identity as any,queued.run.id,held.leaseToken)),{code:'RUN_CANCELLED'});
    assert.equal((await query('SELECT count(*)::int AS count FROM messages WHERE company_id=$1 AND body=$2',[companyId,'Too late'])).rows[0].count,0);
   });
   await t.test('expired leases are requeued with a new fence, and failure retries stop after three attempts',async()=>{
-   const queued=await create(),old=await claim();await query("UPDATE agent_runs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[queued.run.id]);await claim();await query("UPDATE agent_runs SET available_at=clock_timestamp()-interval '1 second' WHERE id=$1",[queued.run.id]);const next=await claim();assert.equal(next.run.attempts,2);assert.notEqual(next.leaseToken,old.leaseToken);
+   const queued=await create(),old=await claim();await query("UPDATE agent_runs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[queued.run.id]);
+   assert.equal((await call(null,`agent/runs/${queued.run.id}/fail`,'POST',{leaseToken:old.leaseToken,clientId:randomUUID(),error:'Expired worker cannot terminalize this run',retryable:false},409)).code,'RUN_LEASE_LOST');
+   await claim();await query("UPDATE agent_runs SET available_at=clock_timestamp()-interval '1 second' WHERE id=$1",[queued.run.id]);const next=await claim();assert.equal(next.run.attempts,2);assert.notEqual(next.leaseToken,old.leaseToken);
    await call(null,`agent/runs/${queued.run.id}/heartbeat`,'POST',{leaseToken:old.leaseToken},409);
    const failureId=randomUUID(),failed=await call(null,`agent/runs/${queued.run.id}/fail`,'POST',{leaseToken:next.leaseToken,clientId:failureId,error:'Transient worker failure'});assert.equal(failed.run.status,'queued');const replay=await call(null,`agent/runs/${queued.run.id}/fail`,'POST',{leaseToken:next.leaseToken,clientId:failureId,error:'Transient worker failure'});assert.equal(replay.replayed,true);
-   await query("UPDATE agent_runs SET available_at=clock_timestamp()-interval '1 second' WHERE id=$1",[queued.run.id]);const final=await claim();assert.equal(final.run.attempts,3);const terminal=await call(null,`agent/runs/${queued.run.id}/fail`,'POST',{leaseToken:final.leaseToken,clientId:randomUUID(),error:'Final attempt failed'});assert.equal(terminal.run.status,'failed');assert.equal((await claim()).run,null);
+   await query("UPDATE agent_runs SET available_at=clock_timestamp()-interval '1 second' WHERE id=$1",[queued.run.id]);const final=await claim();assert.equal(final.run.attempts,3);const terminal=await call(null,`agent/runs/${queued.run.id}/fail`,'POST',{leaseToken:final.leaseToken,clientId:randomUUID(),error:'Final attempt failed',retryable:true});assert.equal(terminal.run.status,'failed');assert.equal((await claim()).run,null);
+  });
+  await t.test('legacy failure receipt hashes replay with omitted or true retryability after a new lease',async()=>{
+   const queued=await create(),held=await claim(),path=`agent/runs/${queued.run.id}/fail`,body={leaseToken:held.leaseToken,clientId:randomUUID(),error:'Retry a transient failure'};
+   const failed=await call(null,path,'POST',body);assert.equal(failed.run.status,'queued');assert.equal(failed.run.finishedAt,null);
+   const receipt=(await query('SELECT payload_hash FROM agent_run_receipts WHERE run_id=$1 AND client_id=$2',[queued.run.id,body.clientId])).rows[0];assert.equal(receipt.payload_hash,hashToken(JSON.stringify({kind:'fail',error:body.error})));
+   await query("UPDATE agent_runs SET available_at=clock_timestamp()-interval '1 second' WHERE id=$1",[queued.run.id]);const next=await claim();assert.equal(next.run.attempts,2);
+   for(const retry of[body,{...body,retryable:true}]){const replay=await call(null,path,'POST',retry);assert.equal(replay.replayed,true);assert.deepEqual(replay.run,failed.run);}
+   assert.equal((await call(null,path,'POST',{...body,retryable:false},409)).code,'IDEMPOTENCY_CONFLICT');
+   assert.equal((await call(null,path,'POST',{...body,leaseToken:next.leaseToken},409)).code,'RUN_LEASE_LOST');
+   assert.equal((await call(member,base+'/agent-runs/'+queued.run.id)).run.status,'running');
+   const explicit={leaseToken:next.leaseToken,clientId:randomUUID(),error:'Another transient failure'},done=await call(null,path,'POST',{...explicit,retryable:true});assert.equal(done.run.status,'queued');
+   assert.equal((await query('SELECT payload_hash FROM agent_run_receipts WHERE run_id=$1 AND client_id=$2',[queued.run.id,explicit.clientId])).rows[0].payload_hash,hashToken(JSON.stringify({kind:'fail',error:explicit.error})));
+   assert.equal((await call(null,path,'POST',explicit)).replayed,true);await cancelPending();
+  });
+  await t.test('terminal failures stop at the first attempt and cannot change their receipt disposition',async()=>{
+   const queued=await create(),held=await claim(),path=`agent/runs/${queued.run.id}/fail`,body={leaseToken:held.leaseToken,clientId:randomUUID(),error:'The configured runtime cannot execute this request',retryable:false};
+   for(const retryable of['false',null,0])assert.equal((await call(null,path,'POST',{...body,retryable},400)).code,'VALIDATION_ERROR');
+   assert.equal((await call(null,path,'POST',{...body,leaseToken:'a-wrong-but-long-enough-proof'},409)).code,'RUN_LEASE_LOST');
+   assert.equal((await query('SELECT count(*)::int AS count FROM agent_run_receipts WHERE run_id=$1',[queued.run.id])).rows[0].count,0);
+   const failed=await call(null,path,'POST',body);assert.equal(failed.replayed,false);assert.equal(failed.run.status,'failed');assert.equal(failed.run.attempts,1);assert.equal(failed.run.maxAttempts,3);assert(failed.run.finishedAt);assert.equal(failed.run.resultMessageId,null);assert.equal(failed.run.error,body.error);
+   const stored=(await query('SELECT status,worker_id,lease_token_hash,lease_expires_at,finished_at FROM agent_runs WHERE id=$1',[queued.run.id])).rows[0];assert.equal(stored.status,'failed');assert.equal(stored.worker_id,null);assert.equal(stored.lease_token_hash,null);assert.equal(stored.lease_expires_at,null);assert(stored.finished_at);
+   const receipt=(await query('SELECT payload_hash FROM agent_run_receipts WHERE run_id=$1 AND client_id=$2',[queued.run.id,body.clientId])).rows[0];assert.equal(receipt.payload_hash,hashToken(JSON.stringify({kind:'fail',error:body.error,retryable:false})));
+   const replay=await call(null,path,'POST',body);assert.equal(replay.replayed,true);assert.deepEqual(replay.run,failed.run);
+   const legacy={leaseToken:body.leaseToken,clientId:body.clientId,error:body.error};for(const changed of[legacy,{...body,retryable:true},{...body,error:'Changed terminal diagnosis'}])assert.equal((await call(null,path,'POST',changed,409)).code,'IDEMPOTENCY_CONFLICT');
+   assert.equal((await call(null,path,'POST',{...body,leaseToken:'another-long-but-invalid-proof'},409)).code,'RUN_LEASE_LOST');
+   assert.equal((await call(null,path,'POST',{...body,clientId:randomUUID()},409)).code,'RUN_LEASE_LOST');
+   assert.equal((await call(null,`agent/runs/${queued.run.id}/complete`,'POST',{leaseToken:body.leaseToken,clientId:randomUUID(),result:'Late success'},409)).code,'RUN_LEASE_LOST');
+   await query("UPDATE agent_runs SET available_at=clock_timestamp()-interval '1 second' WHERE id=$1",[queued.run.id]);assert.equal((await claim()).run,null);assert.equal((await query('SELECT count(*)::int AS count FROM agent_run_receipts WHERE run_id=$1',[queued.run.id])).rows[0].count,1);
   });
   await t.test('completion is atomic with an agent-attributed reply and retry never posts twice',async()=>{
    const parent=(await call(member,base+'/conversations/commons/messages','POST',{clientId:randomUUID(),body:'Please review this thread'},201)).message;
@@ -73,6 +104,7 @@ test('invoked agent runs enforce leases, retries, cancellation and explicit auth
   await t.test('token rotation, expiry and requester offboarding invalidate leased access',async()=>{
    const queued=await create(),held=await claim(),oldToken=token;const rotated=await call(owner,base+'/agents/'+agentId+'/rotate','POST',{expiresInDays:7});token=rotated.token;assert.notEqual(oldToken,token);assert.equal((await call(member,base+'/agent-runs/'+queued.run.id)).run.status,'cancelled');await call(null,'agent/runs/claim','POST',{workerId:'fixture',claimId:randomUUID()},401,oldToken);
    const next=await create(),nextHeld=await claim();await query("UPDATE memberships SET role='removed' WHERE company_id=$1 AND user_id=$2",[companyId,member.id]);await call(null,`agent/runs/${next.run.id}/heartbeat`,'POST',{leaseToken:nextHeld.leaseToken},403);await claim();assert.equal((await call(owner,base+'/agent-runs/'+next.run.id)).run.status,'cancelled');
+   await call(null,`agent/runs/${next.run.id}/fail`,'POST',{leaseToken:nextHeld.leaseToken,clientId:randomUUID(),error:'Requester access ended',retryable:false},403);
    await query("UPDATE agents SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[agentId]);await call(null,'agent/runs/claim','POST',{workerId:'fixture',claimId:randomUUID()},401);assert(held.leaseToken);
   });
  }finally{await query('DELETE FROM companies WHERE id=ANY($1::uuid[])',[[companyId,otherId]]);await query('DELETE FROM users WHERE id=ANY($1::uuid[])',[people.map(person=>person.id)]);await database().end();delete(globalThis as any).coatriaPool;if(stop)await stop();}

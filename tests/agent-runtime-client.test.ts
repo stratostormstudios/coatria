@@ -7,6 +7,7 @@ import {createServer,type Server} from 'node:http';
 import {spawn} from 'node:child_process';
 import {createRuntimeClient,runtimeOrigin,stableRequestId,RuntimeError,openWorkerState,workOnce,createAutonomyTicker} from '../public/downloads/agent-worker.mjs';
 import {createMcpBridge} from '../public/downloads/agent-mcp.mjs';
+import {CLAUDE_FAILURE_CODES,ClaudeAdapterError} from '../public/downloads/claude-code-adapter.mjs';
 
 const runId='10000000-0000-4000-8000-000000000881',otherRun='10000000-0000-4000-8000-000000000882';
 const token='ca_local-runtime-fixture-only',lease='fixture-lease-not-a-real-credential';
@@ -107,7 +108,21 @@ test('adapter failure records a bounded generic report and explicit tool keys re
  const state=memoryState();let reported:any,toolPayload:any;
  const client=fakeClient({callTool:async(_name:string,payload:any)=>{toolPayload=payload;return {result:{value:1}};},fail:async(_id:string,payload:any)=>{reported=payload;return {run:{status:'queued'}};}});
  await workOnce({client,state,signal:controller().signal,execute:async({tools}:any)=>{await assert.rejects(()=>tools.call('workspace_get',{}),/stable requestId/);await tools.call('workspace_get',{}, {requestId:tools.key('workspace')});throw new Error('Sensitive adapter error '+token);}});
- assert.equal(toolPayload.requestId,stableRequestId(runId,'workspace'));assert.notEqual(stableRequestId(runId,'workspace'),stableRequestId(otherRun,'workspace'));assert.equal(reported.error.includes(token),false);assert.match(reported.clientId,/^[0-9a-f-]{36}$/);
+ assert.equal(toolPayload.requestId,stableRequestId(runId,'workspace'));assert.notEqual(stableRequestId(runId,'workspace'),stableRequestId(otherRun,'workspace'));assert.equal(reported.error.includes(token),false);assert.match(reported.clientId,/^[0-9a-f-]{36}$/);assert.equal(Object.hasOwn(reported,'retryable'),false);
+});
+
+test('only allowlisted Claude failures record terminal disposition and safe local codes',async()=>{
+ for(const code of CLAUDE_FAILURE_CODES){const logs:any[]=[];let reported:any;await workOnce({client:fakeClient({fail:async(_id:string,payload:any)=>{reported=payload;return{run:{status:'failed'}};}}),state:memoryState(),log:(entry:any)=>logs.push(entry),execute:async()=>{throw new ClaudeAdapterError(code,'Private prompt and provider diagnostics: '+token);}});assert.equal(reported.retryable,false);assert.equal(logs.find(row=>row.event==='adapter-failed').code,code);assert(!JSON.stringify(logs).includes(token));assert(!reported.error.includes(token));}
+ const leaked='PRIVATE_ERROR_'+token;
+ for(const error of [Object.assign(new Error(leaked),{code:leaked,retryable:false}),Object.assign(new Error(leaked),{name:'ClaudeAdapterError',code:leaked,retryable:false}),Object.assign(new Error(leaked),{name:'ClaudeAdapterError',code:'CLAUDE_TOKEN_LIMIT',retryable:true})]){const logs:any[]=[];let reported:any;await workOnce({client:fakeClient({fail:async(_id:string,payload:any)=>{reported=payload;return{run:{status:'queued'}};}}),state:memoryState(),log:(entry:any)=>logs.push(entry),execute:async()=>{throw error;}});assert.equal(Object.hasOwn(reported,'retryable'),false);assert.equal(logs.find(row=>row.event==='adapter-failed').code,'ADAPTER_FAILED');assert(!JSON.stringify(logs).includes(leaked));assert(!reported.error.includes(leaked));}
+});
+
+test('terminal Claude failure survives a lost acknowledgement without executing the adapter again',async()=>{
+ const state=memoryState(),payloads:any[]=[];let executions=0;
+ const client=fakeClient({fail:async(_id:string,payload:any)=>{payloads.push(structuredClone(payload));if(payloads.length===1)throw new RuntimeError(503,'SERVER_ERROR');return{run:{status:'failed'},replayed:true};}});
+ const execute=async()=>{executions++;throw new ClaudeAdapterError('CLAUDE_TOKEN_LIMIT','Private diagnostic '+token);};
+ await assert.rejects(()=>workOnce({client,state,execute}),{status:503});assert.equal(state.saved.job.outcome.payload.retryable,false);
+ const restarted=memoryState(state.saved);restarted.data.job.leaseExpiresAt=new Date(Date.now()-60000).toISOString();await workOnce({client,state:restarted,execute});assert.equal(executions,1);assert.deepEqual(payloads[1],payloads[0]);assert.equal(restarted.data.job,null);
 });
 
 test('adapter deadlines propagate to tools while preserving lease cancellation and legacy calls',async()=>{

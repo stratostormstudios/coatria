@@ -4,7 +4,7 @@ import {z} from 'zod';
 import {agentRuntimeOpenApi} from '../src/lib/agent-runtime-openapi';
 import {pluginInstallInput,pluginPatchInput,pluginCatalogResponse} from '../src/lib/plugin-marketplace';
 import {missionCreateInput,missionPatchInput} from '../src/lib/agent-missions';
-import {runInput} from '../src/lib/agent-runs';
+import {runInput,failInput,completeInput} from '../src/lib/agent-runs';
 
 const spec:any=agentRuntimeOpenApi;
 const installations='/api/companies/{companyId}/plugin-installations';
@@ -17,6 +17,16 @@ test('agent identity contract authenticates the token without disclosing credent
  assert.deepEqual(identity.security,[{agentBearer:[]}]);assert.equal(identity.requestBody,undefined);assert.deepEqual(identity.parameters,[]);
  const agent=identity.responses['200'].content['application/json'].schema.properties.agent;
  assert.equal(agent.additionalProperties,false);assert.deepEqual(Object.keys(agent.properties).sort(),['capabilities','companyId','id','name','status']);
+});
+
+test('failure contract documents optional terminal disposition without changing completion or legacy defaults',()=>{
+ const path='/api/agent/runs/{runId}/fail',schema=request(path,'post'),operation=spec.paths[path].post;
+ assert.equal(schema.additionalProperties,false);assert.equal(schema.properties.retryable.type,'boolean');assert(!schema.required.includes('retryable'));assert.equal(schema.properties.retryable.default,undefined);assert.deepEqual(schema,input(failInput));
+ assert.match(operation.description,/retryable:false/);assert.match(operation.description,/Omitted and true remain equivalent/);assert.match(operation.description,/current authority and the original lease proof/);assert.deepEqual(operation.security,[{agentBearer:[]}]);
+ const body={leaseToken:'a-valid-length-lease-proof',clientId:'00000000-0000-4000-8000-000000000001',error:'Terminal runtime error'};
+ assert.deepEqual(failInput.parse(body),body);for(const retryable of[true,false])assert.equal(failInput.parse({...body,retryable}).retryable,retryable);
+ for(const retryable of['false',null,0])assert.equal(failInput.safeParse({...body,retryable}).success,false);
+ assert.equal(completeInput.safeParse({leaseToken:body.leaseToken,clientId:body.clientId,result:'Done',retryable:false}).success,false);
 });
 
 test('marketplace and autonomous APIs expose current strict input contracts and cannot accept credentials',()=>{
