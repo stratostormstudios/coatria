@@ -17,8 +17,8 @@ unrelated 150 GB model volume in US-NE-1 and the retained 10 GB Coatria worker-s
 volume in US-NC-2. Neither is a selected media test destination. This was the
 inventory before creation; the approved dedicated volume above now exists.
 
-The 2026-09-20 production release is source `e4d5fc1`, deployment
-`dpl_5ww51ibkeL5PsWgGtvEbDsKirowE`. Its public health returned ready and its
+The verified 2026-09-20 production snapshot is source `41bbaf0`, deployment
+`dpl_8eod368XV6JFJQMiMw35pUQy7ovf`. Its public health returned ready and its
 published agent API reported **1.12.0 / 175 paths**. Separate Vercel and Neon
 read-backs verified that source, migrations 030–033 and the real restricted
 application login. Archive and gateway activation remain disabled; their

@@ -1,13 +1,15 @@
-# Generated media workflow (unreleased)
+# Generated media workflow
 
 `src/lib/studio-generated-protocol.ts` defines an opt-in version 2 contract for
-new Higgsfield projects. The current checkout connects typed project creation,
+new Higgsfield projects. The application connects typed project creation,
 verified-archive registration, independent review, internal packaging and
-authenticated external-client delivery. It has not yet been released to
-production. Migrations 030–033 and their restricted runtime/gateway grants must
-ship together with the version-aware API after PostgreSQL and integration
-qualification. This does not enable archive workers, paid generation or qualify
-a production storage gateway by itself.
+authenticated external-client delivery. Source `41bbaf0`, migrations 030–033
+and matching application runtime grants are verified in production as of
+2026-09-20. See [RELEASE_STATUS.md](RELEASE_STATUS.md) for authoritative deployment
+and CI evidence. Archive and storage-gateway execution remain disabled; their
+separate service roles and actual host/storage qualification are outstanding.
+Application deployment does not authorize paid generation or establish a
+completed provider-to-client pilot.
 
 Each project has one output kind. Image work units require one PNG, JPEG or
 WebP with reviewed dimensions and an explicit color requirement. Video work
@@ -64,7 +66,7 @@ authority. A completed archive's expired transfer lease is not reused as a
 registration lease.
 
 Existing frame-based parsers, v1 request digests and DCC promotion records stay
-unchanged. The [generated client delivery candidate](STUDIO_CLIENT_DELIVERY.md)
+unchanged. [Generated client delivery](STUDIO_CLIENT_DELIVERY.md)
 adds exact-version, external-account storage grants after independent delivery
 handoff acceptance. Client-visible schema-v2 snapshots pin each generated file;
 authenticated range downloads renew scoped access and verify complete bytes
@@ -77,16 +79,18 @@ v1 pairing as verified generated evidence.
 PostgreSQL CI has exercised concurrent registration, duplicate-source rejection,
 lease expiry after lock waits, review revocation and restricted evidence grants.
 Connected agent registration and legacy compatibility also have automated tests.
-The exact candidate still requires a complete passing CI run before release.
+The deployed source passed all four CI jobs; exact counts and live checks are
+recorded in [RELEASE_STATUS.md](RELEASE_STATUS.md).
 
 The [generated-media workspace](GENERATED_MEDIA_WORKSPACE.md) now provides typed
 creation, exact-source registration, independent review, internal packaging,
 client invitations, checksum-verified downloads and read-only authenticated
 client response provenance. Its browser lane uses synthetic API/storage fixtures.
 
-Remaining product work includes a separately qualified archive host and actual
-Runpod volume transport, plus the [bounded agent continuation candidate](GENERATED_MEDIA_CONTINUATION_PLAN.md).
-Client delivery's implemented exact-version, external-account download grants
-and gateway still require the matching production rollout and qualification. Local synthetic
-database fixtures prove authority rules; they do not prove a real provider
-transfer or certify client media quality.
+The deployed application also includes default-off [bounded agent continuation](GENERATED_MEDIA_CONTINUATION_PLAN.md)
+and human-applied [creative revision rounds](STUDIO_GENERATED_REVISIONS.md).
+Remaining operational work includes the separately restricted archive/gateway
+service roles, actual host and Runpod volume qualification, then an authorized
+generation-to-client pilot with independent human QC and genuine client
+acceptance. Local synthetic database fixtures prove authority rules; they do
+not prove a real provider transfer or certify client media quality.

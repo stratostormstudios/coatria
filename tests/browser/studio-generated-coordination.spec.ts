@@ -3,19 +3,19 @@ import {studioCoordinationInput,type StudioCoordinationPolicy,type StudioCoordin
 import {generatedFixture,mockGenerated,openGenerated,noOverflow,ids,uuid,date} from './studio-generated-fixture';
 
 test.beforeEach(({baseURL})=>{test.skip(!baseURL||!['localhost','127.0.0.1'].includes(new URL(baseURL).hostname),'Synthetic fixtures require a local origin.');});
-const coordinator=uuid(70),specialist=uuid(71),option='Allow verified generated output continuations';
+const coordinator=uuid(70),specialist=uuid(71),option='Allow verified generated output continuations',generationOption='Let the coordinator also handle generation';
 const review=(page:Page)=>page.getByRole('checkbox',{name:/^I reviewed the coordinator/});
 const policyWrites=(fixture:ReturnType<typeof coordinationFixture>)=>fixture.state.writes.filter(write=>write.path.endsWith('/coordination'));
-function coordinationFixture({enabled,legacy=false,policy=true}:{enabled?:boolean;legacy?:boolean;policy?:boolean}={}){
+function coordinationFixture({enabled,generation,singleAgent=false,legacy=false,policy=true}:{enabled?:boolean;generation?:boolean;singleAgent?:boolean;legacy?:boolean;policy?:boolean}={}){
  const state=generatedFixture();
- for(const role of state.detail.roles){if(role.key==='producer'){role.agentId=coordinator;role.humanId=null;role.agentName='Production coordinator';}if(role.key==='comp'){role.agentId=specialist;role.humanId=null;role.agentName='Generation specialist';}}
- state.detail.workItems[0].agentId=specialist;state.detail.workItems[0].humanId=null;
- const initial:StudioCoordinationPolicy={projectId:legacy?state.legacy.id:ids.project,coordinatorAgentId:coordinator,allowedRoleKeys:['comp'],status:'active',effectiveStatus:'active',blocker:null,revision:4,maxRuns:5,runsStarted:2,remainingRuns:3,maxConcurrentRuns:1,approvedBy:ids.user,expiresAt:'2027-01-01T00:00:00.000Z',updatedAt:date,profileRevision:1,...enabled!==undefined?{generatedContinuations:enabled}:{}};
+ for(const role of state.detail.roles){if(role.key==='producer'){role.agentId=coordinator;role.humanId=null;role.agentName='Production coordinator';}if(role.key==='comp'){role.agentId=singleAgent?coordinator:specialist;role.humanId=null;role.agentName=singleAgent?'Production coordinator':'Generation specialist';}}
+ state.detail.workItems[0].agentId=singleAgent?coordinator:specialist;state.detail.workItems[0].humanId=null;
+ const initial:StudioCoordinationPolicy={projectId:legacy?state.legacy.id:ids.project,coordinatorAgentId:coordinator,allowedRoleKeys:['comp'],status:'active',effectiveStatus:'active',blocker:null,revision:4,maxRuns:5,runsStarted:2,remainingRuns:3,maxConcurrentRuns:1,approvedBy:ids.user,expiresAt:'2027-01-01T00:00:00.000Z',updatedAt:date,profileRevision:1,...enabled!==undefined?{generatedContinuations:enabled}:{},...generation!==undefined?{coordinatorGeneration:generation}:{}};
  const snapshot:StudioCoordinationSnapshot={policy:policy?initial:null,dispatches:[],budgetUnit:'specialist_runs',budgetScope:'coordinator_dispatched_runs_only',startsWorkers:false,startsInference:false};
  let failNext=false,commitBeforeFailure=false;
  state.handler=async(route,url)=>{
   if(url.pathname.endsWith('/workspace')){
-   await route.fulfill({json:{company:state.company,rooms:[],members:[{...state.user,userId:state.user.id,role:state.company.role}],agents:[coordinator,specialist].map((id,index)=>({id,name:index?'Generation specialist':'Production coordinator',pluginInstallationId:uuid(72+index),harness:'codex',status:'active',description:'Synthetic fixture',capabilities:['studio.read','studio.write','tasks.write'],createdBy:ids.user,lastSeenAt:date})),tasks:[],messages:[],presence:[],activity:[],drives:[],openings:[],applications:[],layout:[]}});return true;
+   await route.fulfill({json:{company:state.company,rooms:[],members:[{...state.user,userId:state.user.id,role:state.company.role}],agents:(singleAgent?[coordinator]:[coordinator,specialist]).map((id,index)=>({id,name:index?'Generation specialist':'Production coordinator',pluginInstallationId:uuid(72+index),harness:'codex',status:'active',description:'Synthetic fixture',capabilities:['studio.read','studio.write','tasks.write','creative.read','creative.write','storage.read'],createdBy:ids.user,lastSeenAt:date})),tasks:[],messages:[],presence:[],activity:[],drives:[],openings:[],applications:[],layout:[]}});return true;
   }
   if(legacy&&url.pathname.endsWith('/'+state.legacy.id)){
    await route.fulfill({json:{...state.detail,project:state.legacy,shots:[]}});return true;
@@ -82,8 +82,8 @@ test('a background policy refresh keeps the exact reviewed revision and request 
 
 test('legacy policy saves and pauses keep the original omitted-field contract',async({page})=>{
  const fixture=coordinationFixture({legacy:true});await openCoordination(page,fixture,true);
- await expect(page.getByText(/Verified generated output continuations:/)).toHaveCount(0);
- await page.getByRole('button',{name:'Review policy',exact:true}).click();await expect(page.getByRole('checkbox',{name:option,exact:true})).toHaveCount(0);
+ await expect(page.getByText(/Verified generated output continuations:|Coordinator-owned generation:/)).toHaveCount(0);
+ await page.getByRole('button',{name:'Review policy',exact:true}).click();await expect(page.getByRole('checkbox',{name:option,exact:true})).toHaveCount(0);await expect(page.getByRole('checkbox',{name:generationOption,exact:true})).toHaveCount(0);
  await review(page).check();await page.getByRole('button',{name:'Save reviewed policy',exact:true}).click();await expect(page.getByRole('dialog')).toHaveCount(0);
  await page.getByRole('button',{name:'Pause delegation',exact:true}).click();await expect(page.getByRole('button',{name:'Pause delegation',exact:true})).toHaveCount(0);
  for(const write of policyWrites(fixture)){expect(write.body).not.toHaveProperty('generatedContinuations');expect(Object.keys(write.body).sort()).toEqual(['allowedRoleKeys','clientId','coordinatorAgentId','expiresAt','maxConcurrentRuns','maxRuns','revision','status'].sort());}
@@ -91,11 +91,42 @@ test('legacy policy saves and pauses keep the original omitted-field contract',a
 });
 
 test('read-only members see generated continuation source history without policy controls',async({page})=>{
- const fixture=coordinationFixture({enabled:true});fixture.state.company.role='member';
- fixture.snapshot.dispatches=[{workItemId:ids.work,parentRunId:uuid(80),childRunId:uuid(81),coordinatorAgentId:coordinator,specialistAgentId:specialist,policyRevision:4,createdAt:date,status:'queued',archiveId:ids.archive,sourceChildRunId:uuid(82),artifactId:ids.artifact},{workItemId:ids.work,parentRunId:uuid(83),childRunId:uuid(82),coordinatorAgentId:coordinator,specialistAgentId:specialist,policyRevision:3,createdAt:date,status:'failed'}];
+ const fixture=coordinationFixture({enabled:true,generation:true,singleAgent:true});fixture.state.company.role='member';
+ fixture.snapshot.dispatches=[{workItemId:ids.work,parentRunId:uuid(80),childRunId:uuid(81),coordinatorAgentId:coordinator,specialistAgentId:coordinator,policyRevision:4,createdAt:date,status:'queued',archiveId:ids.archive,sourceChildRunId:uuid(82),artifactId:ids.artifact},{workItemId:ids.work,parentRunId:uuid(83),childRunId:uuid(82),coordinatorAgentId:coordinator,specialistAgentId:specialist,policyRevision:3,createdAt:date,status:'failed'}];
  await openCoordination(page,fixture);await expect(page.getByRole('button',{name:/Review policy|Set delegation policy|Pause delegation/})).toHaveCount(0);
  await expect(page.getByText('Verified generated output continuation',{exact:true})).toHaveCount(1);
+ await expect(page.getByText(/Coordinator-owned generation:/)).toContainText('Opted in');await expect(page.getByText('Coordinator-owned continuation · separate request',{exact:true})).toHaveCount(1);
  const generated=page.getByRole('listitem').filter({has:page.getByText('Verified generated output continuation',{exact:true})});await generated.getByText('Request provenance',{exact:true}).click();
  await expect(generated).toContainText('Verified archive: '+ids.archive);await expect(generated).toContainText('Original specialist request: '+uuid(82));await expect(generated).toContainText('Registered artifact: '+ids.artifact);
  await page.setViewportSize({width:390,height:844});await noOverflow(page);expect(policyWrites(fixture)).toHaveLength(0);expect(fixture.state.unexpected).toEqual([]);
+});
+
+test('one agent can opt into its generation role with exact retry, successful-cycle explanation and unchanged limits',async({page},testInfo)=>{
+ await page.clock.install();const fixture=coordinationFixture({singleAgent:true,policy:false});
+ // An owned planning role remains ineligible even when generation is enabled.
+ fixture.state.detail.workItems.push({...fixture.state.detail.workItems[0],id:uuid(90),taskId:uuid(91),title:'Producer planning',roleKey:'producer',stage:'estimate',execution:'agent'});
+ const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
+ await openCoordination(page,fixture);await expect(page.getByText(/Coordinator-owned generation:/)).toContainText('Off');await page.getByRole('button',{name:'Set delegation policy',exact:true}).click();
+ const toggle=page.getByRole('checkbox',{name:generationOption,exact:true}),ownRole=page.getByRole('checkbox',{name:/separate generation request/}),save=page.getByRole('button',{name:'Save reviewed policy',exact:true});
+ await expect(toggle).not.toBeChecked();await expect(ownRole).toHaveCount(0);await review(page).check();await toggle.check();await expect(review(page)).not.toBeChecked();
+ await expect(ownRole).toHaveCount(1);await expect(page.getByRole('group',{name:'Specialist roles this coordinator may request'}).getByRole('checkbox')).toHaveCount(1);
+ await ownRole.check();await toggle.uncheck();await expect(ownRole).toHaveCount(0);await expect(save).toBeDisabled();await toggle.check();await expect(ownRole).not.toBeChecked();await ownRole.check();
+ await expect(page.getByRole('dialog')).toContainText('no spending approval');await expect(page.getByRole('dialog')).toContainText('successfully');await expect(page.getByRole('checkbox',{name:option,exact:true})).not.toBeChecked();
+ await page.getByLabel('Policy state',{exact:true}).selectOption('active');await page.screenshot({path:testInfo.outputPath('coordinator-generation-desktop.png'),fullPage:true});
+ await page.setViewportSize({width:390,height:844});await noOverflow(page);await page.screenshot({path:testInfo.outputPath('coordinator-generation-mobile.png'),fullPage:true});
+ await review(page).check();fixture.failOnce(true);await save.click();await expect(page.getByRole('dialog').getByRole('alert')).toContainText('Synthetic lost acknowledgement');
+ await page.clock.fastForward(10_001);await expect(page.getByText(/Coordinator-owned generation:/)).toContainText('Opted in');await save.click();await expect(page.getByRole('dialog')).toHaveCount(0);
+ const writes=policyWrites(fixture);expect(writes).toHaveLength(2);expect(writes[1].body).toEqual(writes[0].body);expect(writes[0].body).toMatchObject({revision:0,coordinatorGeneration:true,allowedRoleKeys:['comp'],maxRuns:5,maxConcurrentRuns:1});expect(writes[0].body).not.toHaveProperty('generatedContinuations');
+ await page.getByRole('button',{name:'Review policy',exact:true}).click();await expect(toggle).toBeChecked();await expect(ownRole).toBeChecked();await review(page).check();await save.click();await expect(page.getByRole('dialog')).toHaveCount(0);
+ await page.getByRole('button',{name:'Pause delegation',exact:true}).click();await expect(page.getByRole('button',{name:'Pause delegation',exact:true})).toHaveCount(0);
+ expect(policyWrites(fixture)[2].body.coordinatorGeneration).toBe(true);expect(policyWrites(fixture)[3].body).toMatchObject({coordinatorGeneration:true,status:'paused',maxRuns:5,maxConcurrentRuns:1});expect(errors).toEqual([]);expect(fixture.state.unexpected).toEqual([]);
+});
+
+test('existing v2 policies keep omitted generation opt-in and explicit disable retains other specialists',async({page})=>{
+ const fixture=coordinationFixture();await openCoordination(page,fixture);await page.getByRole('button',{name:'Review policy',exact:true}).click();
+ const toggle=page.getByRole('checkbox',{name:generationOption,exact:true}),save=page.getByRole('button',{name:'Save reviewed policy',exact:true});
+ await expect(toggle).not.toBeChecked();await review(page).check();await save.click();await expect(page.getByRole('dialog')).toHaveCount(0);expect(policyWrites(fixture)[0].body).not.toHaveProperty('coordinatorGeneration');
+ await page.getByRole('button',{name:'Review policy',exact:true}).click();await toggle.check();await review(page).check();await save.click();await expect(page.getByRole('dialog')).toHaveCount(0);
+ await page.getByRole('button',{name:'Review policy',exact:true}).click();await expect(toggle).toBeChecked();await toggle.uncheck();await expect(page.getByRole('checkbox',{name:/Generation specialist/})).toBeChecked();await review(page).check();await save.click();await expect(page.getByRole('dialog')).toHaveCount(0);
+ expect(policyWrites(fixture)[2].body).toMatchObject({coordinatorGeneration:false,allowedRoleKeys:['comp']});expect(fixture.state.unexpected).toEqual([]);
 });

@@ -1,6 +1,6 @@
 # Generated-media revision rounds
 
-This candidate closes the creative change-request loop for image, video and audio projects. It requires migration 033, the matching application and restricted runtime/gateway grants. It has not been deployed to production.
+The application closes the reviewed creative change-request loop for image, video and audio projects. Source `41bbaf0`, migrations 030–033 and matching application runtime grants are verified in production as of 2026-09-20. [RELEASE_STATUS.md](RELEASE_STATUS.md) is the authority for the deployment and passing CI evidence. Archive and storage-gateway execution remain disabled pending their separate service roles and actual host/storage qualification; a genuine provider-to-client pilot is still outstanding.
 
 An authenticated external client first records `changes_requested` against an exact delivery package. The producer drafts a plan linked to that share, receipt and package digest. Every existing deliverable must be classified as **regenerate** or **keep its approved version**, with at least one regeneration. Regenerated items carry concrete correction instructions. Retained items pin the original artifact, independent review, storage version and hashes.
 
@@ -37,4 +37,4 @@ The stock objective fits the existing 3,000-character mission limit. Existing sa
 
 This slice preserves the existing approved technical specification and deliverable set. Changes to duration requirements, dimensions, codec, unit count, commercial terms or technical scope require a separate scope-change workflow. A studio approval is not a client's acceptance of changed commercial scope.
 
-The pilot permits at most 20 applied rounds and 200 saved plans per project, alongside the existing artifact and package limits. It does not authorize automatic generation, credit spending, file transfer, client messaging or acceptance. Runpod live-storage conformance, an actual qualified archive host, production rollout and a real independently reviewed client pilot remain separate release steps.
+The pilot permits at most 20 applied rounds and 200 saved plans per project, alongside the existing artifact and package limits. It does not authorize automatic generation, credit spending, file transfer, client messaging or acceptance. The application/schema rollout is complete. Runpod live-storage conformance, the separately restricted archive/gateway services and actual host qualification, followed by an authorized generation with independent human QC and genuine client acceptance, remain operational acceptance steps.

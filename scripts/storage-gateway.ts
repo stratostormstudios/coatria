@@ -3,12 +3,25 @@ import {Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 import {createProjectStorageGateway} from '../src/lib/project-storage-gateway';
 import {database} from '../src/lib/db';
+import {assertProjectStorageGatewayDatabase,ProjectStorageGatewayPreflightError} from '../src/lib/project-storage-preflight';
+import {hostingEncryptionConfigured} from '../src/lib/studio-hosting';
 
+async function main(){
+const args=process.argv.slice(2),preflight=args.length===1&&args[0]==='--preflight';
+if(args.length&&!preflight)throw new Error('Invalid gateway arguments.');
 if(!process.env.DATABASE_URL||!process.env.COATRIA_HOSTING_KEYRING)throw new Error('Storage gateway database and credential vault must be configured.');
+if(!hostingEncryptionConfigured())throw new Error('Invalid storage credential vault.');
 const port=Number(process.env.PORT||4190),host=process.env.HOST||'127.0.0.1';
 if(!Number.isInteger(port)||port<1||port>65535)throw new Error('Invalid gateway port.');
 const appOrigin=new URL(process.env.APP_URL||'https://coatria.com').origin;
 if(process.env.NODE_ENV==='production'&&!appOrigin.startsWith('https://'))throw new Error('Production requires an HTTPS application origin.');
+const pool=database();let serving=false;
+try{
+ // Inspect the actual authenticated session before opening HTTP or polling the
+ // verification queue. SET ROLE from an owner session is not a service LOGIN.
+ const client=await pool.connect();let dbCheck;
+ try{dbCheck=await assertProjectStorageGatewayDatabase(client);}finally{client.release();}
+ if(preflight){console.log(JSON.stringify({event:'storage-gateway-preflight-passed',database:dbCheck,listening:false,workClaimed:false}));return;}
 const gateway=createProjectStorageGateway({allowedOrigins:[appOrigin]});
 let active=0,verifying=false,closing=false;
 const server=createServer(async(req,res)=>{
@@ -26,7 +39,12 @@ const server=createServer(async(req,res)=>{
  finally{active--;}
 });
 server.requestTimeout=5*60*1000;server.headersTimeout=15000;server.keepAliveTimeout=5000;server.maxHeadersCount=40;
+await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(port,host,()=>{server.removeListener('error',reject);resolve();});});
+serving=true;
 const worker=setInterval(()=>{if(verifying||closing)return;verifying=true;void gateway.verifyNext().catch(()=>{console.error('Storage verification queue unavailable.');}).finally(()=>{verifying=false;});},2000);
-server.listen(port,host,()=>console.log(`Coatria storage transfer service listening on ${host}:${port}.`));
+console.log(JSON.stringify({event:'storage-gateway-started',role:dbCheck.role}));
 async function stop(){if(closing)return;closing=true;clearInterval(worker);server.close();server.closeIdleConnections();const deadline=Date.now()+30000;while((active||verifying)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,250));await database().end();process.exit(0);}
 process.on('SIGTERM',()=>void stop());process.on('SIGINT',()=>void stop());
+}finally{if(!serving)await pool.end();}
+}
+void main().catch(error=>{console.error(JSON.stringify({event:'storage-gateway-startup-failed',code:error instanceof ProjectStorageGatewayPreflightError?error.code:'STORAGE_GATEWAY_CONFIGURATION_INVALID'}));process.exitCode=1;});

@@ -1,18 +1,26 @@
-# Generated-media continuation — implementation candidate
+# Generated-media continuation
 
-**Implemented on the development branch; not deployed.** This document does
-not approve inference, generation, transfers or production migrations. Existing policy
-approvals must not acquire the proposed capability automatically. The v2
-generated-media workflow itself remains subject to its release gates in
-[STUDIO_GENERATED_MEDIA.md](STUDIO_GENERATED_MEDIA.md).
+**Application deployed; operational pilot still pending.** The verified
+2026-09-20 release at source `41bbaf0` includes this default-off continuation,
+with migrations 030–033 and application runtime grants verified in production.
+[RELEASE_STATUS.md](RELEASE_STATUS.md) is the authority for deployment and test
+evidence. Archive and storage-gateway execution remain disabled; their separate
+service roles, host/storage qualification and an authorized provider-to-client
+pilot are still outstanding. Existing policy approvals do not acquire this
+capability automatically. See [STUDIO_GENERATED_MEDIA.md](STUDIO_GENERATED_MEDIA.md)
+for the workflow boundaries.
 
-## Gap addressed and manual alternative
+## Historical gap and manual alternative
+
+The following gap describes the architecture before migration 031. The
+source-bound continuation documented below now addresses it; ordinary dispatch
+and the legacy DCC follow-up retain their original meanings.
 
 A specialist can claim a v2 generation task and prepare an exact Higgsfield
 request, then stop for human credit approval. Provider execution and a
 separately approved archive may finish after that specialist run ends.
 
-The original coordinator dispatch cannot resume that task against its verified archive:
+The original coordinator dispatch could not resume that task against its verified archive:
 `studio_work_dispatch` replays the original child for an already dispatched
 work item; its continuation selector supports only DCC `executionJobId`.
 Ordinary dispatch permits completed DCC work to resume, but a creative task
@@ -153,18 +161,18 @@ acceptance, provider/worker qualification and external client delivery keep
 their existing independent boundaries. Metadata reads do not inspect pixels.
 
 
-## Candidate qualification
+## Release qualification
 
-The implementation includes full image/video/audio leased-tool fixtures, exact-source artifact reuse, different transport IDs at every step, current policy/source/storage/sponsor revocation, wrong coordinator requester rejection, scoped context and completion only after submission. A separate persistence fixture tests deferred source relationships, append-only runtime permissions and cross-column step uniqueness. Real PostgreSQL races run in CI; synthetic emulator coverage cannot replace them. Migration 031 must precede this API/UI release and the complete runtime grant file must be applied transactionally by the database owner. Existing policies stay off until a current administrator explicitly enables a new revision.
+The implementation includes full image/video/audio leased-tool fixtures, exact-source artifact reuse, different transport IDs at every step, current policy/source/storage/sponsor revocation, wrong coordinator requester rejection, scoped context and completion only after submission. A separate persistence fixture tests deferred source relationships, append-only runtime permissions and cross-column step uniqueness. Real PostgreSQL races run in the passing release CI recorded in [RELEASE_STATUS.md](RELEASE_STATUS.md); synthetic emulator coverage cannot replace them. Migration 031 and the matching application runtime grants are verified in production as part of migrations 030–033. Existing policies stay off until a current administrator explicitly enables a new revision.
 
 The UI exposes that opt-in and identifies generated continuation history. New generated coordinator missions include archive candidate/history reads and exact dispatch instructions. Saving a policy or paused mission starts no work. Jev remains a separate optional advisory design in [JEV_DECISION_LAYER.md](JEV_DECISION_LAYER.md); it has no execution or approval authority here.
 
 
 ## Concurrent configuration changes
 
-The specialist's own credential/grant changes and explicit policy pause serialize with its held authority rows. New actions after a committed company-role, profile or coordinator-plugin change fail the policy fingerprint check. An unrelated configuration edit may overlap one action already authorized in flight; the edit is not a universal cancellation barrier for that action. Busy production roles cannot be reassigned through studio setup. This candidate does not claim that every configuration edit synchronously cancels all workers; use explicit policy pause, request cancellation and host controls for that operational purpose.
+The specialist's own credential/grant changes and explicit policy pause serialize with its held authority rows. New actions after a committed company-role, profile or coordinator-plugin change fail the policy fingerprint check. An unrelated configuration edit may overlap one action already authorized in flight; the edit is not a universal cancellation barrier for that action. Busy production roles cannot be reassigned through studio setup. To stop workers, use explicit policy pause, request cancellation and host controls for that operational purpose.
 
 
 ## Storage gateway compatibility
 
-After migration031, apply the matching storage-gateway grants transactionally before running the matching gateway binary. The gateway receives SELECT only on company_id and child_run_id of the continuation table, allowing it to reject generated-child transfers without reading source snapshots, artifact facts or canonical step IDs. Its dedicated stored-lease authorization path retains the existing membership, agent, run and legacy-policy checks. Managed inference continues through the full generated-source authority path. This separation is covered by both scoped continuation tests and the real restricted gateway login/transfer test.
+Before activating the separately deployed gateway, apply its matching restricted grants transactionally and qualify the actual service login, host and storage. The application migration/runtime rollout does not qualify this disabled service. The gateway receives SELECT only on company_id and child_run_id of the continuation table, allowing it to reject generated-child transfers without reading source snapshots, artifact facts or canonical step IDs. Its dedicated stored-lease authorization path retains the existing membership, agent, run and legacy-policy checks. Managed inference continues through the full generated-source authority path. This separation is covered by both scoped continuation tests and the real restricted gateway login/transfer test.
