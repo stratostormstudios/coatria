@@ -33,7 +33,13 @@ test('PostgreSQL separates archive approval authority from the dedicated transfe
  globalThis.fetch=async()=>{counts.network++;throw Error('Real network is forbidden in this database permissions suite');};
  const use=(pool:Pool)=>{(globalThis as any).coatriaPool=pool;};
  const identity=async(pool:Pool|PoolClient,role:string)=>{const row=(await pool.query('SELECT current_user,session_user,pg_backend_pid() AS pid')).rows[0];assert.equal(row.current_user,role);assert.equal(row.session_user,role);return row.pid as number;};
- const denied=async(pool:Pool,role:string,sql:string)=>{await assert.rejects(pool.query(sql),{code:'42501'},sql);await identity(pool,role);};
+ const denied=async(pool:Pool,role:string,sql:string)=>{
+  // Pool.query removes clients on query errors. Keep this standalone denial on
+  // one checked-out connection so cleanup never races a discarded backend.
+  const client=await pool.connect();
+  try{const pid=await identity(client,role);await assert.rejects(client.query(sql),{code:'42501'},sql);assert.equal(await identity(client,role),pid,'A denied statement must retain this authenticated client');}
+  finally{client.release();}
+ };
  const clean=(value:unknown)=>{const text=JSON.stringify(value);for(const secret of[locator,oauth,storageSecret,'sealed','lease_id'])assert(!text.includes(secret),secret+' leaked into public archive output');};
  try{
   await control.query(`CREATE DATABASE ${dbName}`);created=true;owner=new Pool({connectionString:ownerUrl.href,max:2,connectionTimeoutMillis:10000});
@@ -122,6 +128,16 @@ test('PostgreSQL separates archive approval authority from the dedicated transfe
  }finally{
   globalThis.fetch=prior.fetch;if(prior.pool)(globalThis as any).coatriaPool=prior.pool;else delete(globalThis as any).coatriaPool;
   for(const [key,value]of Object.entries({DATABASE_URL:prior.url,COATRIA_HOSTING_KEYRING:prior.key,COATRIA_HIGGSFIELD_ARCHIVE_ENABLED:prior.enabled})){if(value===undefined)delete process.env[key];else process.env[key]=value;}
-  await workerPool?.end();await runtime?.end();await owner?.end();if(created)await control.query(`DROP DATABASE ${dbName} WITH (FORCE)`);for(const role of createdRoles)await control.query(`DROP ROLE ${role}`);await control.end();if(scratchRoot)await rm(scratchRoot,{recursive:true,force:true});
+  try{
+   await workerPool?.end();await runtime?.end();await owner?.end();
+   if(created){
+    // Pool.end waits for its tracked clients; the explicit reconnection test
+    // also removes a client. Wait for PostgreSQL to observe every disconnect.
+    const deadline=performance.now()+10000;
+    while(true){const remaining=(await control.query('SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname=$1',[dbName])).rows[0].count;if(remaining===0)break;assert(performance.now()<deadline,'Disposable archive database connections did not drain');await new Promise(resolve=>setTimeout(resolve,25));}
+    await control.query(`DROP DATABASE ${dbName}`);
+   }
+   for(const role of createdRoles)await control.query(`DROP ROLE ${role}`);
+  }finally{await control.end();if(scratchRoot)await rm(scratchRoot,{recursive:true,force:true});}
  }
 });
