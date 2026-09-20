@@ -61,10 +61,25 @@ does not weaken runtime trust or change shared host-directory permissions.
 - Original C helper/probe built statically with warnings treated as errors.
   Exact compiler/libc package versions and every resulting file hash are saved.
 
-There is no runtime download. No host AppArmor protection or user-namespace
-restriction is broadly disabled. If the host's existing policy does not allow
-the fixed bubblewrap executable to establish the required namespaces, the job
-fails. Any narrowly scoped host policy change needs separate review and a rerun.
+There is no runtime download. Root CI setup downloads only the exact official
+Noble `apparmor-profiles=4.0.1really4.0.1-0ubuntu0.24.04.7` package from signed APT
+indexes and checks its SHA-256
+`bdac5b74d884643653565c52ed7483c9582e646ff72cce8d95d0eb8467a3139c`.
+It extracts only the reviewed ABI4 `bwrap-userns-restrict` profile (1,936 bytes,
+SHA-256 `11d39094f044f0cda0febb3ad517b830301da6b2ce929664af09ee9e4dd264f9`).
+Other package profiles are not installed. This follows Ubuntu's
+[purpose-built bubblewrap policy guidance](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007)
+and the tagged [upstream ABI4 profile](https://gitlab.com/apparmor/apparmor/-/blob/v4.0.1/profiles/apparmor/profiles/extras/bwrap-userns-restrict).
+
+Only `/usr/bin/bwrap` and its capability-denied child profile are activated.
+Setup refuses any already loaded target profile (disk bytes cannot establish
+kernel-policy identity), conflicting or symlinked policy files, local rule
+overrides and disabled/complain overrides. It adds the pair without replacing
+loaded policy. It verifies both profiles are enforcing and that global
+AppArmor/user-namespace settings remain unchanged, with the restriction still
+enabled. No generic unconfined exception, shared networking or NNP change is
+used. The original probe must observe the enforcing `unpriv_bwrap` child stack
+while still proving zero capabilities and denied nested namespace creation.
 
 Preparation creates one capped service subtree with sibling `supervisor` and
 `decoders` groups. The CI root launcher enters `supervisor`, clears supplementary
@@ -100,6 +115,12 @@ Artifacts are `.devdata/media-sandbox-linux/evidence/path-ancestors.json`,
 source hashes, kernel/namespace evidence and numeric resource events. They contain
 no real credentials or provider calls. Only the completed canary sets
 `qualified:true`; preparation alone records `qualified:false`.
+`apparmor-policy.json` also records the exact reviewed policy and before/after
+enforcement/global-setting evidence. Root CI observation after the canary saves
+`apparmor-kernel-denials.json`: bounded categories for relevant synthetic-process
+denials, without kernel message text, arbitrary profile names or file paths.
+The root collector creates its report exclusively under the protected package
+directory, then drops UID/GID/groups before an exclusive no-follow artifact write.
 
 Startup failures retain numeric resource events even before the first test.
 In CI only, a separate diagnostic runs the pinned original conformance probe's

@@ -34,6 +34,12 @@ static int connection_denied(int family,const char *address,int port) {
 }
 static void namespace_id(const char *name,char *output,size_t bytes){char path[80];snprintf(path,sizeof(path),"/proc/self/ns/%s",name);ssize_t length=readlink(path,output,bytes-1);if(length<0)exit(43);output[length]=0;}
 static long long nanoseconds(clockid_t id){struct timespec t;if(clock_gettime(id,&t))exit(44);return (long long)t.tv_sec*1000000000LL+t.tv_nsec;}
+static int enforced_bwrap_stack(char *label){
+ size_t size=strlen(label);while(size&&(label[size-1]=='\n'||label[size-1]=='\r'))label[--size]=0;
+ char *mode=strstr(label," (enforce)");if(!mode||strcmp(mode," (enforce)"))return 0;*mode=0;
+ char *split=strstr(label,"//&");if(!split||strstr(split+3,"//&"))return 0;*split=0;
+ return (!strcmp(label,"bwrap")&&!strcmp(split+3,"unpriv_bwrap"))||(!strcmp(label,"unpriv_bwrap")&&!strcmp(split+3,"bwrap"));
+}
 static int only_loopback(void){struct if_nameindex *all=if_nameindex();if(!all)return 0;int count=0,valid=1;for(struct if_nameindex *p=all;p->if_index;p++){count++;if(strcmp(p->if_name,"lo"))valid=0;}if_freenameindex(all);return valid&&count==1;}
 static int no_routable_default(void){
  FILE *file=fopen("/proc/net/route","r");if(!file)return 0;char line[512],name[16];unsigned long dest,gateway,flags;int valid=1;
@@ -48,6 +54,11 @@ static int no_routable_default(void){
 
 int main(int argc,char **argv){
  if(argc<2)return 40;
+ if(!strcmp(argv[1],"label-check")){
+  const char *cases[]={"bwrap//&unpriv_bwrap (enforce)\n","unpriv_bwrap//&bwrap (enforce)","unpriv_bwrap (enforce)","bwrap (enforce)","bwrap//&unpriv_bwrap (complain)","unknown//&bwrap//&unpriv_bwrap (enforce)","bwrap//&unpriv_bwrap_extra (enforce)","bwrap//&unpriv_bwrap (enforce) garbage"};
+  for(size_t i=0;i<sizeof(cases)/sizeof(cases[0]);i++){char label[512];snprintf(label,sizeof(label),"%s",cases[i]);if(enforced_bwrap_stack(label)!=(i<2))return 42;}
+  puts("label parser ok");return 0;
+ }
  if(!strcmp(argv[1],"boundary")){
   if(argc!=5)return 40;
   char mnt[64],pid[64],net[64],ipc[64],uts[64],user[64],cgroup[64],proc_path[2048];
@@ -62,12 +73,14 @@ int main(int argc,char **argv){
   if(!status)return 41;
   while(getline(&line,&capacity,status)>=0){if(!strncmp(line,"CapEff:",7))sscanf(line+7,"%llx",&caps);if(!strncmp(line,"NoNewPrivs:",11))sscanf(line+11,"%d",&nnp);}free(line);fclose(status);
   int nested_denied=unshare(CLONE_NEWUSER)<0;
+  FILE *attr=fopen("/proc/self/attr/current","r");char label[512]={0};int apparmor_stacked=0;
+  if(attr){if(fgets(label,sizeof(label),attr)&&strlen(label)<sizeof(label)-1&&fgetc(attr)==EOF)apparmor_stacked=enforced_bwrap_stack(label);fclose(attr);}
   int port=atoi(argv[4]);if(port<1||port>65535)return 40;
   int local_denied=connection_denied(AF_INET,"127.0.0.1",port),external_denied=connection_denied(AF_INET,"192.0.2.1",443),ipv6_denied=connection_denied(AF_INET6,"2001:db8::1",443);
   int interfaces=only_loopback(),routes=no_routable_default();
-  printf("{\"interfacesLoopbackOnly\":%s,\"routableDefaultAbsent\":%s}\n",interfaces?"true":"false",routes?"true":"false");
+  printf("{\"interfacesLoopbackOnly\":%s,\"routableDefaultAbsent\":%s,\"apparmorChildStacked\":%s}\n",interfaces?"true":"false",routes?"true":"false",apparmor_stacked?"true":"false");
   printf("{\"hostFileHidden\":%s,\"hostProcHidden\":%s,\"environmentClean\":%s,\"extraHandlesClosed\":%s,\"inputReadonly\":%s,\"rootReadonly\":%s,\"capabilitiesZero\":%s,\"noNewPrivileges\":%s,\"nestedUsernsDenied\":%s,\"localNetworkDenied\":%s,\"externalNetworkDenied\":%s,\"ipv6Denied\":%s,\"namespaces\":{\"mnt\":\"%s\",\"pid\":\"%s\",\"net\":\"%s\",\"ipc\":\"%s\",\"uts\":\"%s\",\"user\":\"%s\",\"cgroup\":\"%s\"}}\n",host_hidden?"true":"false",proc_hidden?"true":"false",env_clean?"true":"false",extra_closed?"true":"false",readonly?"true":"false",root_readonly?"true":"false",caps==0?"true":"false",nnp==1?"true":"false",nested_denied?"true":"false",local_denied?"true":"false",external_denied?"true":"false",ipv6_denied?"true":"false",mnt,pid,net,ipc,uts,user,cgroup);fflush(stdout);nap(300);
-  return host_hidden&&proc_hidden&&env_clean&&extra_closed&&readonly&&root_readonly&&caps==0&&nnp==1&&nested_denied&&local_denied&&external_denied&&ipv6_denied&&interfaces&&routes?0:42;
+  return host_hidden&&proc_hidden&&env_clean&&extra_closed&&readonly&&root_readonly&&caps==0&&nnp==1&&nested_denied&&local_denied&&external_denied&&ipv6_denied&&interfaces&&routes&&apparmor_stacked?0:42;
  }
  if(!strcmp(argv[1],"files")){
   int count=0,fd;while(count<1024&&(fd=open("/dev/null",O_RDONLY|O_CLOEXEC))>=0)count++;int limited=errno==EMFILE;printf("{\"openFiles\":%d,\"limited\":%s}\n",count,limited?"true":"false");return limited?0:42;

@@ -6,6 +6,7 @@ import {spawnSync} from 'node:child_process';
 import {dirname,join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {prepareMediaInspectorCI,MEDIA_INSPECTOR_CI_BUILD} from './prepare-media-inspector-ci.mjs';
+import {prepareMediaAppArmorCI} from './prepare-media-apparmor-ci.mjs';
 
 export const MEDIA_RUNTIME_IMAGE='node@sha256:e5a8dee7bc1e6a215d224a7ef8206f7e77271bc3cabd5febf2beafac0674f174';
 // Includes USN-8779-1 and the follow-up regression correction, never an older
@@ -62,6 +63,7 @@ export async function prepareMediaSandboxCI(){
  // relax runtime trust or chmod a shared host directory to accommodate that.
  await protectedAncestors(packageParent,uid,gid,evidence);await mkdir(base,{mode:0o755});const packageAncestors=await protectedAncestors(base,uid,gid,evidence);
  command('/usr/bin/apt-get',['update','-qq']);command('/usr/bin/apt-get',['install','-y','--no-install-recommends','bubblewrap='+BUBBLEWRAP_PACKAGE,'gcc','libc6-dev']);
+ const apparmor=await prepareMediaAppArmorCI({base,evidence});
  const bwrap='/usr/bin/bwrap',installed=command('/usr/bin/dpkg-query',['-W','-f=${Version}','bubblewrap']).trim();if(installed!==BUBBLEWRAP_PACKAGE)throw Error('Bubblewrap package pin mismatch.');
  const help=command(bwrap,['--help']);for(const option of ['--unshare-user','--unshare-pid','--unshare-net','--unshare-cgroup','--disable-userns','--assert-userns-disabled','--die-with-parent'])if(!help.includes(option))throw Error('Required bubblewrap feature absent.');
  const native=await prepareMediaInspectorCI(),launcher=join(base,'media-sandbox-launch'),probe=join(base,'media-sandbox-probe');
@@ -96,8 +98,8 @@ export async function prepareMediaSandboxCI(){
  for(const path of [serviceRoot,supervisorGroup,cgroupRoot]){await chown(path,uid,gid);await chmod(path,0o700);for(const name of ['cgroup.procs','cgroup.threads','cgroup.subtree_control'])await chown(join(path,name),uid,gid);}
  const hostCanaryPath=join(base,'host-private-key-canary'),canary=randomBytes(32).toString('hex');await writeFile(hostCanaryPath,canary,{flag:'wx',mode:0o600});await chown(hostCanaryPath,uid,gid);
  const qualification={version:1,profiles,serviceRoot,supervisorGroup,cgroupRoot,uid,gid,hostCanaryPath,hostCanarySha256:createHash('sha256').update(canary).digest('hex'),evidence};const qualificationPath=join(base,'qualification.json');await writeFile(qualificationPath,JSON.stringify(qualification,null,2)+'\n',{flag:'wx',mode:0o444});
- await chown(evidence,uid,gid);const sourceHashes={};for(const file of ['scripts/hosting/media-sandbox-launch.c','scripts/hosting/media-sandbox-probe.c','scripts/hosting/prepare-media-sandbox-ci.mjs','scripts/hosting/run-media-sandbox-ci.mjs','scripts/hosting/media-sandbox-linux-canary.mts','scripts/hosting/media-sandbox-startup-diagnostic.mts','src/lib/higgsfield-media-sandbox.ts','src/lib/higgsfield-media-inspection.ts'])sourceHashes[file]=await sha(join(repo,file));
- await writeFile(join(evidence,'setup.json'),JSON.stringify({prepared:true,qualified:false,packageAncestors,sourceHashes,ffmpeg:MEDIA_INSPECTOR_CI_BUILD,runtimeImage:MEDIA_RUNTIME_IMAGE,bubblewrapPackage:installed,bubblewrapSha256:await sha(bwrap),hostPackages:command('/usr/bin/dpkg-query',['-W','gcc','libc6','libc6-dev','libgcc-s1','libcap2','bubblewrap']),profiles,aggregateParentLimits:{memoryBytes:2*1024**3,pids:256,cpu:'200000 100000',swapBytes:0},noHostSecurityDisabled:true,noProviderCalls:true},null,2)+'\n',{mode:0o444});
+ await chown(evidence,uid,gid);const sourceHashes={};for(const file of ['scripts/hosting/media-sandbox-launch.c','scripts/hosting/media-sandbox-probe.c','scripts/hosting/prepare-media-sandbox-ci.mjs','scripts/hosting/run-media-sandbox-ci.mjs','scripts/hosting/media-sandbox-linux-canary.mts','scripts/hosting/media-sandbox-startup-diagnostic.mts','scripts/hosting/prepare-media-apparmor-ci.mjs','scripts/hosting/collect-media-apparmor-ci.mjs','src/lib/higgsfield-media-sandbox.ts','src/lib/higgsfield-media-inspection.ts'])sourceHashes[file]=await sha(join(repo,file));
+ await writeFile(join(evidence,'setup.json'),JSON.stringify({prepared:true,qualified:false,packageAncestors,apparmor,sourceHashes,ffmpeg:MEDIA_INSPECTOR_CI_BUILD,runtimeImage:MEDIA_RUNTIME_IMAGE,bubblewrapPackage:installed,bubblewrapSha256:await sha(bwrap),hostPackages:command('/usr/bin/dpkg-query',['-W','gcc','libc6','libc6-dev','libgcc-s1','libcap2','bubblewrap','apparmor']),profiles,aggregateParentLimits:{memoryBytes:2*1024**3,pids:256,cpu:'200000 100000',swapBytes:0},noHostSecurityDisabled:true,noProviderCalls:true},null,2)+'\n',{mode:0o444});
  if(process.env.GITHUB_ENV)await appendFile(process.env.GITHUB_ENV,'COATRIA_MEDIA_QUALIFICATION='+qualificationPath+'\n');console.log('Pinned media closure and delegated cgroup prepared; adversarial qualification is still required.');return qualificationPath;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)await prepareMediaSandboxCI();

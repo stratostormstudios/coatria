@@ -29,13 +29,17 @@ jobs:
       - name: Typecheck media qualification and diagnostic modules
         run: node node_modules/typescript/bin/tsc --noEmit --allowImportingTsExtensions --strict --skipLibCheck --target ES2022 --module esnext --moduleResolution bundler --esModuleInterop scripts/hosting/media-sandbox-linux-canary.mts scripts/hosting/media-sandbox-startup-diagnostic.test.mts
       - name: Test bounded diagnostic classification and fail-closed invocation
-        run: node --import tsx --test scripts/hosting/media-sandbox-startup-diagnostic.test.mts
+        run: node --import tsx --test scripts/hosting/media-sandbox-startup-diagnostic.test.mts scripts/hosting/media-apparmor-ci.test.mjs
       - name: Prepare pinned closure and one capped delegated service
         run: |
           sudo env CI=true COATRIA_TEST_UID="$(id -u)" COATRIA_TEST_GID="$(id -g)" GITHUB_ENV="$GITHUB_ENV" "$(command -v node)" scripts/hosting/prepare-media-sandbox-ci.mjs
       - name: Drop privilege and prove the real isolation boundary and seven decoders
         run: |
           sudo env CI=true COATRIA_MEDIA_QUALIFICATION="$COATRIA_MEDIA_QUALIFICATION" "$(command -v node)" scripts/hosting/run-media-sandbox-ci.mjs
+      - name: Preserve scoped AppArmor mode and sanitized kernel denial categories
+        if: always() && env.COATRIA_MEDIA_QUALIFICATION != ''
+        run: |
+          sudo env CI=true COATRIA_MEDIA_QUALIFICATION="$COATRIA_MEDIA_QUALIFICATION" "$(command -v node)" scripts/hosting/collect-media-apparmor-ci.mjs
       - name: Preserve pinned Linux isolation and media evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
