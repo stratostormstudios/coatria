@@ -119,6 +119,32 @@ test('generated revisions preserve accepted evidence and require a new source-bo
    const authors=(await query('SELECT task_id,user_id FROM task_authors WHERE task_id=ANY($1::uuid[])',[taskRows.map(row=>row.id)])).rows;
    for(const task of taskRows){assert(authors.some(row=>row.task_id===task.id&&row.user_id===users.owner));assert(authors.some(row=>row.task_id===task.id&&row.user_id===users.registrar));}
   });
+  await t.test('a leased coordinator generation child reads accepted current-round planning only',async()=>{
+   const {p,snapshot}=await prepare(),oldPlanning=(await query("SELECT id,stage FROM studio_work_items WHERE company_id=$1 AND project_id=$2 AND stage IN('estimate','breakdown','references')",[company,p.projectId])).rows;
+   const draft=await call(path(p.projectId),'POST',draftBody(snapshot),'owner',201);await call(path(p.projectId)+'/'+draft.plan.id+'/apply','POST',{clientId:randomUUID(),projectRevision:snapshot.projectRevision,planSha256:draft.plan.planSha256},'owner',201);
+   const installed=await call(`companies/${company}/plugin-installations`,'POST',{clientId:randomUUID(),pluginId:'runpod',manifestVersion:'1.0.0',name:'Reviewed round generation coordinator',invocationAccess:'admins',capabilities:['studio.read','studio.write','tasks.write','creative.read','creative.write','storage.read'],runtimeConfig:{providerId:'runpod',modelId:'Qwen/Qwen3.8-27B-FP8'}},'owner',201),agentId=installed.installation.agentId;agentTokens.roundProducer=installed.token;
+   const profile=(await query('SELECT revision FROM studio_profiles WHERE company_id=$1',[company])).rows[0];
+   await call(`companies/${company}/studio/setup`,'POST',{clientId:randomUUID(),templateId:'ai-production',templateVersion:1,revision:profile.revision,assignments:[{roleKey:'coordinator',agentId},{roleKey:'comp',agentId},{roleKey:'qc',humanId:users.reviewer}]},'owner',201);
+   const detail=await call(prefix(p.projectId)+'?contractVersion=2'),work=detail.workItems.find((item:any)=>item.stage==='generation'),planning=detail.workItems.filter((item:any)=>['estimate','breakdown','references'].includes(item.stage));
+   await query('UPDATE studio_projects SET gates=$3 WHERE company_id=$1 AND id=$2',[company,p.projectId,JSON.stringify({brief:{decision:'approved'},estimate:{decision:'approved'},production:{decision:'approved'}})]);
+   for(const item of planning)await query("UPDATE tasks SET status='done',submission_summary=$2 WHERE id=$1",[item.taskId,'Accepted current revision '+item.stage+' contribution.']);
+   const policy=await call(prefix(p.projectId)+'/coordination','PUT',{clientId:randomUUID(),revision:0,coordinatorAgentId:agentId,allowedRoleKeys:['comp'],status:'active',maxRuns:2,maxConcurrentRuns:1,expiresAt:new Date(Date.now()+3600000).toISOString(),coordinatorGeneration:true});
+   await call(`companies/${company}/conversations/commons/runs`,'POST',{clientId:randomUUID(),agentId,prompt:'Coordinate one reviewed revision-generation child.'},'owner',201);
+   const parent=await call('agent/runs/claim','POST',{workerId:'round-coordinator',claimId:randomUUID()},'roundProducer');
+   const dispatched=await call('agent/tools/studio_work_dispatch','POST',{runId:parent.run.id,leaseToken:parent.leaseToken,requestId:randomUUID(),arguments:{projectId:p.projectId,workItemId:work.id,projectRevision:detail.project.revision,policyRevision:policy.policy.revision}},'roundProducer');
+   await call('agent/runs/'+parent.run.id+'/complete','POST',{clientId:randomUUID(),leaseToken:parent.leaseToken,result:'Queued the separate reviewed generation child.'},'roundProducer');
+   const child=await call('agent/runs/claim','POST',{workerId:'round-coordinator',claimId:randomUUID()},'roundProducer');assert.equal(child.run.id,dispatched.result.childRunId);
+   const ref=planning.find((item:any)=>item.stage==='references'),estimate=planning.find((item:any)=>item.stage==='estimate'),args={runId:child.run.id,leaseToken:child.leaseToken,requestId:randomUUID(),arguments:{projectId:p.projectId,contractVersion:2,workItemId:estimate.id}};
+   const accepted=await call('agent/tools/studio_get','POST',args,'roundProducer');assert.equal(accepted.result.workItem.submissionSummary,'Accepted current revision estimate contribution.');assert.equal(accepted.result.historicalWork,false);
+   for(const old of oldPlanning)assert.equal((await call('agent/tools/studio_get','POST',{...args,requestId:randomUUID(),arguments:{...args.arguments,workItemId:old.id}},'roundProducer',403)).code,'COORDINATOR_GENERATION_SCOPE');
+   // An accepted current target cannot be reached through an earlier-round node.
+   const oldBreakdown=oldPlanning.find(item=>item.stage==='breakdown')!;
+   await query('INSERT INTO studio_dependencies(company_id,project_id,work_item_id,predecessor_id) VALUES($1,$2,$3,$4)',[company,p.projectId,ref.id,oldBreakdown.id]);
+   assert.equal((await call('agent/tools/studio_get','POST',args,'roundProducer',403)).code,'COORDINATOR_GENERATION_SCOPE');
+   await query('DELETE FROM studio_dependencies WHERE company_id=$1 AND project_id=$2 AND work_item_id=$3 AND predecessor_id=$4',[company,p.projectId,ref.id,oldBreakdown.id]);
+   assert.equal((await call('agent/tools/studio_get','POST',args,'roundProducer')).result.workItem.id,estimate.id);
+   await call('agent/runs/'+child.run.id+'/complete','POST',{clientId:randomUUID(),leaseToken:child.leaseToken,result:'Read current planning metadata only; no generation was proposed.'},'roundProducer');
+  });
   await t.test('current and identical transport dispatch replays reject superseded generated work without new effects',async()=>{
    const agents:Record<string,string>={};
    for(const name of ['coordinator','producer']){const made=await call(`companies/${company}/plugin-installations`,'POST',{clientId:randomUUID(),pluginId:'runpod',manifestVersion:'1.0.0',name:'Revision '+name,invocationAccess:'admins',capabilities:['studio.read','studio.write','tasks.write'],runtimeConfig:{providerId:'runpod',modelId:'Qwen/Qwen3.8-27B-FP8',maxSteps:8,maxOutputTokens:2048,maxTotalTokens:24000,timeoutSeconds:180}},'owner',201);agents[name]=made.installation.agentId;agentTokens[name]=made.token;}

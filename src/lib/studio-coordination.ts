@@ -129,13 +129,39 @@ export async function dispatchStudioWork(client:PoolClient,agent:Row,run:Row,inp
  const snapshot=await studioCoordinationSnapshot(client,companyId,data.projectId);await requireApprovalLive(client,policy.expiresAt);
  return {workItemId:data.workItemId,parentRunId:run.id,childRunId:queued.run.id,replayed:false,policy:snapshot.policy};
 }
+/** Exact accepted planning context only. Bound the traversal independently of
+ * caller input; shared task locks keep approval stable until the read commits.
+ * The existing lifecycle policy lock serializes revision-round activation. */
+async function acceptedPlanningAncestor(client:PoolClient,companyId:string,projectId:string,workItemId:string,requestedId:string){
+ const {roundId}=await assertGeneratedWorkCurrent(client,companyId,projectId,workItemId);
+ const seen=new Set([workItemId]),edges=new Map<string,string[]>();let frontier=[workItemId];
+ for(let depth=0;frontier.length;depth++){
+  const rows=(await client.query<{work_item_id:string;id:string;stage:string;execution:string;status:string;round_id:string|null}>(`SELECT d.work_item_id,w.id,w.stage,w.execution,t.status,rw.round_id
+   FROM studio_dependencies d JOIN studio_work_items w ON w.company_id=d.company_id AND w.project_id=d.project_id AND w.id=d.predecessor_id
+   JOIN tasks t ON t.company_id=w.company_id AND t.id=w.task_id
+   LEFT JOIN studio_generated_revision_work rw ON rw.company_id=w.company_id AND rw.project_id=w.project_id AND rw.work_item_id=w.id
+   WHERE d.company_id=$1 AND d.project_id=$2 AND d.work_item_id=ANY($3::uuid[])
+   ORDER BY w.id,d.work_item_id LIMIT 101 FOR SHARE OF t`,[companyId,projectId,frontier])).rows;
+  if(rows.length>100||depth>=8&&rows.length)return false;
+  const next:string[]=[];
+  for(const row of rows){
+   if(row.status!=='done'||row.execution!=='agent'||!['estimate','breakdown','references'].includes(row.stage)||(row.round_id??null)!==roundId)return false;
+   edges.set(row.work_item_id,[...(edges.get(row.work_item_id)??[]),row.id]);
+   if(!seen.has(row.id)){seen.add(row.id);next.push(row.id);if(seen.size>100)return false;}
+  }
+  frontier=next;
+ }
+ const visiting=new Set<string>(),visited=new Set<string>();
+ const acyclic=(node:string):boolean=>{if(visiting.has(node))return false;if(visited.has(node))return true;visiting.add(node);for(const dependency of edges.get(node)??[])if(!acyclic(dependency))return false;visiting.delete(node);visited.add(node);return true;};
+ return acyclic(workItemId)&&seen.has(requestedId);
+}
 /** The aggregate company character does not confer coordinator powers on its
  * separate generation child. Called before even replaying a cached tool receipt. */
 export async function assertCoordinatorGenerationTool(client:PoolClient,agent:Row,run:Row,name:string,args:Row){
  const receipt=(await client.query('SELECT d.project_id,d.work_item_id,w.task_id FROM studio_coordination_dispatches d JOIN studio_work_items w ON w.company_id=d.company_id AND w.project_id=d.project_id AND w.id=d.work_item_id WHERE d.company_id=$1 AND d.child_run_id=$2 AND d.coordinator_agent_id=d.specialist_agent_id',[agent.company_id,run.id])).rows[0];
  if(!receipt)return;
  const sameProject=args.projectId===receipt.project_id;
- const allowed=(name==='studio_get'&&sameProject&&args.contractVersion===2&&args.workItemId===receipt.work_item_id&&!args.artifactId)
+ const allowed=(name==='studio_get'&&sameProject&&args.contractVersion===2&&args.workItemId&&!args.artifactId&&!args.after&&(args.workItemId===receipt.work_item_id||await acceptedPlanningAncestor(client,agent.company_id,receipt.project_id,receipt.work_item_id,args.workItemId)))
   ||name==='higgsfield_connection_get'
   ||(['higgsfield_requests_list','higgsfield_jobs_list','storage_get','storage_files_list'].includes(name)&&sameProject)
   ||(name==='tasks_claim'&&args.taskId===receipt.task_id)

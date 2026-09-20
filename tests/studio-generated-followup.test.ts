@@ -73,7 +73,7 @@ test('generated continuation executes exact leased tools against immutable synth
    const task=async()=>(await query('SELECT * FROM tasks WHERE id=$1',[work.task_id])).rows[0];
    const policy=async()=>(await query('SELECT * FROM studio_coordination_policies WHERE company_id=$1 AND project_id=$2',[company,p.id])).rows[0];
    const approve=async(member:Membership,optIn:boolean,revision:number,coordinatorGeneration=Boolean(options.singleAgent))=>transaction(c=>saveStudioCoordination(c,member,p.id,{clientId:randomUUID(),revision,coordinatorAgentId:coordinator.id,allowedRoleKeys:['comp'],status:'active',maxRuns:options.budget??2,maxConcurrentRuns:1,expiresAt:new Date(Date.now()+3600000).toISOString(),...(optIn?{generatedContinuations:true}:{}),...(options.singleAgent?{coordinatorGeneration}:{})}));
-   const tool=(agent:Row,lease:Row,name:string,args:Row,requestId=randomUUID())=>executeAgentTool(agent as any,name,{runId:lease.run.id,leaseToken:lease.leaseToken,requestId,arguments:args});
+   const tool=(agent:Row,lease:Row,name:string,args:Row,requestId:string=randomUUID())=>executeAgentTool(agent as any,name,{runId:lease.run.id,leaseToken:lease.leaseToken,requestId,arguments:args});
    const claim=(agent:Row,claimId=randomUUID())=>claimAgentRun(agent as any,{workerId:'synthetic-generated',claimId}) as Promise<Row>;
    const parent=async(member:Membership)=>{
      let runId:string;
@@ -96,9 +96,43 @@ test('generated continuation executes exact leased tools against immutable synth
    await tool(specialist,source,'tasks_claim',{taskId:work.task_id,revision:(await task()).revision});
    const sourceTask=await task();let proposed:Row|undefined;const sourceConnectionId=randomUUID();
     if(options.singleAgent){
+     const planning=(await query("SELECT w.id,w.task_id,w.stage FROM studio_work_items w WHERE w.company_id=$1 AND w.project_id=$2 AND w.stage IN('estimate','breakdown','references')",[company,p.id])).rows;
+     const summaries:Record<string,string>={estimate:'Approved planning estimate: one original studio still; no client footage or paid source assets.',breakdown:'Approved schedule: create D010 after reference consent is confirmed; preserve the reviewed format.',references:'Approved reference plan: original geometric product on a warm neutral background; no person, brand or uploaded reference. Rights: original fixture only; no third-party transfer consent needed.'};
+     for(const item of planning)await query('UPDATE tasks SET submission_summary=$2 WHERE id=$1',[item.task_id,summaries[item.stage]]);
+     const own=(await tool(specialist,source,'studio_get',{contractVersion:2,projectId:p.id,workItemId:work.id})).result as Row;
+     assert(own.dependencies.every((dependency:Row)=>!('submissionSummary' in dependency)));
+     const reads=new Map<string,{args:Row;requestId:string}>();let referenceSummary='';
+     for(const item of planning){const args={contractVersion:2,projectId:p.id,workItemId:item.id},requestId=randomUUID(),read=(await tool(specialist,source,'studio_get',args,requestId)).result as Row;assert.equal(read.workItem.submissionSummary,summaries[item.stage]);assert.equal(read.workItem.status,'done');reads.set(item.stage,{args,requestId});if(item.stage==='references')referenceSummary=read.workItem.submissionSummary;}
+     const reference=planning.find(item=>item.stage==='references')!,breakdown=planning.find(item=>item.stage==='breakdown')!,estimate=planning.find(item=>item.stage==='estimate')!;
+     const scopeDenied=(error:any)=>error?.code==='COORDINATOR_GENERATION_SCOPE';
+     for(const args of[{contractVersion:2,projectId:p.id},{contractVersion:2,projectId:randomUUID(),workItemId:reference.id},{contractVersion:2,projectId:p.id,workItemId:randomUUID()},...((await query("SELECT id FROM studio_work_items WHERE company_id=$1 AND project_id=$2 AND stage IN('qc','delivery')",[company,p.id])).rows.map(item=>({contractVersion:2,projectId:p.id,workItemId:item.id})))])await assert.rejects(()=>tool(specialist,source,'studio_get',args),scopeDenied);
+     for(const [name,args]of [['tasks_claim',{taskId:reference.task_id,revision:1}],['tasks_submit',{taskId:reference.task_id,revision:1,summary:'Forbidden ancestor edit'}],['higgsfield_generation_propose',{projectId:p.id,projectRevision:await projectRevision(),workItemId:reference.id,tool:'generate_'+kind,arguments:{},note:'Forbidden ancestor generation'}]] as [string,Row][])await assert.rejects(()=>tool(specialist,source,name,args),scopeDenied);
+     // Reusing an exact read ID still rechecks every traversed node; reads are not cached.
+     const replay=reads.get('estimate')!;await query("UPDATE tasks SET status='review' WHERE id=$1",[breakdown.task_id]);
+     await assert.rejects(()=>tool(specialist,source,'studio_get',replay.args,replay.requestId),scopeDenied);
+     await query("UPDATE tasks SET status='done' WHERE id=$1",[breakdown.task_id]);
+     assert.equal(((await tool(specialist,source,'studio_get',replay.args,replay.requestId)).result as Row).workItem.submissionSummary,summaries.estimate);
+     await query('INSERT INTO studio_dependencies(company_id,project_id,work_item_id,predecessor_id) VALUES($1,$2,$3,$4)',[company,p.id,estimate.id,reference.id]);
+     await assert.rejects(()=>tool(specialist,source,'studio_get',reads.get('references')!.args),scopeDenied);
+     await query('DELETE FROM studio_dependencies WHERE company_id=$1 AND project_id=$2 AND work_item_id=$3 AND predecessor_id=$4',[company,p.id,estimate.id,reference.id]);
+     if(kind==='image'){
+      const tasks=(await query("INSERT INTO tasks(company_id,title,created_by,status) SELECT $1,'Synthetic accepted traversal boundary',$2,'done' FROM generate_series(1,101) RETURNING id",[company,producer.id])).rows;
+      const nodeIds=tasks.map(()=>randomUUID());
+      await query("INSERT INTO studio_work_items(id,company_id,project_id,task_id,logical_key,stage,role_key,execution) SELECT n.id,$1,$2,n.task_id,n.id::text,'estimate','producer','agent' FROM unnest($3::uuid[],$4::uuid[]) AS n(id,task_id)",[company,p.id,nodeIds,tasks.map(item=>item.id)]);
+      // A ninth dependency edge cannot turn a bounded read into an unbounded walk.
+      const starts=[estimate.id,...nodeIds.slice(0,6)],ends=nodeIds.slice(0,7);
+      await query('INSERT INTO studio_dependencies(company_id,project_id,work_item_id,predecessor_id) SELECT $1,$2,n.start,n.finish FROM unnest($3::uuid[],$4::uuid[]) AS n(start,finish)',[company,p.id,starts,ends]);
+      await assert.rejects(()=>tool(specialist,source,'studio_get',reads.get('references')!.args),scopeDenied);
+      await query('DELETE FROM studio_dependencies WHERE company_id=$1 AND project_id=$2 AND predecessor_id=ANY($3::uuid[])',[company,p.id,nodeIds]);
+      // A wide graph also fails before the complete context projection runs.
+      await query('INSERT INTO studio_dependencies(company_id,project_id,work_item_id,predecessor_id) SELECT $1,$2,$3,n FROM unnest($4::uuid[]) n',[company,p.id,work.id,nodeIds]);
+      await assert.rejects(()=>tool(specialist,source,'studio_get',reads.get('references')!.args),scopeDenied);
+      await query('DELETE FROM tasks WHERE company_id=$1 AND id=ANY($2::uuid[])',[company,tasks.map(item=>item.id)]);
+      assert.equal(((await tool(specialist,source,'studio_get',reads.get('references')!.args)).result as Row).workItem.submissionSummary,referenceSummary);
+     }
      await insert('higgsfield_connections',{company_id:company,id:sourceConnectionId,revision:1,status:'connected',connected_by:producer.id,sealed:'{}',expires_at:await expiry(),tools:JSON.stringify([{name:'generate_'+kind,description:'Synthetic official-tool fixture',inputSchema:{type:'object',properties:{prompt:{type:'string'}},required:['prompt']}}])});
-     const requestId=randomUUID(),args={projectId:p.id,projectRevision:await projectRevision(),workItemId:work.id,tool:'generate_'+kind,arguments:{prompt:'Original synthetic '+kind+' for a reviewed workflow test'},note:'Await exact human credit consent; do not execute a provider.'};
-     proposed=((await tool(specialist,source,'higgsfield_generation_propose',args,requestId)).result as Row).request;assert(proposed);assert.equal(proposed.status,'proposed');assert.equal(((await tool(specialist,source,'higgsfield_generation_propose',args,requestId)).result as Row).request.id,proposed.id);assert.equal(networkCalls,0);
+     const requestId=randomUUID(),args={projectId:p.id,projectRevision:await projectRevision(),workItemId:work.id,tool:'generate_'+kind,arguments:{prompt:'Produce the approved '+kind+' using this accepted planning contribution: '+referenceSummary},note:'Await exact human credit consent; do not execute a provider.'};
+     proposed=((await tool(specialist,source,'higgsfield_generation_propose',args,requestId)).result as Row).request;assert(proposed);assert.equal(proposed.status,'proposed');assert.match(proposed.arguments.prompt,/Rights: original fixture only/);assert.equal(((await tool(specialist,source,'higgsfield_generation_propose',args,requestId)).result as Row).request.id,proposed.id);assert.equal(networkCalls,0);
     }
    await finishAgentRun(specialist as any,source.run.id,'complete',{clientId:randomUUID(),leaseToken:source.leaseToken,result:'Synthetic request prepared; waiting for independently approved generation and archive.'});
    if(!options.singleAgent)await finishAgentRun(coordinator as any,firstParent.run.id,'complete',{clientId:randomUUID(),leaseToken:firstParent.leaseToken,result:'Initial synthetic generation specialist stopped for human approval.'});
