@@ -1,7 +1,7 @@
 // Explicit root CI host preparation, never a worker startup download/install.
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {createReadStream} from 'node:fs';
-import {appendFile,chmod,chown,copyFile,lstat,mkdir,readFile,readdir,writeFile} from 'node:fs/promises';
+import {appendFile,chmod,chown,copyFile,lstat,mkdir,readFile,readdir,realpath,writeFile} from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
 import {dirname,join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -35,10 +35,32 @@ async function filesAt(root,directory=root){
 }
 async function sealTree(root){for(const name of await readdir(root)){const path=join(root,name),info=await lstat(path);if(info.isDirectory())await sealTree(path);else await chmod(path,path.includes('/bin/')?0o555:0o444);}await chmod(root,0o555);}
 
+async function protectedAncestors(directory,uid,gid,evidence){
+ const records=[];let path=directory;
+ for(let depth=0;depth<16;depth++){
+  const info=await lstat(path);records.push({path,uid:info.uid,gid:info.gid,mode:(info.mode&0o7777).toString(8),directory:info.isDirectory(),symlink:info.isSymbolicLink(),canonical:await realpath(path)===path});
+  if(path==='/')break;path=dirname(path);
+ }
+ // A mode check alone misses ACLs. Probe write access as the actual worker UID,
+ // without inherited supplementary groups or ordinary environment credentials.
+ const source="import{access}from'node:fs/promises';import{constants}from'node:fs';process.setgroups([]);process.setgid(Number(process.argv[1]));process.setuid(Number(process.argv[2]));const result=[];for(const path of JSON.parse(process.argv[3])){try{await access(path,constants.W_OK);result.push(true);}catch(error){if(error.code!=='EACCES'&&error.code!=='EROFS')throw Error('PATH_ACCESS_PROBE_FAILED');result.push(false);}}process.stdout.write(JSON.stringify(result));";
+ const probe=spawnSync(process.execPath,['--input-type=module','-e',source,String(gid),String(uid),JSON.stringify(records.map(record=>record.path))],{shell:false,env,encoding:'utf8',timeout:10000,maxBuffer:16384});
+ let writable=[];try{if(probe.status===0&&!probe.error)writable=JSON.parse(probe.stdout);}catch{/* Fixed failure below; no inherited stderr is logged. */}
+ const validProbe=Array.isArray(writable)&&writable.length===records.length&&writable.every(value=>typeof value==='boolean');
+ for(let i=0;i<records.length;i++)records[i].workerWritable=validProbe?writable[i]:null;
+ const safe=validProbe&&records.at(-1)?.path==='/'&&records.every(record=>record.uid===0&&!(parseInt(record.mode,8)&0o022)&&record.directory&&!record.symlink&&record.canonical&&record.workerWritable===false);
+ await writeFile(join(evidence,'path-ancestors.json'),JSON.stringify({prepared:false,qualified:false,safe,workerUid:uid,workerGid:gid,ancestors:records},null,2)+'\n',{mode:0o444});
+ if(!safe){const invalid=records.find(record=>record.uid!==0||(parseInt(record.mode,8)&0o022)||!record.directory||record.symlink||!record.canonical||record.workerWritable!==false);throw Error('MEDIA_CI_UNSAFE_PACKAGE_PARENT: '+(invalid?.path??directory)+'; see path-ancestors.json for uid/mode/write-access evidence.');}
+ return records;
+}
+
 export async function prepareMediaSandboxCI(){
  if(process.platform!=='linux'||process.arch!=='x64'||process.getuid?.()!==0||process.env.CI!=='true')throw Error('Explicit root Linux x64 CI host preparation required.');
  const uid=Number(process.env.COATRIA_TEST_UID),gid=Number(process.env.COATRIA_TEST_GID);if(!Number.isInteger(uid)||uid<1||!Number.isInteger(gid)||gid<1)throw Error('An unprivileged qualification identity is required.');
- const repo=process.cwd(),base='/opt/coatria-media-ci-'+randomUUID(),evidence=resolve('.devdata/media-sandbox-linux/evidence');await mkdir(base,{mode:0o755});await mkdir(evidence,{recursive:true});
+ const repo=process.cwd(),packageParent='/var/lib',base=join(packageParent,'coatria-media-ci-'+randomUUID()),evidence=resolve('.devdata/media-sandbox-linux/evidence');await mkdir(evidence,{recursive:true});
+ // GitHub runners may deliberately make /opt writable to the runner. Do not
+ // relax runtime trust or chmod a shared host directory to accommodate that.
+ await protectedAncestors(packageParent,uid,gid,evidence);await mkdir(base,{mode:0o755});const packageAncestors=await protectedAncestors(base,uid,gid,evidence);
  command('/usr/bin/apt-get',['update','-qq']);command('/usr/bin/apt-get',['install','-y','--no-install-recommends','bubblewrap='+BUBBLEWRAP_PACKAGE,'gcc','libc6-dev']);
  const bwrap='/usr/bin/bwrap',installed=command('/usr/bin/dpkg-query',['-W','-f=${Version}','bubblewrap']).trim();if(installed!==BUBBLEWRAP_PACKAGE)throw Error('Bubblewrap package pin mismatch.');
  const help=command(bwrap,['--help']);for(const option of ['--unshare-user','--unshare-pid','--unshare-net','--unshare-cgroup','--disable-userns','--assert-userns-disabled','--die-with-parent'])if(!help.includes(option))throw Error('Required bubblewrap feature absent.');
@@ -75,7 +97,7 @@ export async function prepareMediaSandboxCI(){
  const hostCanaryPath=join(base,'host-private-key-canary'),canary=randomBytes(32).toString('hex');await writeFile(hostCanaryPath,canary,{flag:'wx',mode:0o600});await chown(hostCanaryPath,uid,gid);
  const qualification={version:1,profiles,serviceRoot,supervisorGroup,cgroupRoot,uid,gid,hostCanaryPath,hostCanarySha256:createHash('sha256').update(canary).digest('hex'),evidence};const qualificationPath=join(base,'qualification.json');await writeFile(qualificationPath,JSON.stringify(qualification,null,2)+'\n',{flag:'wx',mode:0o444});
  await chown(evidence,uid,gid);const sourceHashes={};for(const file of ['scripts/hosting/media-sandbox-launch.c','scripts/hosting/media-sandbox-probe.c','scripts/hosting/prepare-media-sandbox-ci.mjs','scripts/hosting/run-media-sandbox-ci.mjs','scripts/hosting/media-sandbox-linux-canary.mts','src/lib/higgsfield-media-sandbox.ts','src/lib/higgsfield-media-inspection.ts'])sourceHashes[file]=await sha(join(repo,file));
- await writeFile(join(evidence,'setup.json'),JSON.stringify({prepared:true,qualified:false,sourceHashes,ffmpeg:MEDIA_INSPECTOR_CI_BUILD,runtimeImage:MEDIA_RUNTIME_IMAGE,bubblewrapPackage:installed,bubblewrapSha256:await sha(bwrap),hostPackages:command('/usr/bin/dpkg-query',['-W','gcc','libc6','libc6-dev','libgcc-s1','libcap2','bubblewrap']),profiles,aggregateParentLimits:{memoryBytes:2*1024**3,pids:256,cpu:'200000 100000',swapBytes:0},noHostSecurityDisabled:true,noProviderCalls:true},null,2)+'\n',{mode:0o444});
+ await writeFile(join(evidence,'setup.json'),JSON.stringify({prepared:true,qualified:false,packageAncestors,sourceHashes,ffmpeg:MEDIA_INSPECTOR_CI_BUILD,runtimeImage:MEDIA_RUNTIME_IMAGE,bubblewrapPackage:installed,bubblewrapSha256:await sha(bwrap),hostPackages:command('/usr/bin/dpkg-query',['-W','gcc','libc6','libc6-dev','libgcc-s1','libcap2','bubblewrap']),profiles,aggregateParentLimits:{memoryBytes:2*1024**3,pids:256,cpu:'200000 100000',swapBytes:0},noHostSecurityDisabled:true,noProviderCalls:true},null,2)+'\n',{mode:0o444});
  if(process.env.GITHUB_ENV)await appendFile(process.env.GITHUB_ENV,'COATRIA_MEDIA_QUALIFICATION='+qualificationPath+'\n');console.log('Pinned media closure and delegated cgroup prepared; adversarial qualification is still required.');return qualificationPath;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)await prepareMediaSandboxCI();

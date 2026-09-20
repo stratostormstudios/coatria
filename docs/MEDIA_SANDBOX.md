@@ -41,6 +41,14 @@ supervisor is SIGKILLed and JavaScript cleanup cannot run.
 The `media-sandbox-linux` job uses an Ubuntu 24.04 VM, not a job container. Root
 preparation is explicit and separate from unprivileged qualification:
 
+The package lives under a unique `/var/lib/coatria-media-ci-*` directory.
+Preparation checks `/`, `/var`, `/var/lib` and the new package directory for
+root ownership, canonical non-symlink paths, safe modes and denied write access
+as the worker UID with supplementary groups cleared. It records the exact
+uid/gid/mode/access results in `path-ancestors.json` before installing anything.
+A shared runner-writable `/opt` is not an acceptable package ancestor; preparation
+does not weaken runtime trust or change shared host-directory permissions.
+
 - FFmpeg `n8.1.2-50-g1a748fe2cd`, archive SHA-256
   `7d6d93e9c39e0e461feb13c118e91e4eec2515e4da3a01d4ad6790996731bbee`.
 - glibc/loader dependency closure copied from
@@ -87,8 +95,8 @@ ELF; that ELF is never in the production profile. The canary verifies:
 - PNG/JPEG/WebP, MP4/MOV and WAV/MP3 fully decode through the real pinned sandbox,
   with exact source SHA/length and observed media facts.
 
-Artifacts are `.devdata/media-sandbox-linux/evidence/setup.json` and
-`qualification.json`. They retain profiles, closure pins, runtime/helper/canary
+Artifacts are `.devdata/media-sandbox-linux/evidence/path-ancestors.json`,
+`setup.json` and `qualification.json`. They retain profiles, closure pins, runtime/helper/canary
 source hashes, kernel/namespace evidence and numeric resource events. They contain
 no real credentials or provider calls. Only the completed canary sets
 `qualified:true`; preparation alone records `qualified:false`.
