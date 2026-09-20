@@ -101,6 +101,15 @@ source hashes, kernel/namespace evidence and numeric resource events. They conta
 no real credentials or provider calls. Only the completed canary sets
 `qualified:true`; preparation alone records `qualified:false`.
 
+Startup failures retain numeric resource events even before the first test.
+In CI only, a separate diagnostic runs the pinned original conformance probe's
+fixed FD-help command through the same capped helper/ready/gate flow. It records
+static phases, fixed helper exit-stage codes, numeric exit/signal data and
+allowlisted setup-error categories. Raw stderr and arbitrary paths/tokens are
+discarded. Host user-namespace/AppArmor policy is observed without changing it.
+This diagnostic always records `qualified:false`; it cannot substitute for or
+turn a failed qualification into success.
+
 ## Deployment boundary
 
 Production needs the exact reviewed closure and manifest, a nonroot worker,
