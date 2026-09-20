@@ -1,8 +1,8 @@
 import {createHash} from 'node:crypto';
 import {isIP} from 'node:net';
 
-/** Declared installed connector schema, not proof that a company's MCP profile
- * emits this format. Unknown company responses must remain unresolved. */
+/** Adapter checked against the installed connector and refreshed company
+ * advertised schemas. Live responses still require exact validation. */
 export const HIGGSFIELD_JOB_CONTRACT = 'higgsfield-openai-profile-2026-09-20' as const;
 export type HiggsfieldJobKind = 'image' | 'video' | 'audio';
 export type HiggsfieldJobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'lookup_failed';
@@ -153,7 +153,7 @@ export function normalizeHiggsfieldPoll(value: unknown, expectedJobIds: readonly
   if (['timed_out', 'aborted'].some(key => own(body, key) && typeof body[key] !== 'boolean')) return unsupported();
   const jobs: NormalizedHiggsfieldJob[] = [], seen = new Set<string>(), indexes = new Set<number>(); let issue: HiggsfieldContractCode | undefined;
   for (const entry of body.jobs) {
-    if (!object(entry) || typeof entry.index !== 'number' || !Number.isSafeInteger(entry.index) || indexes.has(entry.index)) return unsupported('HIGGSFIELD_JOB_SET_MISMATCH');
+    if (!object(entry) || typeof entry.index !== 'number' || !Number.isSafeInteger(entry.index) || entry.index < 0 || indexes.has(entry.index)) return unsupported('HIGGSFIELD_JOB_SET_MISMATCH');
     indexes.add(entry.index);
     const parsed = parseJob(entry, true);
     if (!parsed.job) return unsupported(parsed.code);

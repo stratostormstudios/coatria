@@ -2,7 +2,7 @@
 
 Coatria's current production direction is AI creative work through the **official Higgsfield MCP service**. Coatria owns company roles, briefs, permissions, reviewed requests and provenance. Higgsfield owns its available models, generation tools, provider jobs and credit balance. Large source footage, EXRs, caches and rendered originals remain on the company's existing local, NAS or cloud storage.
 
-The v1.9 storage and native Claude release is deployed. The v1.10 job tracking and role-ownership changes are a release candidate until separate release evidence records promotion. Company OAuth consent and an authenticated credit read are verified; a real generation remains a required acceptance step.
+The v1.9 storage and native Claude release and v1.10 job tracking and role-ownership release are deployed. v1.10 was promoted from commit 52a203eed100cf2d5c242e307fd3816d71081b28 after passing CI and an independent production migration readback. Company OAuth consent and an authenticated credit read are verified; a real generation remains a required acceptance step.
 
 ## The official plugin connection
 
@@ -83,11 +83,11 @@ Managed CPU agent hosts and the bounded inference broker remain relevant to comp
 
 The creative-assets fixture exercises the actual route/session and leased-run authority with isolated PostgreSQL-compatible storage, synthetic job IDs and no outbound requests. It covers tenant isolation, unchanged replay/conflict, stale revisions, role/AI/grant/sponsor boundaries, a 4 GB metadata pointer, index replacement/revocation and company cascade cleanup. It establishes those application invariants; it does not establish a live Higgsfield generation, storage transfer or completed client production.
 
-## Durable provider job tracking (v1.10 candidate)
+## Durable provider job tracking (v1.10)
 
 New generation intents pin the exact connection UUID as well as its revision; historical requests with unknown account identity cannot acquire that identity retroactively. The paid dispatch still has one durable intent and no automatic resubmission. Its response is encrypted in a private, append-only journal; ordinary request responses expose a bounded summary and SHA-256, not signed output links or provider prose. Imported generation reports retain their unverified status and never enter the trusted job tables.
 
-The declared adapter recognizes the documented installed connector results[] and jobs_wait shapes. It does **not** claim that a live company MCP profile has been verified to emit them. A response with an unfamiliar shape remains unresolved and recoverable in the encrypted journal. The authenticated tool catalog now retains advertised outputSchema metadata. Read-only polling additionally requires a compatible, advertised indexed jobs_wait input schema. A read-only September 20 company catalog check verified that input shape, including the exact advertised UUID pattern; it is captured as a regression fixture. The stored output schema was absent. No schema or job IDs are inferred from free text.
+The adapter recognizes the installed connector results[] and jobs_wait shapes. After the September 20 production release, an administrator catalog refresh exposed the company's advertised outputSchema metadata; the image/video/audio and jobs_wait core output shapes match this adapter. The company jobs_wait input schema, including its exact advertised UUID pattern, is also verified and captured as a regression fixture. This is advertised-schema compatibility, not a claim that a real generation response or retrievable media has been tested. Unfamiliar responses remain unresolved and preserved in the encrypted journal. No schema or job IDs are inferred from free text.
 
 GET /api/companies/{companyId}/higgsfield/jobs and the leased creative.read tool higgsfield_jobs_list return paged job metadata, explicit diagnostics and private-locator identities. Provider completed never means verified bytes, media QC, task acceptance or client approval. The company UI uses explicit refresh and paged reads; it does not create a browser polling loop.
 
@@ -96,3 +96,11 @@ The cron endpoint /api/internal/higgsfield-jobs/reconcile requires CRON_SECRET a
 One provider job in one connection can bind to only one request/project. Conflicting identities, model changes, terminal drift or changed output sets are quarantined. Locator identity is a Coatria hash of job/type/ordinal/URL origin and path, excluding the signed query. It is **not** a provider media ID, immutable object version, content hash, host allowlist or fetch authorization. No provider files are downloaded or archived by this release; later archival must review actual media hosts, validate every redirect/DNS destination, measure content, pin verified bytes and preserve revocation.
 
 Studio human roles now assign actual pending tasks. Reassignment requires active work to be reconciled first and preserves accepted attribution. QC roles require a human owner/admin with independent acceptance. Reference planning may be included in a separately approved machine-review policy; defaults and saved policies remain unchanged. New manager staffing proposals request storage.read and storage.organize explicitly; existing agents do not receive extra grants.
+
+## Restricted output reader foundation (v1.10.1)
+
+`src/lib/higgsfield-output-fetch.ts` supplies a trusted Node worker reader. It is not connected to routes, the job reconciler or the storage gateway, and no provider/CDN hosts are enabled. The caller must supply a reviewed exact-host policy and separately authorized, bounded archive operation before integration. No generation, archive, storage reservation or client delivery is performed by this module.
+
+The reader resolves all addresses, rejects special/private destinations, pins one validated address into a fresh HTTPS connection, preserves hostname certificate verification, bypasses environment proxy settings and rejects redirects. Byte size, operation duration, current authority and consumer backpressure remain bounded during DNS, response headers and streaming. Failures expose fixed codes; signed locators and raw transport errors are never returned. Successful reads return only measured bytes and SHA-256. This does not establish media type/decodability, verified storage, QC or delivery; failed consumers must discard partial private scratch output.
+
+Implementation references: [Node HTTPS Agent/request](https://nodejs.org/api/https.html), [Node HTTP](https://nodejs.org/api/http.html), and the [IANA IPv6 special-purpose registry](https://www.iana.org/assignments/iana-ipv6-special-registry/). The address policy is deliberately conservative and must be reviewed when provider hosts or supported networking change.

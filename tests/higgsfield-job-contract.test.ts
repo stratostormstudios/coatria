@@ -113,6 +113,20 @@ test('duplicate, conflicting, missing or unrequested identities invalidate the e
   }
 });
 
+test('negative poll indexes reject the entire observation while declared nonnegative boundaries remain valid', () => {
+  for (const index of [-1, -Number.MAX_SAFE_INTEGER]) {
+    for (const entries of [[status({index})], [status(), status({index, job_id: id2})]]) {
+      const normalized = poll(waited(entries), entries.map(entry => entry.job_id));
+      assert.equal(normalized.supported, false);
+      assert.equal(normalized.code, 'HIGGSFIELD_JOB_SET_MISMATCH');
+      assert.deepEqual(normalized.jobs, []);
+    }
+  }
+  for (const index of [0, Number.MAX_SAFE_INTEGER]) {
+    assert.equal(poll(waited([status({index})]), [id1]).supported, true);
+  }
+});
+
 test('malformed jobs, unfamiliar statuses, 3d and mismatching media kinds fail closed', () => {
   for (const patch of [{id: 'not-a-uuid'}, {id: id1 + '\n'}, {type: '3d'}, {type: 'audio'}, {status: 'future_status'}, {status: 'constructor'}, {status: 'lookup_failed'}, {params: null}, {model: {}}, {results: []}, {results: {rawUrl: url}}]) {
     const normalized = submission({results: [job('image', patch)]}, 'image'); assert.equal(normalized.outcome, 'unsupported');
