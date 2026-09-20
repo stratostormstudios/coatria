@@ -3,7 +3,7 @@
 import {useState,type FormEvent} from 'react';
 import {ArrowRight,Check,Pause,RefreshCw,Settings2,ShieldCheck} from 'lucide-react';
 import type {WorkspaceProps} from '@/app/page';
-import type {StudioProjectDetail} from '@/lib/studio-protocol';
+import type {StudioReadableProjectDetail} from '@/lib/studio-protocol';
 import type {StudioReviewPolicy,StudioReviewPolicySnapshot} from '@/lib/studio-review-policy-protocol';
 import {STUDIO_MACHINE_REVIEW_STAGES} from '@/lib/studio-review-policy-protocol';
 import {Field,Loading,Modal} from './ui';
@@ -11,7 +11,7 @@ import {AgentRunDetail} from './AgentRuns';
 import {useStudioMutation,useStudioResource} from './studio-hooks';
 import s from './StudioWorkspace.module.css';
 
-type Props={p:WorkspaceProps;detail:StudioProjectDetail};
+type Props={p:WorkspaceProps;detail:StudioReadableProjectDetail};
 const label=(value:string)=>value.replaceAll('_',' ');
 
 export function StudioPlanningReviewPanel({p,detail}:Props){

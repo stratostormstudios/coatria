@@ -3,13 +3,13 @@
 import {useState,type FormEvent} from 'react';
 import {Bot,Check,GitBranch,Pause,RefreshCw,Settings2,ShieldCheck} from 'lucide-react';
 import type {WorkspaceProps} from '@/app/page';
-import type {StudioProjectDetail} from '@/lib/studio-protocol';
+import type {StudioReadableProjectDetail} from '@/lib/studio-protocol';
 import type {StudioCoordinationPolicy as Policy,StudioCoordinationSnapshot as Coordination} from '@/lib/studio-coordination-protocol';
 import {Field,Loading,Modal} from './ui';
 import {useStudioMutation,useStudioResource} from './studio-hooks';
 import s from './StudioWorkspace.module.css';
 
-type Props={p:WorkspaceProps;detail:StudioProjectDetail;onSchedule:()=>void};
+type Props={p:WorkspaceProps;detail:StudioReadableProjectDetail;onSchedule:()=>void};
 
 export function StudioCoordinationPanel({p,detail,onSchedule}:Props){
  const path=`/api/companies/${p.company.id}/studio/projects/${detail.project.id}/coordination`;
@@ -42,7 +42,7 @@ export function StudioCoordinationPanel({p,detail,onSchedule}:Props){
  </>;
 }
 
-function PolicyEditor({p,detail,initial,path,onClose,onSaved}:{p:WorkspaceProps;detail:StudioProjectDetail;initial:Policy|null;path:string;onClose:()=>void;onSaved:()=>Promise<void>}){
+function PolicyEditor({p,detail,initial,path,onClose,onSaved}:{p:WorkspaceProps;detail:StudioReadableProjectDetail;initial:Policy|null;path:string;onClose:()=>void;onSaved:()=>Promise<void>}){
  const mutation=useStudioMutation();
  const candidates=p.workspace.agents.filter(agent=>agent.status==='active'&&!!agent.pluginInstallationId&&['studio.read','studio.write','tasks.write'].every(cap=>agent.capabilities?.includes(cap))&&detail.roles.some(role=>['producer','coordinator'].includes(role.key)&&role.agentId===agent.id));
  const [coordinatorAgentId,setCoordinatorAgentId]=useState(initial?.coordinatorAgentId||candidates[0]?.id||'');

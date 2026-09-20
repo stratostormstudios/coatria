@@ -73,8 +73,13 @@ lease expiry after lock waits, review revocation and restricted evidence grants.
 Connected agent registration and legacy compatibility also have automated tests.
 The exact candidate still requires a complete passing CI run before release.
 
-Remaining product work includes generated-media UI and a separately qualified
-archive host and actual Runpod volume transport. Client delivery additionally requires its
+The [generated-media workspace](GENERATED_MEDIA_WORKSPACE.md) now provides typed
+creation, exact-source registration, independent review, internal packaging and
+checksum-verified downloads. Its browser lane uses synthetic API/storage fixtures.
+
+Remaining product work includes a separately qualified archive host and actual
+Runpod volume transport, plus the [planned bounded agent continuation](GENERATED_MEDIA_CONTINUATION_PLAN.md).
+Client delivery additionally requires its
 exact-version, external-account download grants and gateway. Local synthetic
 database fixtures prove authority rules; they do not prove a real provider
 transfer or certify client media quality.
