@@ -9,6 +9,9 @@ GRANT SELECT ON schema_migrations,companies,memberships,agents,agent_runs,studio
  project_storage_uploads,project_storage_upload_parts,project_storage_verifications,project_storage_access_receipts
  TO coatria_storage_gateway_v1;
 GRANT SELECT(company_id,agent_id,host_id,installation_id,token_hash,revoked_at,expires_at,host_epoch,installation_revision,enrolled_by) ON studio_host_credentials TO coatria_storage_gateway_v1;
+-- Classification only: generated continuations are never allowed file transfers.
+-- Do not grant source snapshots, artifact evidence or canonical step identifiers.
+GRANT SELECT(company_id,child_run_id) ON studio_generated_followups TO coatria_storage_gateway_v1;
 -- Row locks require UPDATE on at least one column; immutable identity cannot be changed.
 GRANT UPDATE(created_at) ON companies TO coatria_storage_gateway_v1;
 GRANT UPDATE(updated_at) ON agent_runs TO coatria_storage_gateway_v1;

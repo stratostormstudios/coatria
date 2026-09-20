@@ -163,3 +163,8 @@ The UI exposes that opt-in and identifies generated continuation history. New ge
 ## Concurrent configuration changes
 
 The specialist's own credential/grant changes and explicit policy pause serialize with its held authority rows. New actions after a committed company-role, profile or coordinator-plugin change fail the policy fingerprint check. An unrelated configuration edit may overlap one action already authorized in flight; the edit is not a universal cancellation barrier for that action. Busy production roles cannot be reassigned through studio setup. This candidate does not claim that every configuration edit synchronously cancels all workers; use explicit policy pause, request cancellation and host controls for that operational purpose.
+
+
+## Storage gateway compatibility
+
+After migration031, apply the matching storage-gateway grants transactionally before running the matching gateway binary. The gateway receives SELECT only on company_id and child_run_id of the continuation table, allowing it to reject generated-child transfers without reading source snapshots, artifact facts or canonical step IDs. Its dedicated stored-lease authorization path retains the existing membership, agent, run and legacy-policy checks. Managed inference continues through the full generated-source authority path. This separation is covered by both scoped continuation tests and the real restricted gateway login/transfer test.

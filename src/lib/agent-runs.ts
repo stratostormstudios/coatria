@@ -38,11 +38,17 @@ async function authority(client:PoolClient,identity:AgentRunIdentity,requesterId
  if(agent.invocation_access==='none'||requesterRole&&agent.invocation_access==='admins'&&!['owner','admin'].includes(requesterRole))fail(403,'This agent is not available to this requester.','AGENT_INVOCATION_ACCESS');
  return{agent,requesterRole};
 }
-async function lockedRun(client:PoolClient,identity:AgentRunIdentity,runId:string){
+async function lockedRun(client:PoolClient,identity:AgentRunIdentity,runId:string,storageTransfer=false){
  id(runId);const preview=(await client.query('SELECT requested_by FROM agent_runs WHERE company_id=$1 AND agent_id=$2 AND id=$3',[identity.company_id,identity.id,runId])).rows[0];if(!preview)fail(404,'Agent request not found.');
  const access=await authority(client,identity,preview.requested_by);
  const run=(await client.query("SELECT *,lease_expires_at>clock_timestamp() AND started_at>clock_timestamp()-interval '30 minutes' AS lease_live FROM agent_runs WHERE company_id=$1 AND agent_id=$2 AND id=$3 FOR UPDATE",[identity.company_id,identity.id,runId])).rows[0];
- if(!run)fail(404,'Agent request not found.');await missionAuthority(client,identity.company_id,run,access.requesterRole);if(!await coordinationRunAuthority(client,identity.company_id,run))fail(409,'This delegated work no longer has its exact project approval.','COORDINATION_AUTHORITY_ENDED');if(!await planningReviewRunAuthority(client,identity.company_id,run))fail(409,'This planning review no longer has its exact project approval.','STUDIO_REVIEW_AUTHORITY_ENDED');await assertGeneratedRunAuthority(client,identity.company_id,run);
+ if(!run)fail(404,'Agent request not found.');await missionAuthority(client,identity.company_id,run,access.requesterRole);if(!await coordinationRunAuthority(client,identity.company_id,run))fail(409,'This delegated work no longer has its exact project approval.','COORDINATION_AUTHORITY_ENDED');if(!await planningReviewRunAuthority(client,identity.company_id,run))fail(409,'This planning review no longer has its exact project approval.','STUDIO_REVIEW_AUTHORITY_ENDED');
+ if(storageTransfer){
+  // A generated continuation has no transfer authority. Its immutable run
+  // classification is sufficient to deny it; the restricted gateway must not
+  // receive generated source evidence merely to authorize unrelated transfers.
+  if((await client.query('SELECT child_run_id FROM studio_generated_followups WHERE company_id=$1 AND child_run_id=$2',[identity.company_id,runId])).rowCount)fail(403,'Generated continuations cannot transfer project files.','GENERATED_FOLLOWUP_SCOPE');
+ }else await assertGeneratedRunAuthority(client,identity.company_id,run);
  // Policy/source checks may wait for locks. A lease read before those waits is
  // not proof that this worker still has time to act when the checks finish.
  await refreshRunLease(client,identity.company_id,run);
@@ -76,12 +82,16 @@ export async function assertRunToolCommitAuthority(client:PoolClient,identity:Pi
 export async function authorizeRunTool(client:PoolClient,identity:AgentRunIdentity,runId:string,leaseToken:string){const access=await lockedRun(client,identity,runId);requireLease(access.run,leaseToken);return access as{run:Record<string,any>;capabilities:string[];requesterRole:string;agent:Record<string,any>};}
 
 /** Internal reconciliation only. A stored hash is never accepted as a public lease proof. */
-export async function authorizeStoredAgentRun(client:PoolClient,identity:AgentRunIdentity,runId:string,leaseTokenHash:string){
+async function storedAgentRun(client:PoolClient,identity:AgentRunIdentity,runId:string,leaseTokenHash:string,storageTransfer:boolean){
  if(!/^[a-f0-9]{64}$/.test(leaseTokenHash))fail(409,'The stored run authority is unavailable.','RUN_LEASE_LOST');
- const access=await lockedRun(client,identity,runId);if(access.run.status==='cancelled')fail(409,'This request was cancelled.','RUN_CANCELLED');
+ const access=await lockedRun(client,identity,runId,storageTransfer);if(access.run.status==='cancelled')fail(409,'This request was cancelled.','RUN_CANCELLED');
  if(access.run.status!=='running'||!access.run.lease_live||access.run.lease_token_hash!==leaseTokenHash)fail(409,'This worker no longer owns a live lease.','RUN_LEASE_LOST');
  return access as{run:Record<string,any>;capabilities:string[];requesterRole:string;agent:Record<string,any>};
 }
+export async function authorizeStoredAgentRun(client:PoolClient,identity:AgentRunIdentity,runId:string,leaseTokenHash:string){return storedAgentRun(client,identity,runId,leaseTokenHash,false);}
+/** Gateway-only stored-grant authority. Generated continuations are denied;
+ * managed inference uses authorizeStoredAgentRun and retains full evidence checks. */
+export async function authorizeStoredStorageAgentRun(client:PoolClient,identity:AgentRunIdentity,runId:string,leaseTokenHash:string){return storedAgentRun(client,identity,runId,leaseTokenHash,true);}
 
 export async function createAgentRun(member:Membership,channel:string,input:unknown,options:{purpose?:'task'|'connection_test'}={}){
  return transaction(client=>createAgentRunInTransaction(client,member,channel,input,options));

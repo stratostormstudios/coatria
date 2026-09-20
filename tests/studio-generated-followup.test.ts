@@ -9,7 +9,8 @@ import {query,transaction} from '../src/lib/db';
 import {setupStudio,createStudioProject} from '../src/lib/studio';
 import {saveStudioCoordination} from '../src/lib/studio-coordination';
 import {executeAgentTool} from '../src/lib/agent-tools';
-import {createAgentRunInTransaction,claimAgentRun,heartbeatAgentRun,agentRunContext,finishAgentRun} from '../src/lib/agent-runs';
+import {createAgentRunInTransaction,claimAgentRun,heartbeatAgentRun,agentRunContext,finishAgentRun,authorizeStoredAgentRun,authorizeStoredStorageAgentRun} from '../src/lib/agent-runs';
+import {authorizeStorageGrantAgent} from '../src/lib/project-storage-authority';
 import {registerStudioGeneratedArtifact,loadStoredGeneratedArtifact} from '../src/lib/studio-generated-artifacts';
 import {studioGeneratedFollowupAdvanceInput,studioGeneratedFollowupDispatchInput} from '../src/lib/studio-generated-followup-protocol';
 import {studioCoordinationInput} from '../src/lib/studio-coordination-protocol';
@@ -135,6 +136,17 @@ test('generated continuation executes exact leased tools against immutable synth
 
   await t.test('a different archive of the same source cannot schedule another child or spend a budget unit',async()=>{
    const f=await fixture('image',{budget:3}),queued=(await f.dispatch()).result as Row,other=await f.archive(),before=await f.effects();await assert.rejects(()=>f.dispatch(other.archiveId),denied);assert.deepEqual(await f.effects(),before);assert.equal(((await f.dispatch()).result as Row).childRunId,queued.childRunId);
+  });
+  await t.test('stored inference authority remains valid while generated children are denied storage transfer authority',async()=>{
+   const f=await fixture();await f.dispatch();const lease=await f.claim(f.specialist),proof=sha(lease.leaseToken),before=await f.effects();
+   // The managed inference service uses this shared stored-lease entry point.
+   // This is an authorization test only; no inference request is dispatched.
+   const access=await transaction(client=>authorizeStoredAgentRun(client,f.specialist as any,lease.run.id,proof));assert.equal(access.run.id,lease.run.id);assert(access.capabilities.includes('storage.read'));
+   await assert.rejects(()=>transaction(client=>authorizeStoredStorageAgentRun(client,f.specialist as any,lease.run.id,proof)),(error:any)=>error.status===403&&error.code==='GENERATED_FOLLOWUP_SCOPE');
+   // Even an internally supplied grant with the exact current token/lease/user
+   // cannot let a source-bound continuation download a file through the gateway.
+   await assert.rejects(()=>transaction(client=>authorizeStorageGrantAgent(client,{company_id:f.company,agent_id:f.specialist.id,agent_token_hash:f.specialist.token_hash,run_id:lease.run.id,agent_lease_hash:proof,user_id:f.registrar.id,operation:'read'})),(error:any)=>error.status===403&&error.code==='STORAGE_ACCESS_DENIED');
+   assert.deepEqual(await f.effects(),before);assert.equal(networkCalls,0);
   });
   await t.test('explicit opt-in and remaining lifetime budget are required before queueing',async()=>{
    for(const options of[{optIn:false},{budget:1}]){const f=await fixture('image',options),before=await f.effects();await assert.rejects(()=>f.dispatch(),denied);assert.deepEqual(await f.effects(),before);}
