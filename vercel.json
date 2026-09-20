@@ -5,6 +5,7 @@
   "crons": [
     { "path": "/api/internal/managed-pilot/reap", "schedule": "* * * * *" },
     { "path": "/api/internal/studio-hosts/reconcile", "schedule": "* * * * *" },
-    { "path": "/api/internal/studio-inference/reconcile", "schedule": "* * * * *" }
+    { "path": "/api/internal/studio-inference/reconcile", "schedule": "* * * * *" },
+    { "path": "/api/internal/higgsfield-jobs/reconcile", "schedule": "* * * * *" }
   ]
 }

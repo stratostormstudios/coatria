@@ -182,8 +182,9 @@ test('studio production uses real company tasks, tenant authority, versioned evi
     return found;
   }
   async function acceptHuman(item: StudioWorkItem) {
-    await call(`companies/${company}/tasks/${item.taskId}`, 'PATCH', { status: 'review' });
-    const accepted = await call(`companies/${company}/tasks/${item.taskId}`, 'PATCH', { status: 'done', reviewNote: 'Independent fixture task acceptance.' }, 'reviewer');
+    const qc=item.stage==='qc';
+    await call(`companies/${company}/tasks/${item.taskId}`, 'PATCH', { status: 'review' },qc?'reviewer':'owner');
+    const accepted = await call(`companies/${company}/tasks/${item.taskId}`, 'PATCH', { status: 'done', reviewNote: 'Independent fixture task acceptance.' }, qc?'owner':'reviewer');
     assert.equal(accepted.task.status, 'done');
   }
   async function review(artifactId: string, actor: Actor = 'reviewer', expected = 201, overrides: Record<string, unknown> = {}) {
@@ -220,6 +221,7 @@ test('studio production uses real company tasks, tenant authority, versioned evi
       await call(`${prefix}/setup`, 'POST', { ...payload, assignments: [{ roleKey: 'coordinator', agentId: foreignAgent }] }, 'owner', [400, 404]);
       await call(`${prefix}/setup`, 'POST', { ...payload, assignments: [{ roleKey: 'producer', humanId: outsider }] }, 'owner', [400, 404]);
       await call(`${prefix}/setup`, 'POST', { ...payload, assignments: [{ roleKey: 'does-not-exist', humanId: owner }] }, 'owner', 400);
+      for(const assignment of [{roleKey:'qc',agentId:agent},{roleKey:'qc',humanId:member}])assert.equal((await call(`${prefix}/setup`,'POST',{...payload,assignments:[assignment]},'owner',400)).code,'STUDIO_QC_HUMAN_REQUIRED');
       const first = await call(`${prefix}/setup`, 'POST', payload, 'owner', 201);
       const snapshot = await call(prefix);
       assert.equal(snapshot.profile.revision, 1);
@@ -250,10 +252,11 @@ test('studio production uses real company tasks, tenant authority, versioned evi
       for (const work of allowed.workItems) {
         assert(work.dependencies.every(id => workIds.has(id)));
         assert(!work.dependencies.includes(work.id));
-        const task = (await query('SELECT company_id,title,status FROM tasks WHERE id=$1', [work.taskId])).rows[0];
+        const task = (await query('SELECT company_id,title,status,assignee_id FROM tasks WHERE id=$1', [work.taskId])).rows[0];
         assert.equal(task.company_id, company);
         assert.equal(task.title, work.title);
         assert.equal(task.status, work.status);
+        assert.equal(task.assignee_id,work.humanId);
       }
       for (const item of allowed.shots) {
         const shotWork = allowed.workItems.filter(work => work.shotId === item.id);
@@ -281,6 +284,22 @@ test('studio production uses real company tasks, tenant authority, versioned evi
       await call(`companies/${foreign}/studio/projects/${allowed.project.id}`, 'GET', undefined, 'outsider', 404);
       await call(`${prefix}/projects/${allowed.project.id}`, 'GET', undefined, 'outsider', 404);
       assert(!(JSON.stringify(await call(prefix, 'GET', undefined, 'member')).includes(token)));
+    });
+
+    await t.test('human role ownership grants pending task access and preserves submitted and accepted attribution',async()=>{
+      const save=async(humanId:string|null,expected=201)=>{const profile=(await call(prefix)).profile;return call(`${prefix}/setup`,'POST',{clientId:randomUUID(),templateId:profile.templateId,templateVersion:1,revision:profile.revision,assignments:profile.roles.map((role:any)=>({roleKey:role.key,agentId:role.key==='producer'?null:role.agentId,humanId:role.key==='producer'?humanId:role.humanId}))},'owner',expected);};
+      await save(member);const existing=allowed.workItems.find(item=>item.stage==='estimate')!;assert.equal((await query('SELECT assignee_id FROM tasks WHERE id=$1',[existing.taskId])).rows[0].assignee_id,member);
+      const created=await call(`${prefix}/projects`,'POST',projectInput({name:'Human role ownership fixture',aiPolicy:'allowed'}),'owner',201),d=await detail(created.project.id),estimate=d.workItems.find(item=>item.stage==='estimate')!,path=`companies/${company}/tasks/${estimate.taskId}`;
+      assert.equal((await query('SELECT assignee_id FROM tasks WHERE id=$1',[estimate.taskId])).rows[0].assignee_id,member);await gate(d.project.id,'brief');
+      await call(path,'PATCH',{status:'doing'},'member');assert.equal((await save(owner,409)).code,'STUDIO_ROLE_BUSY');
+      await call(path,'PATCH',{status:'review'},'member');assert.equal((await save(owner,409)).code,'STUDIO_ROLE_BUSY');
+      await call(path,'PATCH',{status:'done'},'member',403);await call(path,'PATCH',{status:'done',reviewNote:'Independent review of the human role contribution.'},'reviewer');
+      const before=(await query('SELECT assignee_id,submitted_by,approved_by,revision FROM tasks WHERE id=$1',[estimate.taskId])).rows[0];assert.equal(before.submitted_by,member);assert.equal(before.approved_by,reviewer);
+      await save(null);assert.equal((await query('SELECT assignee_id FROM tasks WHERE id=$1',[existing.taskId])).rows[0].assignee_id,null);
+      await save(owner);assert.deepEqual((await query('SELECT assignee_id,submitted_by,approved_by,revision FROM tasks WHERE id=$1',[estimate.taskId])).rows[0],before);
+      const pending=await call(`${prefix}/projects`,'POST',projectInput({name:'Unassigned former worker fixture'}),'owner',201),pendingDetail=await detail(pending.project.id);await gate(pending.project.id,'brief');await call(`companies/${company}/tasks/${pendingDetail.workItems.find(item=>item.stage==='estimate')!.taskId}`,'PATCH',{status:'doing'},'member',403);
+      const current=(await query('SELECT assignee_id FROM tasks WHERE id=$1',[existing.taskId])).rows[0];assert.equal(current.assignee_id,owner);
+      await query("UPDATE memberships SET role='member' WHERE company_id=$1 AND user_id=$2",[company,reviewer]);assert.equal((await call(`${prefix}/projects`,'POST',projectInput({name:'Reject demoted QC fixture'}),'owner',409)).code,'STUDIO_QC_HUMAN_REQUIRED');await query("UPDATE memberships SET role='admin' WHERE company_id=$1 AND user_id=$2",[company,reviewer]);
     });
 
     await t.test('unknown AI policy cannot be converted into production authority by a gate or task edit', async () => {

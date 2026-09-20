@@ -67,11 +67,18 @@ test('company OAuth, exact spending intent, revocation and uncertain generation 
    await call(`${prefix}/requests/${proposal.id}/execute`,'POST',{requestHash:proposal.requestHash,creditConsent:true},'member',403);
    await query('UPDATE studio_projects SET gates=$2 WHERE id=$1',[project,JSON.stringify(Object.fromEntries(['brief','estimate','production'].map(k=>[k,{decision:'approved'}])))]);
   });
-  await t.test('one durable approved intent sends once and preserves provider response without claiming completed media',async()=>{
+  await t.test('one durable approved intent sends once and preserves a sanitized provider receipt without claiming completed media',async()=>{
    const result=(await call(`${prefix}/requests/${proposal.id}/execute`,'POST',{requestHash:proposal.requestHash,creditConsent:true})).value;
    assert.equal(paid,1);assert.equal(result.status,'returned');assert.equal(result.mediaCompleted,false);
    assert.equal((await call(`${prefix}/requests/${proposal.id}/execute`,'POST',{requestHash:proposal.requestHash,creditConsent:true})).value.replayed,true);assert.equal(paid,1);
-   const list=(await call(prefix+'/requests?projectId='+project)).value;assert.equal(list.requests[0].hasReceipt,true);assert(!('result'in list.requests[0]));const exact=(await call(prefix+'/requests?projectId='+project+'&requestId='+proposal.id)).value;assert.equal(exact.request.result.structuredContent.status,'queued');
+   const list=(await call(prefix+'/requests?projectId='+project)).value;assert.equal(list.requests[0].hasReceipt,true);assert(!('result'in list.requests[0]));const exact=(await call(prefix+'/requests?projectId='+project+'&requestId='+proposal.id)).value;assert.equal(exact.request.result.outcome,'unsupported');assert.match(exact.request.result.sourceSha256,/^[a-f0-9]{64}$/);
+  });
+  await t.test('durable job metadata is company-scoped and unsupported receipts do not mint job IDs',async()=>{
+   await call(prefix+'/jobs?projectId='+project,'GET',undefined,'none',401);
+   await call(prefix+'/jobs?projectId='+project,'GET',undefined,'other',404);
+   const page=(await call(prefix+'/jobs?projectId='+project,'GET',undefined,'member')).value;assert.deepEqual(page,{jobs:[],hasMore:false,nextAfter:null});
+   await call(prefix+'/jobs?projectId='+project+'&requestId='+randomUUID(),'GET',undefined,'owner',404);
+   await call(prefix+'/jobs?projectId='+project+'&limit=51','GET',undefined,'owner',400);
   });
   await t.test('uncertain provider response cannot be replayed; read operations cannot invoke generation or select workspace',async()=>{
    mode='uncertain';const r=(await call(prefix+'/requests','POST',{clientId:randomUUID(),projectId:project,projectRevision:1,tool:'generate_image',arguments:{prompt:'Another original concept'},note:'Uncertain test'},'owner',201)).value.request;
@@ -82,7 +89,7 @@ test('company OAuth, exact spending intent, revocation and uncertain generation 
   });
   await t.test('official tool errors are receipts rather than completed media; agent reads are bounded',async()=>{
    mode='tool_error';const r=(await call(prefix+'/requests','POST',{clientId:randomUUID(),projectId:project,projectRevision:1,tool:'generate_video',arguments:{prompt:'Video concept'},note:'Tool error test'},'owner',201)).value.request;
-   const result=(await call(`${prefix}/requests/${r.id}/execute`,'POST',{requestHash:r.requestHash,creditConsent:true})).value;assert.equal(result.status,'returned');assert.equal(result.result.isError,true);assert.equal(result.mediaCompleted,false);
+   const result=(await call(`${prefix}/requests/${r.id}/execute`,'POST',{requestHash:r.requestHash,creditConsent:true})).value;assert.equal(result.status,'returned');assert.equal(result.result.outcome,'rejected');assert.equal(result.result.code,'HIGGSFIELD_TOOL_ERROR');assert.equal(result.mediaCompleted,false);
    const {higgsfieldAgentRequests,higgsfieldAgentConnection}=await import('../src/lib/higgsfield');const {transaction}=await import('../src/lib/db');
    await query('UPDATE higgsfield_requests SET result=$2 WHERE id=$1',[r.id,JSON.stringify({content:[{type:'text',text:'x'.repeat(200000)}]})]);
    const compact=await transaction(db=>higgsfieldAgentRequests(db,company,{projectId:project,requestId:r.id}));assert.equal(compact.request.resultTruncated,true);assert(Buffer.byteLength(JSON.stringify(compact))<12000);

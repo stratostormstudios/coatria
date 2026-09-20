@@ -7,5 +7,5 @@ export const higgsfieldProposalInput=z.object({clientId:z.string().uuid(),projec
 export const higgsfieldReadInput=z.object({tool:z.enum(HIGGSFIELD_READ_TOOLS),arguments:args.default({})}).strict();
 export const higgsfieldExecuteInput=z.object({requestHash:z.string().regex(/^[a-f0-9]{64}$/),creditConsent:z.literal(true)}).strict();
 export const higgsfieldEstimateInput=z.object({requestHash:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
-export type HiggsfieldConnection={status:'disconnected'|'connected'|'reconnect_required';revision:number;connectedAt?:string;expiresAt?:string;officialEndpoint:string;toolCount:number;tools:{name:string;description:string;inputSchema:Record<string,unknown>}[]};
+export type HiggsfieldConnection={status:'disconnected'|'connected'|'reconnect_required';revision:number;connectedAt?:string;expiresAt?:string;officialEndpoint:string;toolCount:number;tools:{name:string;description:string;inputSchema:Record<string,unknown>;outputSchema?:Record<string,unknown>}[]};
 export type HiggsfieldRequest={id:string;projectId:string;workItemId?:string|null;taskRevision?:number|null;tool:string;arguments:Record<string,unknown>;note:string;requestHash:string;status:'proposed'|'dispatching'|'returned'|'uncertain'|'rejected';createdAt:string;result?:unknown;errorCode?:string|null};

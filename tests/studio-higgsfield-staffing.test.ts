@@ -25,11 +25,14 @@ test('AI staffing covers the selected template exactly with useful generation an
 
 test('AI creative and reference grants are explicit role additions; legacy and reviewer authority stay unchanged',()=>{
  assert.deepEqual(studioStaffingCapabilities('vfx-boutique',roles),[...STUDIO_STAFFING_CAPABILITIES]);
- assert.deepEqual(studioStaffingCapabilities('ai-production',['producer','coordinator','supervisor','delivery']),[...STUDIO_STAFFING_CAPABILITIES]);
- assert.deepEqual(studioStaffingCapabilities('ai-production',['ingest']),[...STUDIO_STAFFING_CAPABILITIES,'infrastructure.read','creative.read']);
+ assert.deepEqual(studioStaffingCapabilities('ai-production',['producer','supervisor']),[...STUDIO_STAFFING_CAPABILITIES]);
+ for(const role of ['coordinator','delivery'])assert.deepEqual(studioStaffingCapabilities('ai-production',[role]),[...STUDIO_STAFFING_CAPABILITIES,'storage.read','storage.organize']);
+ assert.deepEqual(studioStaffingCapabilities('ai-production',['ingest']),[...STUDIO_STAFFING_CAPABILITIES,'storage.read','storage.organize','infrastructure.read','creative.read']);
  assert.deepEqual(studioStaffingCapabilities('ai-production',['comp']),[...STUDIO_STAFFING_CAPABILITIES,'creative.read','creative.write']);
  const combined=studioStaffingCapabilities('ai-production',roles);assert.equal(new Set(combined).size,combined.length);assert(!combined.includes('studio.execute'));assert(!combined.includes('studio.review'));
  assert.deepEqual(STUDIO_PLANNING_REVIEW_CAPABILITIES,['studio.read','studio.review']);
+ const draft=draftStudioStaffing(input({templateId:'ai-production'}));for(const person of draft.specialists){const storageRole=person.roleKeys.some(role=>['coordinator','ingest','delivery'].includes(role));if(storageRole)assert.match(person.character.persona,/explicitly reviewed storage.read and storage.organize/);else assert.doesNotMatch(person.character.persona,/storage.organize/);}
+ assert(!combined.some(grant=>['storage.write','storage.transfer','storage.upload'].includes(grant)));
  assert.equal(studioStaffingPlanInput.parse(input()).templateId,'vfx-boutique');
  for(const patch of [{templateId:'other'},{productionPath:'higgsfield'},{creativeGrants:['*']},{specialists:[{name:'Injection',roleKeys:roles,capabilities:['creative.write']}]}])assert.equal(studioStaffingPlanInput.safeParse(input(patch)).success,false);
 });

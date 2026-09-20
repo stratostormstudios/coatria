@@ -1,0 +1,48 @@
+{
+  "source": "Actual company MCP catalog, exported through authorized read-only UI on 2026-09-20; no generation or job output captured",
+  "tool": "jobs_wait",
+  "inputSchema": {
+    "type": "object",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "required": [
+      "jobs"
+    ],
+    "properties": {
+      "jobs": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "index",
+            "job_id"
+          ],
+          "properties": {
+            "index": {
+              "type": "integer",
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "description": "Stable index returned by the batch generation tool."
+            },
+            "job_id": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "maxItems": 12,
+        "minItems": 1,
+        "description": "Full-profile generation jobs to wait for together."
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "default": 15,
+        "maximum": 15,
+        "minimum": 0,
+        "description": "Long-poll budget. Use 0 for an immediate snapshot."
+      }
+    }
+  },
+  "outputSchema": null
+}

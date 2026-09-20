@@ -57,7 +57,7 @@ test('actual creative project APIs enforce the graph, finite dispatch, real arti
  const work=async(stage:string)=>(await detail()).workItems.find(item=>item.stage===stage)!;
  const taskPath=(item:StudioWorkItem)=>`companies/${company}/tasks/${item.taskId}`;
  async function gate(key:string,extra:Record<string,unknown>={},expected=201){return call(`${base}/projects/${projectId}/gates`,'POST',{clientId:randomUUID(),revision:(await detail()).project.revision,gate:key,decision:'approved',note:'Fixture human attestation, no real client involved.',...extra},'owner',expected);}
- async function acceptHuman(item:StudioWorkItem){await call(taskPath(item),'PATCH',{status:'review'});await call(taskPath(item),'PATCH',{status:'done',reviewNote:'Independent fixture acceptance.'},'reviewer');}
+ async function acceptHuman(item:StudioWorkItem){const qc=item.stage==='qc';await call(taskPath(item),'PATCH',{status:'review'},qc?'reviewer':'owner');await call(taskPath(item),'PATCH',{status:'done',reviewNote:'Independent fixture acceptance.'},qc?'owner':'reviewer');}
  async function tool(agent:string,lease:any,name:string,args:unknown,expected=200,requestId=randomUUID()){return call('agent/tools/'+name,'POST',{runId:lease.run.id,leaseToken:lease.leaseToken,requestId,arguments:args},agent,expected);}
  const artifact=async()=>({projectId,revision:(await detail()).project.revision,workItemId:(await work('generation')).id,name:'Synthetic actual-media reference',url:'https://media.example.invalid/creative.mp4',sha256:'ab'.repeat(32),frameStart:1,frameEnd:120,...spec,notes:'Synthetic metadata fixture only; no actual provider output or byte verification.'});
  try{

@@ -41,6 +41,9 @@ GRANT UPDATE(status,secret_envelope,revision) ON project_storage_connections TO 
 GRANT UPDATE(revision) ON project_storage_bindings TO coatria_runtime_v1;
 GRANT UPDATE(parent_id,name,name_key) ON project_storage_folders,project_storage_files TO coatria_runtime_v1;
 GRANT UPDATE(status,provider_upload_id,provider_descriptor,provider_etag,verification_grant_id,active_part,action_id,action_expires_at,updated_at) ON project_storage_uploads TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON higgsfield_job_receipts,higgsfield_jobs,higgsfield_job_observations,higgsfield_job_outputs,higgsfield_output_locators TO coatria_runtime_v1;
+GRANT INSERT ON higgsfield_provider_responses TO coatria_runtime_v1;
+GRANT UPDATE(status,diagnostic_code,poll_attempts,next_poll_at,poll_lease_id,poll_lease_expires_at,updated_at) ON higgsfield_jobs TO coatria_runtime_v1;
 GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO coatria_runtime_v1;
 ALTER ROLE coatria_runtime_v1 SET statement_timeout='15s';
 ALTER ROLE coatria_runtime_v1 SET idle_in_transaction_session_timeout='20s';
