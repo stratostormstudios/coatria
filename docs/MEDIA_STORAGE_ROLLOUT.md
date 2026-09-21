@@ -1,14 +1,15 @@
 # Dedicated media storage and archive host rollout
 
-Updated 2026-09-20. The user approved the dedicated volume and synthetic test.
+Updated 2026-09-21. The user approved the dedicated volume and synthetic test.
 The volume was created and its identity verified through the Runpod API:
 `65dfq9bykj`, `coatria-stratostorm-media-pilot`, 10 GB in `US-NC-2`.
-No compute was started. The transport test is prepared and the user has signed
-in to the console. Runpod's creation dialog grants an S3 key read/write access
-to every account network volume. The temporary key
-`coatria-media-pilot-conformance` is prepared but has not been created; approval
-for that broader credential scope is pending. The proposed key will be used
-only for the new volume's synthetic test and revoked afterward.
+The final synthetic transport test passed on source `120c6a8`. It verified
+5,308,416 stored bytes through full SHA-256 readback and a range crossing the
+multipart boundary. Two synthetic objects remain, totaling 10,616,832 bytes;
+four earlier empty multipart uploads were confirmed aborted. No compute was
+started. The user authorized temporary account-wide S3 credentials for the
+named-volume test, and both temporary keys were revoked afterward. Fresh
+private credentials will be needed for a separately qualified trusted service.
 
 ## Observed account state
 
@@ -17,12 +18,12 @@ unrelated 150 GB model volume in US-NE-1 and the retained 10 GB Coatria worker-s
 volume in US-NC-2. Neither is a selected media test destination. This was the
 inventory before creation; the approved dedicated volume above now exists.
 
-The verified 2026-09-20 production snapshot is source `41bbaf0`, deployment
-`dpl_8eod368XV6JFJQMiMw35pUQy7ovf`. Its public health returned ready and its
-published agent API reported **1.12.0 / 175 paths**. Separate Vercel and Neon
-read-backs verified that source, migrations 030–033 and the real restricted
-application login. Archive and gateway activation remain disabled; their
-production service logins and actual host qualification are still outstanding.
+The production domain was rechecked on 2026-09-21 and still points to source
+`550140f`, deployment `dpl_HiaGB72zMS1SSh3RYeBBMNsDtnjB`, with migrations through
+034 and published agent API **1.13.0 / 175 paths**. The candidate storage fixes
+are in a protected isolated preview at source `120c6a8`. Archive and gateway
+activation remain disabled; their production service logins, actual host
+qualification and authenticated application transport are still outstanding.
 See [release evidence](RELEASE_STATUS.md).
 
 ## Approved storage resource
@@ -83,20 +84,23 @@ backup, retention, disaster-recovery or million-user commitment. Account S3
 credentials stay in trusted services; Coatria's gateway supplies tenant and
 project authorization. The transport test alone does not prove these boundaries.
 
-## Missing inputs
+## Remaining live inputs
 
-- Separate Runpod S3 access credentials.
+- Fresh private Runpod S3 credentials for the qualified service; test credentials
+  were revoked and must not be reused.
 - An accessible production Linux VM or a reviewed provider/account choice and
   hosting allowance. No suitable host has been selected or qualified.
 - The specific source output, project destination and current human archive
   approval for the final live media canary.
 
-The prepared transport plan is pinned to the actual created volume and fresh
-synthetic object identities. Its SHA-256 is
-`efd91e7d7f2a6dcdcef922b0411e806aa7e82fcb5b5197bc3301cc7594abd353`.
-The plan and create/readback receipts are in the local operator evidence folder
-`output/coatria-generated-v2/media-storage-live-20260920` outside this repository.
-No provider write for the synthetic test has been attempted yet.
+The passing final plan is pinned to the created volume and exact synthetic
+object identities. Its SHA-256 is
+`0ab50ae84a59d11469b44f8b97027ec26a7e42fb97aac2b7731c83a10fee8141`.
+The plan, report and journal are in the local operator evidence folder
+`output/coatria-generated-v2/media-storage-live-20260920/conformance-final`
+outside this repository. The report establishes provider transport, not gateway
+authorization, tenant isolation, production media, backup/retention, or host
+qualification. Earlier failed attempts and reconciliations remain retained.
 
 ## Provider references
 
