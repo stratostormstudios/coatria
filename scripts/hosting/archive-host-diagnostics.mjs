@@ -8,6 +8,11 @@ const helperStages=new Set(['ARGUMENT_IDENTITY','INPUT_FD','ROOT_DIRECTORY','CGR
 const stderrClasses=new Set(['NAMESPACE_PERMISSION','NAMESPACE_CREATE','USER_ID_MAPPING','CGROUP_NAMESPACE','NESTED_USER_NAMESPACE','NETWORK_SETUP','PROC_SETUP','MOUNT_SETUP','APPARMOR','EXECUTABLE_START','ARGUMENT_REJECTED','UNCLASSIFIED']);
 const stderrErrnos=new Set(['EPERM','EACCES','ENOENT','EROFS','ENOSPC','ENOMEM','EMFILE','EINVAL']);
 const numeric=(value,max)=>Number.isSafeInteger(value)&&value>=0&&value<=max?value:null;
+const canaryChecks=new Set(['host_input_pins','host_source_pins','parent_cgroup_controls','conformance_profile','label_parser','boundary','file_descriptor_cap','pids_aggregate_cap','memory_aggregate_cap','cpu_execution','cpu_output','cpu_usage','cpu_wall','cpu_controls','cpu_cgroup_usage','orphan_cleanup','deadline_cleanup','abort_cleanup','supervisor_crash_cleanup','invalid_pin_writable_input','real_profile','real_png','real_jpeg','real_webp','real_mp4','real_mov','real_wav','real_mp3','real_cleanup']);
+export function archiveHostCpuSummary(value){
+ if(!value||typeof value!=='object')return null;
+ return {cpuNs:numeric(value.cpuNs,60_000_000_000),wallNs:numeric(value.wallNs,60_000_000_000),children:numeric(value.children,256),cgroupUsageUsec:numeric(value.cgroupUsageUsec,60_000_000),cgroupsObserved:numeric(value.cgroupsObserved,256),elapsedMs:numeric(value.elapsedMs,60_000),executionCode:value.executionCode===null?null:fixedCode(value.executionCode)};
+}
 export function archiveHostStartupSummary(value){
  if(!value||value.diagnosticOnly!==true||value.qualified!==false||!['conformance','real'].includes(value.profileKind)||!Array.isArray(value.phases)||value.phases.length>16)return null;
  const selected=(values,allowed)=>Array.isArray(values)&&values.length<=16?[...new Set(values.filter(v=>allowed.has(v)))]:[];
@@ -15,13 +20,13 @@ export function archiveHostStartupSummary(value){
 }
 export function archiveHostCanarySummary(value){
  if(!value||value.qualified!==false||!Array.isArray(value.tests)||value.tests.length>10||!Array.isArray(value.realFormats)||value.realFormats.length>7)return null;
- return {failureCode:fixedCode(value.failureCode),testsPassed:value.tests.filter(t=>t?.passed===true).length,formatsPassed:value.realFormats.length,startup:archiveHostStartupSummary(value.startupDiagnostic)};
+ return {failureCode:fixedCode(value.failureCode),failingCheck:canaryChecks.has(value.failingCheck)?value.failingCheck:null,cpu:archiveHostCpuSummary(value.cpuObservation),testsPassed:value.tests.filter(t=>t?.passed===true).length,formatsPassed:value.realFormats.length,startup:archiveHostStartupSummary(value.startupDiagnostic)};
 }
 export class ArchiveHostRunError extends Error{
- /** @param {string} stage @param {unknown} error @param {{failureCode:string,testsPassed:number,formatsPassed:number,startup?:unknown}|null} [canary] */
+ /** @param {string} stage @param {unknown} error @param {{failureCode:string,testsPassed:number,formatsPassed:number,failingCheck?:string|null,cpu?:unknown,startup?:unknown}|null} [canary] */
  constructor(stage,error,canary=null){
   super('ARCHIVE_HOST_PRECONDITION_OR_QUALIFICATION_FAILED');this.name='ArchiveHostRunError';
-  this.diagnostic=Object.freeze({event:'archive-host-failed',code:'ARCHIVE_HOST_PRECONDITION_OR_QUALIFICATION_FAILED',stage:stages.has(stage)?stage:'unknown_stage',errorCode:error?.message==='ARCHIVE_HOST_PACKAGE_REJECTED'?'CHECK_FAILED':fixedCode(error?.code),canary:canary&&Number.isInteger(canary.testsPassed)&&canary.testsPassed>=0&&canary.testsPassed<=10&&Number.isInteger(canary.formatsPassed)&&canary.formatsPassed>=0&&canary.formatsPassed<=7?{failureCode:fixedCode(canary.failureCode),testsPassed:canary.testsPassed,formatsPassed:canary.formatsPassed,startup:archiveHostStartupSummary(canary.startup)}:null});
+  this.diagnostic=Object.freeze({event:'archive-host-failed',code:'ARCHIVE_HOST_PRECONDITION_OR_QUALIFICATION_FAILED',stage:stages.has(stage)?stage:'unknown_stage',errorCode:error?.message==='ARCHIVE_HOST_PACKAGE_REJECTED'?'CHECK_FAILED':fixedCode(error?.code),canary:canary&&Number.isInteger(canary.testsPassed)&&canary.testsPassed>=0&&canary.testsPassed<=10&&Number.isInteger(canary.formatsPassed)&&canary.formatsPassed>=0&&canary.formatsPassed<=7?{failureCode:fixedCode(canary.failureCode),failingCheck:canaryChecks.has(canary.failingCheck)?canary.failingCheck:null,cpu:archiveHostCpuSummary(canary.cpu),testsPassed:canary.testsPassed,formatsPassed:canary.formatsPassed,startup:archiveHostStartupSummary(canary.startup)}:null});
  }
 }
 /** Only the current service invocation's fixed JSON is eligible. Raw journal
