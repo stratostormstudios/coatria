@@ -1,6 +1,6 @@
 /** Trusted archive-worker inspection only. No URLs, shell, network or runtime downloads.
  * Requires configured FFmpeg/ffprobe with the seekable fd protocol (tested with 8.1.1).
- * Production requires the qualified Linux namespace/cgroup executor. Native
+ * Production requires a qualified Linux or Vercel microVM executor. Native
  * decoding is an explicit development-test option and is refused in production. */
 import {createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
@@ -8,6 +8,7 @@ import {constants} from 'node:fs';
 import {lstat,open,realpath,stat,type FileHandle} from 'node:fs/promises';
 import {dirname,isAbsolute,resolve} from 'node:path';
 import {isQualifiedLinuxMediaSandbox,MediaSandboxError,type QualifiedLinuxMediaSandbox} from './higgsfield-media-sandbox';
+import {isQualifiedVercelMediaSandbox,type QualifiedVercelMediaSandbox} from './higgsfield-vercel-media-sandbox';
 
 type Kind='image'|'video'|'audio';
 type Rational={numerator:number;denominator:number};
@@ -21,7 +22,7 @@ export type HiggsfieldMediaDescriptor=Common&(
 );
 export type HiggsfieldArchiveMediaInput={path:string;expectedKind:Kind;expectedBytes:number;expectedSha256:string;signal?:AbortSignal};
 export type HiggsfieldMediaInspectionLimits={timeoutMs:number;maxBytes:number;maxDimension:number;maxPixels:number;maxDurationMs:number;maxVideoFrames:number;maxDecodedPixels:number;maxDecodedSamples:number;maxProbeBytes:number;maxAllocationBytes:number};
-export type HiggsfieldMediaInspectionOptions={sandbox?:QualifiedLinuxMediaSandbox;nativeTestMode?:true;ffprobePath?:string;ffmpegPath?:string;limits?:Partial<HiggsfieldMediaInspectionLimits>};
+export type HiggsfieldMediaInspectionOptions={sandbox?:QualifiedLinuxMediaSandbox|QualifiedVercelMediaSandbox;sandboxTimeoutMs?:number;nativeTestMode?:true;ffprobePath?:string;ffmpegPath?:string;limits?:Partial<HiggsfieldMediaInspectionLimits>};
 export type HiggsfieldMediaInspectionCode='MEDIA_INSPECTOR_UNAVAILABLE'|'MEDIA_INPUT_INVALID'|'MEDIA_BYTES_CHANGED'|'MEDIA_UNSUPPORTED'|'MEDIA_KIND_MISMATCH'|'MEDIA_LIMIT_EXCEEDED'|'MEDIA_DECODE_FAILED'|'MEDIA_INSPECTION_ABORTED'|'MEDIA_INSPECTION_TIMEOUT';
 const messages:Record<HiggsfieldMediaInspectionCode,string>={MEDIA_INSPECTOR_UNAVAILABLE:'The configured media decoder is unavailable or unsupported.',MEDIA_INPUT_INVALID:'Use one trusted regular local scratch file with exact byte evidence.',MEDIA_BYTES_CHANGED:'The scratch file no longer matches its expected bytes.',MEDIA_UNSUPPORTED:'This media format or stream layout is unsupported.',MEDIA_KIND_MISMATCH:'Decoded media does not match the expected output kind.',MEDIA_LIMIT_EXCEEDED:'The media exceeds the configured inspection limits.',MEDIA_DECODE_FAILED:'The complete media could not be decoded and verified.',MEDIA_INSPECTION_ABORTED:'Media inspection was stopped.',MEDIA_INSPECTION_TIMEOUT:'Media inspection exceeded its time limit.'};
 export class HiggsfieldMediaInspectionError extends Error{constructor(readonly code:HiggsfieldMediaInspectionCode){super(messages[code]);this.name='HiggsfieldMediaInspectionError';}}
@@ -94,10 +95,10 @@ function duration(value:unknown,limits:HiggsfieldMediaInspectionLimits){const n=
 
 /** Every child gets only the already-validated file as seekable stdin. No filename,
  * URL, company credentials or inherited provider environment reaches the decoder. */
-async function run(binary:string,args:string[],input:HiggsfieldArchiveMediaInput,identity:{dev:number;ino:number},limits:HiggsfieldMediaInspectionLimits,signal:AbortSignal,sandbox?:QualifiedLinuxMediaSandbox){
+async function run(binary:string,args:string[],input:HiggsfieldArchiveMediaInput,identity:{dev:number;ino:number},limits:HiggsfieldMediaInspectionLimits,signal:AbortSignal,sandbox?:QualifiedLinuxMediaSandbox,sandboxTimeoutMs=limits.timeoutMs){
  signal.throwIfAborted();const file=await trustedFile(input.path);try{
   const info=await file.stat();if(info.dev!==identity.dev||info.ino!==identity.ino||info.size!==input.expectedBytes)fail('MEDIA_BYTES_CHANGED');
-  if(sandbox){try{return await sandbox.run({tool:binary as 'ffprobe'|'ffmpeg',args,inputFd:file.fd,signal,maxOutputBytes:limits.maxProbeBytes,maxStderrBytes:65536,timeoutMs:limits.timeoutMs});}catch(error){
+  if(sandbox){try{return await sandbox.run({tool:binary as 'ffprobe'|'ffmpeg',args,inputFd:file.fd,signal,maxOutputBytes:limits.maxProbeBytes,maxStderrBytes:65536,timeoutMs:sandboxTimeoutMs});}catch(error){
    if(error instanceof MediaSandboxError){if(error.code==='ABORTED')fail('MEDIA_INSPECTION_ABORTED');if(error.code==='TIMEOUT')fail('MEDIA_INSPECTION_TIMEOUT');if(error.code==='OUTPUT_LIMIT')fail('MEDIA_LIMIT_EXCEEDED');if(error.code==='PROCESS_FAILED')fail('MEDIA_DECODE_FAILED');}fail('MEDIA_INSPECTOR_UNAVAILABLE');
   }}
   return await new Promise<string>((done,reject)=>{
@@ -119,8 +120,9 @@ export async function inspectHiggsfieldArchiveMedia(input:HiggsfieldArchiveMedia
  if(!['image','video','audio'].includes(input.expectedKind)||!Number.isSafeInteger(input.expectedBytes)||input.expectedBytes<1||input.expectedBytes>limits.maxBytes||!/^[a-f0-9]{64}$/.test(input.expectedSha256))fail('MEDIA_INPUT_INVALID');
  const abort=new AbortController(),timer=setTimeout(()=>abort.abort(new HiggsfieldMediaInspectionError('MEDIA_INSPECTION_TIMEOUT')),limits.timeoutMs),signal=AbortSignal.any([abort.signal,...input.signal?[input.signal]:[]]);let file:FileHandle|undefined;
  try{
-  signal.throwIfAborted();const sandbox=options.sandbox;
-  if(sandbox!==undefined&&!isQualifiedLinuxMediaSandbox(sandbox)||!sandbox&&(options.nativeTestMode!==true||process.env.NODE_ENV==='production'))fail('MEDIA_INSPECTOR_UNAVAILABLE');
+  signal.throwIfAborted();const sandbox=options.sandbox,sandboxTimeoutMs=options.sandboxTimeoutMs??limits.timeoutMs;
+  if(!Number.isSafeInteger(sandboxTimeoutMs)||sandboxTimeoutMs<1||sandboxTimeoutMs>limits.timeoutMs)fail('MEDIA_INPUT_INVALID');
+  if(sandbox!==undefined&&!isQualifiedLinuxMediaSandbox(sandbox)&&!isQualifiedVercelMediaSandbox(sandbox)||!sandbox&&(options.nativeTestMode!==true||process.env.NODE_ENV==='production'))fail('MEDIA_INSPECTOR_UNAVAILABLE');
   const ffprobe=sandbox?'ffprobe':await executable(options.ffprobePath??process.env.COATRIA_FFPROBE_PATH),ffmpeg=sandbox?'ffmpeg':await executable(options.ffmpegPath??process.env.COATRIA_FFMPEG_PATH);
   file=await trustedFile(input.path);const identity=await hashFile(file,input,signal),type=sniff(identity.prefix);if(type.kind!==input.expectedKind)fail('MEDIA_KIND_MISMATCH');
   if(type.format==='mp3')await completeMp3Frames(file,input.expectedBytes,limits,signal);
@@ -131,14 +133,14 @@ export async function inspectHiggsfieldArchiveMedia(input:HiggsfieldArchiveMedia
   const common=['-v','warning','-max_alloc',String(limits.maxAllocationBytes),'-threads','1','-max_pixels',String(limits.maxPixels),'-protocol_whitelist','fd','-format_whitelist',type.demuxer,'-codec_whitelist',codecList.join(','),'-probesize','5242880','-analyzeduration','5000000','-f',type.demuxer,...type.demuxer==='mov'?['-enable_drefs','0','-use_absolute_path','0']:[],'-fd','0'];
   const fields='stream=index,codec_type,codec_name,width,height,sample_rate,channels,time_base,avg_frame_rate,duration,color_space,color_primaries,color_transfer,color_range:format=duration';
   const parse=(text:string):Json=>{try{const value=JSON.parse(text);if(!value||typeof value!=='object'||!Array.isArray(value.streams))fail('MEDIA_DECODE_FAILED');return value;}catch{return fail('MEDIA_DECODE_FAILED');}};
-  const metadata=parse(await run(ffprobe,[...common,'-show_entries',fields,'-of','json','fd:'],input,identity,limits,signal,sandbox));
+  const metadata=parse(await run(ffprobe,[...common,'-show_entries',fields,'-of','json','fd:'],input,identity,limits,signal,sandbox,sandboxTimeoutMs));
   const streams=metadata.streams as Json[],video=streams.filter(s=>s.codec_type==='video'),audio=streams.filter(s=>s.codec_type==='audio');
   if(streams.length!==video.length+audio.length||video.length>1||audio.length>1||!streams.length)fail('MEDIA_UNSUPPORTED');
   if(type.kind==='image'&&(video.length!==1||audio.length)||type.kind==='video'&&video.length!==1||type.kind==='audio'&&(audio.length!==1||video.length))fail('MEDIA_KIND_MISMATCH');
   const visual=video[0],sound=audio[0];if(visual){dimensions(visual,limits);if(decoder?visual.codec_name!==decoder:!videoCodecs.has(visual.codec_name))fail('MEDIA_UNSUPPORTED');}if(sound)audioFacts(sound);
   if(type.kind!=='image')duration(metadata.format?.duration??(type.kind==='audio'?sound:visual).duration,limits);
-  await run(ffmpeg,['-nostdin',...common,'-err_detect','explode','-xerror','-guess_layout_max','0','-i','fd:','-map','0:v?','-map','0:a?','-threads','1','-filter_threads','1','-filter_complex_threads','1','-f','null','-'],input,identity,limits,signal,sandbox);
-  const decoded=parse(await run(ffprobe,[...common,'-err_detect','explode','-show_frames','-show_entries',fields+':frame=media_type,best_effort_timestamp,duration,pkt_duration,width,height,nb_samples','-of','json','fd:'],input,identity,limits,signal,sandbox));
+  await run(ffmpeg,['-nostdin',...common,'-err_detect','explode','-xerror','-guess_layout_max','0','-i','fd:','-map','0:v?','-map','0:a?','-threads','1','-filter_threads','1','-filter_complex_threads','1','-f','null','-'],input,identity,limits,signal,sandbox,sandboxTimeoutMs);
+  const decoded=parse(await run(ffprobe,[...common,'-err_detect','explode','-show_frames','-show_entries',fields+':frame=media_type,best_effort_timestamp,duration,pkt_duration,width,height,nb_samples','-of','json','fd:'],input,identity,limits,signal,sandbox,sandboxTimeoutMs));
   if(!Array.isArray(decoded.frames))fail('MEDIA_DECODE_FAILED');const frames=decoded.frames as Json[],visualFrames=frames.filter(f=>f.media_type==='video'),audioFrames=frames.filter(f=>f.media_type==='audio');
   if(frames.length!==visualFrames.length+audioFrames.length||visualFrames.length>limits.maxVideoFrames)fail('MEDIA_LIMIT_EXCEEDED');
   let pixels=0,samples=0;for(const frame of visualFrames){const size=dimensions(frame,limits);if(size.width!==visual.width||size.height!==visual.height)fail('MEDIA_UNSUPPORTED');pixels+=size.width*size.height;if(pixels>limits.maxDecodedPixels)fail('MEDIA_LIMIT_EXCEEDED');}

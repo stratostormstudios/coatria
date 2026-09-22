@@ -20,6 +20,11 @@ const stream=(bytes:Uint8Array)=>new ReadableStream<Uint8Array>({start(c){c.enqu
 const consume=(body:ReadableStream<Uint8Array>)=>new Response(body).arrayBuffer().then(value=>Buffer.from(value));
 async function bounded<T>(promise:Promise<T>,ms=15000){let timer:ReturnType<typeof setTimeout>;try{return await Promise.race([promise,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Error('Fixture coordination timed out')),ms);})]);}finally{clearTimeout(timer!);}}
 
+test('gateway rejects malformed or empty operator scope before any service work',()=>{
+ for(const scope of [{companyId:'bad',projectIds:[randomUUID()]},{companyId:randomUUID(),projectIds:[]},{companyId:randomUUID(),projectIds:['bad']},{companyId:randomUUID(),projectIds:[randomUUID()],unexpected:true}])assert.throws(()=>createProjectStorageGateway({scope}),{code:'STORAGE_SCOPE_INVALID'});
+ const projectId=randomUUID();assert.throws(()=>createProjectStorageGateway({scope:{companyId:randomUUID(),projectIds:[projectId,projectId]}}),{code:'STORAGE_SCOPE_INVALID'});
+});
+
 test('storage gateway uses real scoped database grants and injected byte provider',{skip:!emulate&&!integration,timeout:180000},async t=>{
  const prior={DATABASE_URL:process.env.DATABASE_URL,DATABASE_POOL_MAX:process.env.DATABASE_POOL_MAX,COATRIA_HOSTING_KEYRING:process.env.COATRIA_HOSTING_KEYRING,COATRIA_STORAGE_GATEWAY_ENABLED:process.env.COATRIA_STORAGE_GATEWAY_ENABLED,COATRIA_STORAGE_GATEWAY_URL:process.env.COATRIA_STORAGE_GATEWAY_URL};
  process.env.DATABASE_URL=integration;process.env.DATABASE_POOL_MAX=emulate?'1':'10';process.env.COATRIA_HOSTING_KEYRING=JSON.stringify({activeKeyId:'storage-gateway-fixture',keys:{'storage-gateway-fixture':Buffer.alloc(32,58).toString('base64')}});process.env.COATRIA_STORAGE_GATEWAY_ENABLED='true';process.env.COATRIA_STORAGE_GATEWAY_URL=gatewayOrigin;
@@ -59,7 +64,7 @@ test('storage gateway uses real scoped database grants and injected byte provide
   }
   const revoke=()=>transaction(client=>revokeProjectStorageConnection(client,actor,connection.id,{clientId:randomUUID(),revision:connection.revision,status:'revoked'}));
   const row=(uploadId:string)=>query('SELECT * FROM project_storage_uploads WHERE company_id=$1 AND id=$2',[companyId,uploadId]).then(result=>result.rows[0]);
-  return {actor,companyId,projectId,connection,gateway,counts,objects,configs,reserve,request,action,part,json,uploaded,readGrant,revoke,row,newProject,bind,hooks,leasedAgent};
+  return {actor,companyId,projectId,connection,gateway,providerFactory,counts,objects,configs,reserve,request,action,part,json,uploaded,readGrant,revoke,row,newProject,bind,hooks,leasedAgent};
  }
  try{
   if(emulate){const{PGlite}=await import('@electric-sql/pglite'),{PGLiteSocketServer}=await import('@electric-sql/pglite-socket'),db=await PGlite.create();stop=async()=>{await db.close();};for(const file of(await readdir('database')).filter(file=>/^\d.*\.sql$/.test(file)).sort())await db.exec(await readFile('database/'+file,'utf8'));const socket=new PGLiteSocketServer({db,host:'127.0.0.1',port:0,maxConnections:1});stop=async()=>{try{await socket.stop();}finally{await db.close();}};await socket.start();const url=new URL('postgresql://'+socket.getServerConn()+'/postgres');url.username='postgres';url.password='postgres';process.env.DATABASE_URL=url.href;}
@@ -80,6 +85,27 @@ test('storage gateway uses real scoped database grants and injected byte provide
   await t.test('grant credentials are resource/company/operation/expiry bound and reject hostile browser origins',async()=>{
    const f=await fixture(),g=await fixture(),one=await f.reserve(),two=await g.reserve();await f.json(await f.request('/v1/uploads/'+one.upload.id,two.upload.token),403);await f.json(await f.request('/v1/files/'+one.upload.versionId,one.upload.token),403);assert.equal((await f.gateway.handle(new Request(gatewayOrigin+'/v1/uploads/'+one.upload.id,{headers:{Authorization:'Bearer '+one.upload.token,Origin:'https://evil.example.invalid'}}))).status,403);assert.equal((await f.gateway.handle(new Request(gatewayOrigin+'/v1/uploads/'+one.upload.id+'?token='+one.upload.token,{headers:{Authorization:'Bearer '+one.upload.token}}))).status,400);
    await query("UPDATE project_storage_access_receipts SET expires_at=clock_timestamp()-interval '1 second' WHERE token_hash=$1",[hashToken(one.upload.token)]);await f.json(await f.action(one.upload,'start'),403);assert.equal(f.counts.create,0);
+  });
+
+  await t.test('scoped gateway rejects every transfer path outside company/project before credential opening or provider use',async()=>{
+   const f=await fixture(),ready=await f.uploaded();await f.gateway.verifyNext();const access=await f.readGrant(ready.upload.versionId),pending=await f.reserve(),before=f.configs.length;
+   const urls=[['/v1/uploads/'+pending.upload.id,'GET',undefined,{}],...['start','complete','cancel'].map(action=>['/v1/uploads/'+pending.upload.id+'/'+action,'POST','{}',{'Content-Type':'application/json'}]),['/v1/uploads/'+pending.upload.id+'/parts/1','PUT','abcdef',{'Content-Length':'6'}]] as Array<[string,string,string|undefined,Record<string,string>]>;
+   const keyring=process.env.COATRIA_HOSTING_KEYRING;delete process.env.COATRIA_HOSTING_KEYRING;
+   try{for(const scope of [{companyId:randomUUID(),projectIds:[f.projectId]},{companyId:f.companyId,projectIds:[randomUUID()]}]){
+    const gateway=createProjectStorageGateway({scope,providerFactory:f.providerFactory,allowedOrigins:[origin]});
+    for(const[path,method,body,headers]of urls){const response=await gateway.handle(new Request(gatewayOrigin+path,{method,headers:{Authorization:'Bearer '+pending.upload.token,...headers},...body===undefined?{}:{body}}));assert.equal(response.status,403);assert.equal((await response.json()).code,'STORAGE_SCOPE_DENIED');}
+    const response=await gateway.handle(new Request(access.url,{headers:access.headers}));assert.equal(response.status,403);assert.equal((await response.json()).code,'STORAGE_SCOPE_DENIED');
+   }}finally{process.env.COATRIA_HOSTING_KEYRING=keyring;}
+   assert.equal(f.configs.length,before);assert.equal((await f.row(pending.upload.id)).status,'allocated');
+  });
+
+  await t.test('scoped verifier claims only its immutable company/project queue and leaves foreign pending work untouched',async()=>{
+   const foreign=await fixture(),outside=await foreign.uploaded(),own=await fixture(),otherProject=randomUUID();projectIds.push(otherProject);await own.newProject(otherProject);await own.bind(otherProject);
+   const other=await own.reserve(Buffer.from('other'),{},otherProject);await own.json(await own.action(other.upload,'start'));await own.json(await own.part(other.upload,other.body));await own.json(await own.action(other.upload,'complete'),202);
+   const target=await own.uploaded(),scope={companyId:own.companyId,projectIds:[own.projectId]},gateway=createProjectStorageGateway({scope,providerFactory:own.providerFactory});scope.companyId=foreign.companyId;scope.projectIds.splice(0,1,foreign.projectId);
+   const foreignBefore=await foreign.row(outside.upload.id),otherBefore=await own.row(other.upload.id);assert.equal(await gateway.verifyNext(),true);assert.equal(await gateway.verifyNext(),false);assert.equal((await own.row(target.upload.id)).status,'ready');
+   for(const [actual,prior]of [[await foreign.row(outside.upload.id),foreignBefore],[await own.row(other.upload.id),otherBefore]]){assert.equal(actual.status,'verifying');assert.equal(actual.action_id,null);assert.equal(+new Date(actual.updated_at),+new Date(prior.updated_at));}assert.equal(foreign.counts.read,0);assert.equal(own.counts.read,1);
+   assert.equal(await createProjectStorageGateway({scope:{companyId:foreign.companyId,projectIds:[foreign.projectId]},providerFactory:foreign.providerFactory}).verifyNext(),true);assert.equal(await createProjectStorageGateway({scope:{companyId:own.companyId,projectIds:[otherProject]},providerFactory:own.providerFactory}).verifyNext(),true);
   });
 
   await t.test('missing parts and malformed byte lengths cannot complete or publish a version',async()=>{

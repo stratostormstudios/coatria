@@ -5,15 +5,24 @@ import {createProjectStorageGateway} from '../src/lib/project-storage-gateway';
 import {database} from '../src/lib/db';
 import {assertProjectStorageGatewayDatabase,ProjectStorageGatewayPreflightError} from '../src/lib/project-storage-preflight';
 import {hostingEncryptionConfigured} from '../src/lib/studio-hosting';
+import {createHash} from 'node:crypto';
+import {readFile,lstat} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+import {assertRemoteArchiveImmutableFile,parseRemoteArchiveArguments} from '../src/lib/higgsfield-remote-archive-config';
+import {parseTrustedServiceGatewayConfiguration} from '../src/lib/trusted-service-config';
 
 async function main(){
-const args=process.argv.slice(2),preflight=args.length===1&&args[0]==='--preflight';
-if(args.length&&!preflight)throw new Error('Invalid gateway arguments.');
+const args=process.argv.slice(2);let preflight=args.length===1&&args[0]==='--preflight',configuration:ReturnType<typeof parseTrustedServiceGatewayConfiguration>|undefined;
+if(args.includes('--config')){
+ const cli=parseRemoteArchiveArguments(args);preflight=cli.preflight;await assertRemoteArchiveImmutableFile(fileURLToPath(import.meta.url));await assertRemoteArchiveImmutableFile(cli.path);
+ if((await lstat(cli.path)).size>32768)throw new Error('Invalid gateway configuration.');const bytes=await readFile(cli.path);if(createHash('sha256').update(bytes).digest('hex')!==cli.sha256)throw new Error('Invalid gateway configuration hash.');configuration=parseTrustedServiceGatewayConfiguration(JSON.parse(bytes.toString('utf8')));
+ const remaining=Date.parse(configuration.expiresAt)-Date.now();if(remaining<=0||remaining>86400000)throw new Error('Invalid gateway deadline.');
+}else if(args.length&&!preflight)throw new Error('Invalid gateway arguments.');
 if(!process.env.DATABASE_URL||!process.env.COATRIA_HOSTING_KEYRING)throw new Error('Storage gateway database and credential vault must be configured.');
 if(!hostingEncryptionConfigured())throw new Error('Invalid storage credential vault.');
-const port=Number(process.env.PORT||4190),host=process.env.HOST||'127.0.0.1';
+const port=configuration?.port??Number(process.env.PORT||4190),host=configuration?.host??process.env.HOST??'127.0.0.1';
 if(!Number.isInteger(port)||port<1||port>65535)throw new Error('Invalid gateway port.');
-const appOrigin=new URL(process.env.APP_URL||'https://coatria.com').origin;
+const appOrigin=new URL(configuration?.appOrigin??process.env.APP_URL??'https://coatria.com').origin;
 if(process.env.NODE_ENV==='production'&&!appOrigin.startsWith('https://'))throw new Error('Production requires an HTTPS application origin.');
 const pool=database();let serving=false;
 try{
@@ -22,7 +31,8 @@ try{
  const client=await pool.connect();let dbCheck;
  try{dbCheck=await assertProjectStorageGatewayDatabase(client);}finally{client.release();}
  if(preflight){console.log(JSON.stringify({event:'storage-gateway-preflight-passed',database:dbCheck,listening:false,workClaimed:false}));return;}
-const gateway=createProjectStorageGateway({allowedOrigins:[appOrigin]});
+if(configuration&&Date.now()>=Date.parse(configuration.expiresAt))throw new Error('Gateway deadline ended during preflight.');
+const gateway=createProjectStorageGateway({allowedOrigins:[appOrigin],...configuration?{scope:{companyId:configuration.companyId,projectIds:configuration.projectIds}}:{}});
 let active=0,verifying=false,closing=false;
 const server=createServer(async(req,res)=>{
  if(closing||active>=8){res.writeHead(503,{'Content-Type':'application/json','Retry-After':'5'});res.end(JSON.stringify({error:'The transfer service is busy. Check upload status before retrying.',code:'STORAGE_TRANSFER_LIMIT'}));return;}
@@ -43,7 +53,8 @@ await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.li
 serving=true;
 const worker=setInterval(()=>{if(verifying||closing)return;verifying=true;void gateway.verifyNext().catch(()=>{console.error('Storage verification queue unavailable.');}).finally(()=>{verifying=false;});},2000);
 console.log(JSON.stringify({event:'storage-gateway-started',role:dbCheck.role}));
-async function stop(){if(closing)return;closing=true;clearInterval(worker);server.close();server.closeIdleConnections();const deadline=Date.now()+30000;while((active||verifying)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,250));await database().end();process.exit(0);}
+const expiryTimer=configuration?setTimeout(()=>void stop(),Math.max(1,Date.parse(configuration.expiresAt)-Date.now())):undefined;
+async function stop(){if(closing)return;closing=true;clearInterval(worker);clearTimeout(expiryTimer);server.close();server.closeIdleConnections();const deadline=Date.now()+30000;while((active||verifying)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,250));await database().end();process.exit(0);}
 process.on('SIGTERM',()=>void stop());process.on('SIGINT',()=>void stop());
 }finally{if(!serving)await pool.end();}
 }

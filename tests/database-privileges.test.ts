@@ -74,6 +74,7 @@ test('runtime role supports accounts and durable conversations without verificat
     // and client receipts. Empty statements still require real SQL privileges.
     const immutableStudioTables=['studio_planning_reviews','studio_planning_review_reads','studio_planning_review_decisions','studio_host_compute_reservations','studio_host_provision_requests','studio_client_delivery_files','studio_client_delivery_receipts','studio_client_delivery_requests','studio_inference_reservations','studio_inference_tool_receipts','studio_coordination_followups'];
     immutableStudioTables.push('studio_generated_artifact_sources','studio_generated_review_evidence');
+    immutableStudioTables.push('trusted_service_reservations','trusted_service_requests');
     for(const table of immutableStudioTables){
       assert.deepEqual((await client.query("SELECT has_table_privilege(current_user,$1,'SELECT') AS read,has_table_privilege(current_user,$1,'INSERT') AS append,has_any_column_privilege(current_user,$1,'UPDATE') AS edit,has_table_privilege(current_user,$1,'DELETE') AS remove",[table])).rows[0],{read:true,append:true,edit:false,remove:false},table);
       await client.query(`SELECT company_id FROM ${table} WHERE false`);
@@ -87,6 +88,9 @@ test('runtime role supports accounts and durable conversations without verificat
     await client.query('UPDATE studio_client_deliveries SET status=status,revision=revision,revoked_at=revoked_at WHERE false');
     for(const column of ['recipient_user_id','package_hash','package_snapshot','expires_at'])assert.equal((await client.query("SELECT has_column_privilege(current_user,'studio_client_deliveries',$1,'UPDATE') AS allowed",[column])).rows[0].allowed,false,column);
     await client.query('SELECT id FROM studio_inference_jobs WHERE false FOR UPDATE');
+    await client.query('SELECT id FROM trusted_service_provisions WHERE false FOR UPDATE');
+    await client.query('UPDATE trusted_service_provisions SET phase=phase,revision=revision,pod_id=pod_id,expected_environment_hashes=expected_environment_hashes,submitted_at=submitted_at,stop_requested_at=stop_requested_at,lease_id=lease_id,lease_expires_at=lease_expires_at,provider_status=provider_status,error_code=error_code,last_reconciled_at=last_reconciled_at,updated_at=updated_at WHERE false');
+    for(const column of ['company_id','service','created_by','client_id','request_hash','preset','plan','plan_hash','pod_name','expires_at','created_at'])assert.equal((await client.query("SELECT has_column_privilege(current_user,'trusted_service_provisions',$1,'UPDATE') AS allowed",[column])).rows[0].allowed,false,column);
     await client.query('UPDATE studio_inference_jobs SET status=status,provider_job_id=provider_job_id,submitted_at=submitted_at,cancel_requested_at=cancel_requested_at,cancel_request_id=cancel_request_id,output=output,model_calls=model_calls,used_tokens=used_tokens,error_code=error_code,poll_lease_id=poll_lease_id,poll_lease_expires_at=poll_lease_expires_at,last_reconciled_at=last_reconciled_at,updated_at=updated_at WHERE false');
     for(const column of ['company_id','agent_id','run_id','host_id','provision_id','request_id','step','request_hash','agent_sponsor_id','agent_token_hash','lease_token_hash','installation_id','installation_revision','preset_hash','endpoint_id','model_id','limits','request_body','reserved_tokens','deadline_at','created_at'])assert.equal((await client.query("SELECT has_column_privilege(current_user,'studio_inference_jobs',$1,'UPDATE') AS allowed",[column])).rows[0].allowed,false,column);
     const options=(await client.query('SELECT rolcreaterole,rolcreatedb,rolbypassrls FROM pg_roles WHERE rolname=current_user')).rows[0];
@@ -101,6 +105,9 @@ test('runtime role supports accounts and durable conversations without verificat
       ['UPDATE studio_inference_jobs SET request_body=request_body WHERE false',[]],
       ['UPDATE studio_inference_jobs SET deadline_at=deadline_at WHERE false',[]],
       ['DELETE FROM studio_inference_jobs WHERE false',[]],
+      ['UPDATE trusted_service_provisions SET expires_at=expires_at WHERE false',[]],
+      ['UPDATE trusted_service_provisions SET plan=plan WHERE false',[]],
+      ['DELETE FROM trusted_service_provisions WHERE false',[]],
       ["INSERT INTO users(name,email,password_hash,email_verified_at) VALUES('Forbidden','forbidden@example.invalid','test',now())",[]],
       ['CREATE TABLE public.unauthorized_test(id int)',[]],
       ['TRUNCATE users CASCADE',[]],

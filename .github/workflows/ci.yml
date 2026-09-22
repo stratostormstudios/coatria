@@ -120,6 +120,19 @@ jobs:
       - run: npm test
       - run: npm run test:agent:fixture
       - run: npm run typecheck
+      - name: Build standalone trusted services from the exact reviewed checkout
+        run: |
+          node --input-type=module <<'NODE'
+          import {mkdir} from 'node:fs/promises';
+          import {join} from 'node:path';
+          import {buildTrustedServiceBundle} from './scripts/hosting/build-trusted-service-bundle.mjs';
+          const output=join(process.env.RUNNER_TEMP,'coatria-trusted-services');
+          await mkdir(output);
+          for(const service of ['archive','gateway','media-qualification']) {
+            const result=await buildTrustedServiceBundle({root:process.cwd(),commit:process.env.GITHUB_SHA,service,output:join(output,service)});
+            console.log(JSON.stringify({service,sourceCommit:result.sourceCommit,bundleSha256:result.bundleSha256,runtimeBytes:result.runtime.bytes,qualified:false,providerCalled:false}));
+          }
+          NODE
       - run: npm run build
       - name: Install Chromium for the synthetic production-workspace browser lane
         run: node node_modules/@playwright/test/cli.js install --with-deps chromium

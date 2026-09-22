@@ -22,6 +22,7 @@ import {studioGeneratedRevisionRoute} from './studio-generated-revisions';
 import {studioReviewPolicyRoute} from './studio-review-policy';
 import {studioClientDeliveryRoute} from './studio-client-delivery';
 import {studioHostProvisioningRoute} from './studio-host-provisioning-api';
+import {trustedServiceRoute} from './trusted-service-api';
 import {studioInferenceRoute} from './studio-inference';
 import {higgsfieldRoute} from './higgsfield';
 import {higgsfieldArchiveRoute} from './higgsfield-archive-api';
@@ -58,7 +59,7 @@ export async function handleApi(request: Request, parts: string[]): Promise<Resp
     if(!['GET','HEAD'].includes(method)&&!bearerEndpoint&&!['auth'].includes(parts[0])) {
       const user=await currentUser(request);if(user)await rateLimit(`write:${user.id}`,240,60);
     }
-    for(const handler of [identityRoute,storageRoute,higgsfieldArchiveRoute,higgsfieldRoute,studioCreativeAssetsRoute,pluginMarketplaceRoute,agentMissionRoute,studioInferenceRoute,agentRunRoute,agentToolsRoute,agentProposalRoute,studioMediaRoute,studioExecutionRoute,studioStaffingRoute,studioHostingRoute,studioHostProvisioningRoute,studioCoordinationRoute,studioGeneratedFollowupRoute,studioGeneratedRevisionRoute,studioReviewPolicyRoute,studioClientDeliveryRoute,studioRoute,conversationRoute,companyRoute,workRoute,integrationRoute,talentRoute]) {
+    for(const handler of [identityRoute,storageRoute,higgsfieldArchiveRoute,higgsfieldRoute,studioCreativeAssetsRoute,pluginMarketplaceRoute,agentMissionRoute,studioInferenceRoute,agentRunRoute,agentToolsRoute,agentProposalRoute,studioMediaRoute,studioExecutionRoute,studioStaffingRoute,studioHostingRoute,studioHostProvisioningRoute,trustedServiceRoute,studioCoordinationRoute,studioGeneratedFollowupRoute,studioGeneratedRevisionRoute,studioReviewPolicyRoute,studioClientDeliveryRoute,studioRoute,conversationRoute,companyRoute,workRoute,integrationRoute,talentRoute]) {
       const result=await handler(request,parts,method);if(result)return finish(result);
     }
     fail(404,'API endpoint not found.');

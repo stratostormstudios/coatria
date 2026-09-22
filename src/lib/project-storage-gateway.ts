@@ -1,6 +1,7 @@
 /** Trusted Node service, deployed separately from Vercel. Never import in a browser. */
 import {createHash,randomUUID} from 'node:crypto';
 import type {PoolClient} from 'pg';
+import {z} from 'zod';
 import {transaction} from './db';
 import {ApiError,fail,hashToken,id,json} from './security';
 import {authorizeProjectStorageActor,openProjectStorageCredentials} from './project-storage';
@@ -14,10 +15,13 @@ import {createRunpodProjectStorage,RunpodStorageError,type RunpodProjectStorage,
 type Row=Record<string,any>;
 type Context={grant:Row;actor:ProjectStorageActor;version:Row;connection:Awaited<ReturnType<typeof openProjectStorageCredentials>>};
 type ProviderFactory=(config:RunpodProjectStorageConfig)=>RunpodProjectStorage;
+export type ProjectStorageGatewayScope=Readonly<{companyId:string;projectIds:readonly string[]}>;
+function assertScope(scope:ProjectStorageGatewayScope|undefined,companyId:string,projectId:string){if(scope&&(scope.companyId!==companyId||!scope.projectIds.includes(projectId)))fail(403,'This transfer is outside the storage service scope.','STORAGE_SCOPE_DENIED');}
 function token(request:Request){const value=request.headers.get('authorization');if(!value||!/^Bearer stg_[A-Za-z0-9_-]{43}$/.test(value))fail(401,'A current storage transfer token is required.','STORAGE_TOKEN_REQUIRED');return value.slice(7);}
-async function authorize(client:PoolClient,value:string,operation:'read'|'upload',resourceId:string):Promise<Context>{
+async function authorizeTransfer(client:PoolClient,value:string,operation:'read'|'upload',resourceId:string,scope:ProjectStorageGatewayScope|undefined):Promise<Context>{
  const grant=(await client.query('SELECT * FROM project_storage_access_receipts WHERE token_hash=$1 AND expires_at>clock_timestamp()',[hashToken(value)])).rows[0];
  if(!grant||grant.operation!==operation||(operation==='upload'?grant.upload_id:grant.version_id)!==resourceId)fail(403,'This transfer token is expired or belongs to another file.','STORAGE_ACCESS_DENIED');
+ assertScope(scope,grant.company_id,grant.project_id);
  await authorizeStorageGrantAgent(client,grant);
  const actor={companyId:grant.company_id,userId:grant.user_id,...grant.agent_id?{agentId:grant.agent_id,runId:grant.run_id}:{}};
  await authorizeProjectStorageActor(client,actor,operation==='read'?'storage.read':'storage.write');
@@ -50,9 +54,14 @@ function checkedStream(source:ReadableStream<Uint8Array>,expected:number){
  const stream=new ReadableStream<Uint8Array>({async pull(controller){try{const part=await reader.read();if(part.done){if(bytes!==expected)fail(400,'The uploaded part length does not match.');complete=true;controller.close();reader.releaseLock();return;}bytes+=part.value.byteLength;if(bytes>expected)fail(413,'The uploaded part exceeds its exact length.');hash.update(part.value);controller.enqueue(part.value);}catch(error){controller.error(error);await reader.cancel().catch(()=>{});}},async cancel(){await reader.cancel().catch(()=>{});}}, {highWaterMark:0});
  return {stream,result(){if(!complete)fail(502,'The provider did not consume the complete part.');return {bytes,sha256:hash.digest('hex')};}};
 }
-export function createProjectStorageGateway(options:{providerFactory?:ProviderFactory;allowedOrigins?:string[]}={}){
+export function createProjectStorageGateway(options:{providerFactory?:ProviderFactory;allowedOrigins?:string[];scope?:ProjectStorageGatewayScope}={}){
+ const parsed=options.scope===undefined?undefined:z.object({companyId:z.uuid(),projectIds:z.array(z.uuid()).min(1).max(100)}).strict().safeParse(options.scope);
+ if(parsed&&(!parsed.success||new Set(parsed.data.projectIds).size!==parsed.data.projectIds.length))fail(400,'Choose a valid storage service scope.','STORAGE_SCOPE_INVALID');
+ const scope=parsed?.success?Object.freeze({companyId:parsed.data.companyId,projectIds:Object.freeze([...parsed.data.projectIds].sort())}):undefined;
  const factory=options.providerFactory??createRunpodProjectStorage;
  const origins=new Set(options.allowedOrigins??[process.env.APP_URL||'https://coatria.com']);
+ const authorize=(client:PoolClient,value:string,operation:'read'|'upload',resourceId:string)=>authorizeTransfer(client,value,operation,resourceId,scope);
+ const clientAuthority=async(client:PoolClient,value:string,versionId:string)=>{const current=await authorizeStudioClientStorageGrant(client,value,versionId);assertScope(scope,current.companyId,current.projectId);return current;};
  async function inspect(value:string,uploadId:string){return transaction(async client=>{const context=await authorize(client,value,'upload',uploadId);return status(client,context,uploadId);});}
  async function start(request:Request,value:string,uploadId:string){
   await emptyBody(request);
@@ -127,9 +136,9 @@ export function createProjectStorageGateway(options:{providerFactory?:ProviderFa
  async function clientDownload(request:Request,versionId:string){
   const header=request.headers.get('authorization');if(!header||!/^Bearer sct_[A-Za-z0-9_-]{43}$/.test(header))fail(401,'A current client file token is required.','CLIENT_STORAGE_TOKEN_REQUIRED');
   const value=header.slice(7),started=performance.now();
-  const saved=await transaction(async client=>{const current=await authorizeStudioClientStorageGrant(client,value,versionId),connection=await openProjectStorageCredentials(client,current.companyId,current.connectionId);
+  const saved=await transaction(async client=>{const current=await clientAuthority(client,value,versionId),connection=await openProjectStorageCredentials(client,current.companyId,current.connectionId);
    // Credential opening can wait for another authority lock. Recheck after it.
-   const final=await authorizeStudioClientStorageGrant(client,value,versionId);if(connection.connection.revision!==final.connectionRevision)fail(403,'Client storage authority changed.','CLIENT_STORAGE_UNAVAILABLE');return {...final,connection};});
+   const final=await clientAuthority(client,value,versionId);if(connection.connection.revision!==final.connectionRevision)fail(403,'Client storage authority changed.','CLIENT_STORAGE_UNAVAILABLE');return {...final,connection};});
   const bytes=saved.bytes,range=request.headers.get('range');let interval:{start:number;end:number}|undefined;
   if(range){const match=/^bytes=(\d+)-(\d*)$/.exec(range);if(!match)fail(416,'Use one bounded byte range.');interval={start:Number(match[1]),end:match[2]?Number(match[2]):bytes-1};if(!Number.isSafeInteger(interval.start)||!Number.isSafeInteger(interval.end)||interval.start>interval.end||interval.end>=bytes)fail(416,'The byte range is outside this file.');}
   const expected=interval?interval.end-interval.start+1:bytes,deadline=new AbortController(),signal=AbortSignal.any([request.signal,deadline.signal]);
@@ -148,7 +157,7 @@ export function createProjectStorageGateway(options:{providerFactory?:ProviderFa
    if(object.bytes!==expected||object.totalBytes!==bytes||object.etag!==saved.etag||object.contentRange!==contentRange||Boolean(object.range)!==Boolean(interval)||interval&&(object.range?.start!==interval.start||object.range?.end!==interval.end)){
     await object.stream.cancel().catch(()=>{});fail(502,'Stored file response does not match the approved version.','CLIENT_STORAGE_RESPONSE_INVALID');
    }
-   const validate=()=>transaction(client=>authorizeStudioClientStorageGrant(client,value,versionId));
+   const validate=()=>transaction(client=>clientAuthority(client,value,versionId));
    // Fresh authority before the first chunk and periodically while active or
    // stalled. Revocation takes at most one 5-second check interval within an
    // already opened range; the independent deadline abort never extends it.
@@ -166,15 +175,16 @@ export function createProjectStorageGateway(options:{providerFactory?:ProviderFa
  /** Restart-safe verification queue: only read/hash is retried, never paid or mutating provider work. */
  async function verifyNext(){
   const actionId=randomUUID(),saved=await transaction(async client=>{
-   const upload=(await client.query("SELECT * FROM project_storage_uploads WHERE archive_id IS NULL AND status='verifying' AND expires_at>clock_timestamp() AND (action_id IS NULL OR action_expires_at<clock_timestamp()) ORDER BY updated_at,id FOR UPDATE SKIP LOCKED LIMIT 1")).rows[0];if(!upload)return null;
+   const upload=(await client.query(`SELECT * FROM project_storage_uploads WHERE archive_id IS NULL AND status='verifying' AND expires_at>clock_timestamp() AND (action_id IS NULL OR action_expires_at<clock_timestamp()) ${scope?'AND company_id=$1 AND project_id=ANY($2::uuid[])':''} ORDER BY updated_at,id FOR UPDATE SKIP LOCKED LIMIT 1`,scope?[scope.companyId,scope.projectIds]:[])).rows[0];if(!upload)return null;
+   assertScope(scope,upload.company_id,upload.project_id);
    await client.query("UPDATE project_storage_uploads SET action_id=$3,action_expires_at=clock_timestamp()+interval '2 hours',updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2",[upload.company_id,upload.id,actionId]);return upload;
   });if(!saved)return false;
   let adapter:RunpodProjectStorage|undefined;
   try{
    const context=await transaction(async client=>{
-    const grant=(await client.query('SELECT * FROM project_storage_access_receipts WHERE company_id=$1 AND id=$2 AND upload_id=$3 AND version_id=$4',[saved.company_id,saved.verification_grant_id,saved.id,saved.version_id])).rows[0];if(!grant)fail(403,'The stored verification authority is missing.');await authorizeStorageGrantAgent(client,grant);
+    const grant=(await client.query('SELECT * FROM project_storage_access_receipts WHERE company_id=$1 AND id=$2 AND upload_id=$3 AND version_id=$4',[saved.company_id,saved.verification_grant_id,saved.id,saved.version_id])).rows[0];if(!grant)fail(403,'The stored verification authority is missing.');assertScope(scope,grant.company_id,grant.project_id);await authorizeStorageGrantAgent(client,grant);
     const actor={companyId:saved.company_id,userId:saved.actor_user_id,...saved.actor_agent_id?{agentId:saved.actor_agent_id,runId:saved.run_id}:{}};
-    await authorizeProjectStorageActor(client,actor,'storage.write');const row=(await client.query('SELECT v.*,b.connection_id FROM project_storage_versions v JOIN project_storage_files f ON f.company_id=v.company_id AND f.id=v.file_id JOIN project_storage_bindings b ON b.company_id=f.company_id AND b.id=f.binding_id WHERE v.company_id=$1 AND v.id=$2',[saved.company_id,saved.version_id])).rows[0];if(!row)fail(404,'Upload version missing.');return {actor,version:row,connection:await openProjectStorageCredentials(client,saved.company_id,row.connection_id),grant} as Context;
+    await authorizeProjectStorageActor(client,actor,'storage.write');const row=(await client.query('SELECT v.*,b.connection_id FROM project_storage_versions v JOIN project_storage_files f ON f.company_id=v.company_id AND f.id=v.file_id JOIN project_storage_bindings b ON b.company_id=f.company_id AND b.id=f.binding_id WHERE v.company_id=$1 AND v.id=$2',[saved.company_id,saved.version_id])).rows[0];if(!row)fail(404,'Upload version missing.');assertScope(scope,row.company_id,row.project_id);return {actor,version:row,connection:await openProjectStorageCredentials(client,saved.company_id,row.connection_id),grant} as Context;
    });
    adapter=provider(context,factory);const object=await adapter.get({versionId:saved.version_id,maxBytes:Number(context.version.bytes),ifMatch:saved.provider_etag,signal:AbortSignal.timeout(2*60*60*1000)}),hash=createHash('sha256');let bytes=0;const reader=authorityReader(object.stream.getReader(),()=>transaction(async client=>{await authorizeStorageGrantAgent(client,context.grant);await authorizeProjectStorageActor(client,context.actor,'storage.write');const connection=await openProjectStorageCredentials(client,context.actor.companyId,context.connection.connection.id);const active=(await client.query("SELECT 1 FROM project_storage_uploads WHERE company_id=$1 AND id=$2 AND status='verifying' AND action_id=$3",[saved.company_id,saved.id,actionId])).rowCount;if(!active||connection.connection.revision!==context.connection.connection.revision)fail(403,'Verification authority ended.');}));
    try{while(true){const chunk=await reader.read();if(chunk.done)break;bytes+=chunk.value.byteLength;if(bytes>Number(context.version.bytes))fail(409,'Stored file exceeds the reserved size.');hash.update(chunk.value);}}finally{await reader.close();}

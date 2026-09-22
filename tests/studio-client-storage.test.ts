@@ -55,7 +55,7 @@ test('external client gateway serves only approved exact versions through isolat
   const own=createProjectStorageGateway({providerFactory,allowedOrigins:[origin]});
   const access=()=>transaction(c=>issueStudioClientStorageAccess(c,{shareId,recipientUserId:users.client,versionId:f.versionId}));
   const request=async(a:Awaited<ReturnType<typeof access>>,range?:string,signal?:AbortSignal)=>{gateway=own;return fetch(a.url,{headers:{...a.headers,Origin:origin,...range?{Range:range}:{}},signal});};
-  return{...f,companyId,shareId,counts,hooks,own,access,request,get lastSignal(){return lastSignal;}};
+  return{...f,companyId,shareId,counts,hooks,own,providerFactory,access,request,get lastSignal(){return lastSignal;}};
  }
  async function activateRevision(f:Awaited<ReturnType<typeof fixture>>){
   const prefix=`companies/${f.companyId}/studio/projects/${f.projectId}`,portal='client-deliveries/'+f.shareId;
@@ -94,6 +94,14 @@ test('external client gateway serves only approved exact versions through isolat
    const f=await fixture(),g=await fixture(),a=await f.access();gateway=f.own;
    for(const[url,headers,status]of[[a.url.replace(f.versionId,g.versionId),a.headers,403],[a.url.replace('/client-files/','/files/'),a.headers,401],[a.url,{...a.headers,Origin:'https://hostile.invalid'},403],[a.url+'?token=forbidden',a.headers,400]] as const){const response=await fetch(url,{headers});assert.equal(response.status,status);await response.body?.cancel();}assert.equal(f.counts.get,0);
    await assert.rejects(transaction(c=>issueStudioClientStorageAccess(c,{shareId:f.shareId,recipientUserId:users.other,versionId:f.versionId})),(e:any)=>e.code==='CLIENT_STORAGE_UNAVAILABLE');
+  });
+  await t.test('client capability stays inside an immutable gateway company/project scope before vault opening',async()=>{
+   const f=await fixture(),a=await f.access(),keyring=process.env.COATRIA_HOSTING_KEYRING;delete process.env.COATRIA_HOSTING_KEYRING;
+   try{for(const scope of [{companyId:randomUUID(),projectIds:[f.projectId]},{companyId:f.companyId,projectIds:[randomUUID()]}]){
+    const scoped=createProjectStorageGateway({scope,providerFactory:f.providerFactory}),response=await scoped.handle(new Request(a.url,{headers:a.headers}));assert.equal(response.status,403);assert.equal((await response.json()).code,'STORAGE_SCOPE_DENIED');
+   }}finally{process.env.COATRIA_HOSTING_KEYRING=keyring;}assert.equal(f.counts.get,0);assert.equal(f.counts.close,0);
+   const scope={companyId:f.companyId,projectIds:[f.projectId]},scoped=createProjectStorageGateway({scope,providerFactory:f.providerFactory});scope.companyId=randomUUID();scope.projectIds[0]=randomUUID();
+   const response=await scoped.handle(new Request(a.url,{headers:a.headers}));assert.equal(response.status,200);assert.deepEqual(Buffer.from(await response.arrayBuffer()),f.body);assert.equal(f.counts.get,1);assert.equal(f.counts.close,1);
   });
   await t.test('invalid and multiple ranges never open the provider',async()=>{
    const f=await fixture(),a=await f.access();for(const range of['bytes=-1','bytes=0-1,4-5','bytes=8-2',`bytes=0-${f.bytes}`,'bytes=9007199254740993-']){const r=await f.request(a,range);assert.equal(r.status,416);await r.body?.cancel();}assert.equal(f.counts.get,0);

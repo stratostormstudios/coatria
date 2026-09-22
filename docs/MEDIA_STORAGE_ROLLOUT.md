@@ -1,6 +1,7 @@
 # Dedicated media storage and archive host rollout
 
-Updated 2026-09-21. The user approved the dedicated volume and synthetic test.
+Updated 2026-09-22. The user approved the dedicated volume and synthetic test,
+and subsequently authorized a USD 100 cap for new pilot spending.
 The volume was created and its identity verified through the Runpod API:
 `65dfq9bykj`, `coatria-stratostorm-media-pilot`, 10 GB in `US-NC-2`.
 The final synthetic transport test passed on source `120c6a8`. It verified
@@ -18,10 +19,11 @@ unrelated 150 GB model volume in US-NE-1 and the retained 10 GB Coatria worker-s
 volume in US-NC-2. Neither is a selected media test destination. This was the
 inventory before creation; the approved dedicated volume above now exists.
 
-The production domain was rechecked on 2026-09-21 and still points to source
-`550140f`, deployment `dpl_HiaGB72zMS1SSh3RYeBBMNsDtnjB`, with migrations through
-034 and published agent API **1.13.0 / 175 paths**. The candidate storage fixes
-are in a protected isolated preview at source `120c6a8`. Archive and gateway
+The production domain was verified after promotion on 2026-09-22 at source
+`7162fb1`, deployment `dpl_9eB6HGU5Jd4qMNdDFawBfD5gco9m`, with migrations through
+034 and published agent API **1.13.0 / 175 paths**. It now contains the tested
+storage fixes from runtime `120c6a8`; 12 staged and 12 live checks passed. A new
+main-database deployment was used; the isolated preview was not promoted. Archive and gateway
 activation remain disabled; their production service logins, actual host
 qualification and authenticated application transport are still outstanding.
 See [release evidence](RELEASE_STATUS.md).
