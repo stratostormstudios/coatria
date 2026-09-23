@@ -77,6 +77,56 @@ test('broker runs real leased API and receipt transactions against isolated prov
    const f=await fixture(),p=providerFixture([tool('workspace_get',{})]),job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;await reconcileStudioInferenceJob(job.id,{fetch:p.transport});const raw={company:{id:f.company},floor:{width:50,depth:50,revision:7,items:Array.from({length:3000},(_,i)=>({id:i,geometry:'x'.repeat(120)}))}},key=stableRequestId(f.run.id,'provider:0:call-one');const result=await transaction(c=>recordStudioInferenceToolReceipt(c,f.identity,f.run.id,key,'workspace_get',{},raw));assert.deepEqual(result,raw);const saved=(await query('SELECT response FROM studio_inference_tool_receipts WHERE company_id=$1',[f.company])).rows[0].response;assert.equal(saved.floor.itemCount,3000);assert.equal(saved.floor.itemsOmitted,true);assert(!saved.floor.items);assert.equal(saved.floor.revision,7);
    const next=await submitStudioInference(f.identity,f.run.id,f.input(1));assert(next.inference.id);await assert.rejects(transaction(c=>recordStudioInferenceToolReceipt(c,f.identity,f.run.id,key,'workspace_get',{invented:true},raw)),/does not match/);
   });
+  await t.test('failed cancellation responses still reconcile the exact terminal job after revocation without exposing output or releasing reservations',async()=>{
+   const privateText='synthetic-private-cancel-response-never-copy';
+   for(const mode of ['not-found','server-error','empty','non-json','transport-timeout','body-timeout'])for(const status of ['COMPLETED','FAILED','CANCELLED','TIMED_OUT']){
+    const f=await fixture(),p=providerFixture();p.setStatus('IN_QUEUE');const job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;await reconcileStudioInferenceJob(job.id,{fetch:p.transport});
+    const before=(await query('SELECT provider_job_id,reserved_tokens,submitted_at FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0],reserved=await transaction(client=>studioInferenceReserved(client,f.company));
+    await query("UPDATE studio_managed_hosts SET status='revoked' WHERE id=$1",[f.host.id]);
+    const calls:Array<{url:string;method:string}>=[];let bodyCancelled=false,cancelAborted=false;
+    const result=await reconcileStudioInferenceJob(job.id,{requestTimeoutMs:30,reconcileTimeoutMs:5000,fetch:async(url,init)=>{
+     calls.push({url:String(url),method:init?.method??'GET'});assert.equal(init?.redirect,'error');assert.equal(init?.body,undefined);
+     if(String(url).endsWith('/cancel/'+before.provider_job_id)){
+      assert.equal(init?.method,'POST');init?.signal?.addEventListener('abort',()=>{cancelAborted=true;},{once:true});
+      if(mode==='not-found')return new Response(privateText,{status:404});if(mode==='server-error')return new Response(privateText,{status:503});if(mode==='empty')return new Response(null,{status:204});if(mode==='non-json')return new Response(privateText);
+      if(mode==='transport-timeout')return new Promise<Response>(()=>{});
+      return new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('{'));},cancel(){bodyCancelled=true;}}));
+     }
+     assert.equal(String(url),'https://api.runpod.ai/v2/fixture-endpoint/status/'+before.provider_job_id);assert.equal(init?.method,'GET');return Response.json({id:before.provider_job_id,status,output:status==='COMPLETED'?[tool('tasks_create',{title:privateText})]:undefined,error:status==='FAILED'?privateText:undefined});
+    }});
+    assert.deepEqual(calls.map(c=>c.method),['POST','GET']);assert.equal(p.creates(),1);if(mode.endsWith('timeout'))assert(cancelAborted);if(mode==='body-timeout')assert(bodyCancelled);
+    const row=(await query('SELECT status,provider_job_id,submitted_at,reserved_tokens,used_tokens,output,model_calls,poll_lease_id,error_code FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0];
+    assert.equal(row.status,'cancelled');assert.equal(row.provider_job_id,before.provider_job_id);assert.deepEqual(row.submitted_at,before.submitted_at);assert.equal(row.reserved_tokens,before.reserved_tokens);assert.equal(row.used_tokens,null);assert.equal(row.output,null);assert.deepEqual(row.model_calls,[]);assert.equal(row.poll_lease_id,null);assert.equal(await transaction(client=>studioInferenceReserved(client,f.company)),reserved);assert(!JSON.stringify(result).includes(privateText));
+    await assert.rejects(readStudioInference(f.identity,f.run.id,job.id,f.lease.leaseToken));assert.equal(Number((await query('SELECT count(*) FROM tasks WHERE company_id=$1',[f.company])).rows[0].count),0);
+    assert.equal((await reconcileStudioInferenceJob(job.id,{fetch:async()=>{throw Error('Terminal cleanup must not contact a provider');}})).skipped,true);
+   }
+  });
+  await t.test('cancel acknowledgement or failed cancel never substitutes for matching terminal status evidence',async()=>{
+   for(const mode of ['mismatch','missing-id','unsupported','queued','running','status-not-found','status-error','status-non-json','status-timeout'])for(const acceptedCancel of [false,true]){
+    const f=await fixture(),p=providerFixture();p.setStatus('IN_QUEUE');const job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;await reconcileStudioInferenceJob(job.id,{fetch:p.transport});
+    const providerJob=(await query('SELECT provider_job_id FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0].provider_job_id,reserved=await transaction(client=>studioInferenceReserved(client,f.company));
+    await cancelStudioInference(f.identity,f.run.id,job.id,{leaseToken:f.lease.leaseToken,requestId:randomUUID()});let cancels=0,reads=0;
+    const result=await reconcileStudioInferenceJob(job.id,{requestTimeoutMs:30,reconcileTimeoutMs:5000,fetch:async(url,init)=>{
+     if(String(url).endsWith('/cancel/'+providerJob)){cancels++;assert.equal(init?.method,'POST');return acceptedCancel?Response.json({id:providerJob,status:'CANCELLED'}):new Response('private-cancel-error',{status:404});}
+     reads++;assert.equal(String(url),'https://api.runpod.ai/v2/fixture-endpoint/status/'+providerJob);assert.equal(init?.method,'GET');
+     if(mode==='status-not-found')return new Response('private-expired-result',{status:404});if(mode==='status-error')return new Response('private-status-error',{status:503});if(mode==='status-non-json')return new Response('private-status-error');if(mode==='status-timeout')return new Promise<Response>(()=>{});
+     return Response.json({...(mode==='missing-id'?{}:{id:mode==='mismatch'?'foreign-'+randomUUID():providerJob}),status:mode==='queued'?'IN_QUEUE':mode==='running'?'IN_PROGRESS':mode==='unsupported'?'UNKNOWN':'COMPLETED',output:[final('Private unaccepted completion')]});
+    }});
+    assert.equal(cancels,1);assert.equal(reads,1);assert.equal(p.creates(),1);const row=(await query('SELECT status,provider_job_id,output,model_calls,used_tokens FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0];assert.equal(row.status,'cancel_requested');assert.equal(row.provider_job_id,providerJob);assert.equal(row.output,null);assert.deepEqual(row.model_calls,[]);assert.equal(row.used_tokens,null);assert.equal(await transaction(client=>studioInferenceReserved(client,f.company)),reserved);assert(!JSON.stringify(result).includes('private-'));assert(!JSON.stringify(result).includes('Private unaccepted'));
+   }
+  });
+  await t.test('cancellation fallback shares the overall deadline and does not start a status read after it expires',async()=>{
+   for(const mode of ['cancel-stalls','status-stalls']){
+    const f=await fixture(),p=providerFixture();p.setStatus('IN_QUEUE');const job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;await reconcileStudioInferenceJob(job.id,{fetch:p.transport});await cancelStudioInference(f.identity,f.run.id,job.id,{leaseToken:f.lease.leaseToken,requestId:randomUUID()});
+    let cancels=0,reads=0;const started=performance.now(),events:Array<{start:number;abort:number|null}>=[];
+    await reconcileStudioInferenceJob(job.id,{requestTimeoutMs:1000,reconcileTimeoutMs:300,fetch:async(url,init)=>{
+     const event={start:performance.now(),abort:null as number|null};events.push(event);init?.signal?.addEventListener('abort',()=>{event.abort=performance.now();},{once:true});
+     if(String(url).includes('/cancel/')){cancels++;if(mode==='status-stalls'){await new Promise(resolve=>setTimeout(resolve,80));return new Response('private-cancel-response',{status:404});}}
+     else{reads++;assert(String(url).includes('/status/'));}return new Promise<Response>(()=>{});
+    }});
+    assert.equal(cancels,1);assert.equal(reads,mode==='cancel-stalls'?0:1);assert.equal(p.creates(),1);assert(events.at(-1)!.abort!==null);assert(events.at(-1)!.abort!-started<1000,'The same overall signal bounds cancellation plus status, excluding the later database persistence.');assert(events.at(-1)!.abort!-events.at(-1)!.start<1000);assert.equal((await query('SELECT status FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0].status,'cancel_requested');
+   }
+  });
   await t.test('managed inference persists and transmits ticket-free storage receipts while trusted callers keep exact transfer credentials',async()=>{
    for(const name of ['storage_upload_reserve','storage_file_access']){
     const f=await fixture({capabilities:['storage.read','storage.write']}),projectId=randomUUID(),versionId=randomUUID(),token='stg_fixture_only_private_transfer_'+name,url='https://gateway.example.invalid/v1/private/'+versionId;
