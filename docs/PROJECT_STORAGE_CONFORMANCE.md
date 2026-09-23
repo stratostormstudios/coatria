@@ -28,7 +28,26 @@ Never put them in startup arguments, terminal history, evidence or this file.
 node --import tsx scripts/verify-project-storage-provider.ts run /private/conformance/new-run EXACT_PLAN_SHA256
 ```
 
-The run checks that both selected object keys are absent. Before each create,
+The run first requires a signed `HeadBucket` response with HTTP 200 for the
+selected existing volume, then checks that both selected object keys are absent.
+An object HEAD returning 404 does not establish that credentials were accepted;
+it cannot replace the known-volume check. `HeadBucket` confirms the provider
+accepted that read and the volume exists. It does not prove write permissions,
+Coatria company authorization, or tenant isolation. A denied or unavailable
+known-volume check stops the run before any provider mutation intent.
+
+When copying S3 credentials from the console, use the complete access-key and
+secret fields in the creation dialog. Truncated table previews are not usable
+credentials. Do not infer a fixed credential length or extract the first
+credential-shaped substring from a page containing multiple keys.
+
+Runpod multipart responses can represent the requested object key with one
+leading slash. Create and completion validation accept only the canonical key
+or exactly one leading slash followed by that same key, and still require the
+configured bucket. Request keys are unchanged. Repeated slashes, bucket prefixes,
+URL-encoded aliases and different version keys remain uncertain outcomes.
+
+Before each create,
 part upload, completion and abort, it writes and syncs an intent to the private
 `mutation-journal.jsonl`. Returned descriptors and parts are retained for
 reconciliation. It recreates the adapter between parts, completes two parts,

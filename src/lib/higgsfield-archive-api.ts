@@ -1,4 +1,4 @@
-import {higgsfieldArchiveAvailability} from './higgsfield-archive-config';
+import {companyHiggsfieldArchiveAvailability} from './higgsfield-archive-config';
 import {requireMembership} from './auth';
 import {memberMutation} from './company';
 import {assertOrigin,body,id,json} from './security';
@@ -15,7 +15,7 @@ export async function higgsfieldArchiveRoute(request:Request,parts:string[],meth
  if(parts.length===4&&method==='GET'){
   const parameters=Object.fromEntries(new URL(request.url).searchParams);
   const input={...parameters,...parameters.limit!==undefined?{limit:Number(parameters.limit)}:{}};
-  return json({...await memberMutation(member,false,db=>listHiggsfieldArchives(db,actor,input)),processing:higgsfieldArchiveAvailability()});
+  return json(await memberMutation(member,false,async db=>({...await listHiggsfieldArchives(db,actor,input),processing:await companyHiggsfieldArchiveAvailability(db,companyId,parameters.projectId)})));
  }
  if(parts.length===4&&method==='POST'){
   const input=await body(request,higgsfieldArchiveProposalInput);

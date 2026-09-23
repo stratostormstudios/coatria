@@ -5,7 +5,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {mkdir,lstat,chmod,writeFile,rename,unlink} from 'node:fs/promises';
 import {resolve,join,isAbsolute,dirname} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {runtimeOrigin,createRuntimeClient,openWorkerState,workOnce,createAutonomyTicker,RuntimeError,pause} from '../../public/downloads/agent-worker.mjs';
+import {runtimeOrigin,createRuntimeClient,openWorkerState,workOnce,workerDiagnostic,createAutonomyTicker,RuntimeError,pause} from '../../public/downloads/agent-worker.mjs';
 import {createProviderExecutor,providerConfiguration} from '../../public/downloads/provider-adapter.mjs';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -61,7 +61,7 @@ export async function runStudioHost({directory,companyId,hostId,deadlineMs,model
  if(!UUID.test(companyId)||!UUID.test(hostId)||!Number.isFinite(deadlineMs)||deadlineMs>Date.now()+86400000||!integer(concurrency,1,2)||!integer(pollMs,1,30000)||!integer(refreshMs,1,20000)||!integer(cleanupMs,1,10000))throw Error('Invalid studio host configuration.');
  const control=new AbortController(),agents=new Map(),retired=new Set(),pendingInference=new Set();
  let supervisor,deadlineTimer,leaseTimer,refreshing,reason='completed',exitCode=0,cleanupComplete=true,leaseEpoch,leaseDeadline=0,cursor=0,nextRefresh=0,hostRevision=0;
- const emit=event=>{try{log({at:new Date().toISOString(),event});}catch{/* A diagnostic sink cannot change authority. */}};
+ const emit=(event,details)=>{try{log({at:new Date().toISOString(),event,...workerDiagnostic(details)});}catch{/* A diagnostic sink cannot change authority. */}};
  const stop=(why,failure=false)=>{if(!control.signal.aborted){reason=why;if(failure)exitCode=1;control.abort(Error('Studio host stopped.'));emit('host-stopping');}};
  const externalStop=()=>stop('operator_stop'),processStop=()=>stop('signal');
  const armDeadline=()=>{clearTimeout(deadlineTimer);deadlineTimer=setTimeout(()=>stop('deadline'),Math.max(0,deadlineMs-Date.now()));};
@@ -121,7 +121,7 @@ export async function runStudioHost({directory,companyId,hostId,deadlineMs,model
   const active=AbortSignal.any([control.signal,entry.control.signal]);
   try{
    await entry.tick(entry.state,active);
-   const worked=await workOnce({client:entry.client,state:entry.state,execute:entry.execute,signal:active,log:event=>{if(['result-recorded','failure-recorded','adapter-failed'].includes(event.event))emit(event.event);}});
+   const worked=await workOnce({client:entry.client,state:entry.state,execute:entry.execute,signal:active,log:event=>{if(['result-recorded','failure-recorded','adapter-failed'].includes(event.event))emit(event.event,event);}});
    entry.nextAt=Date.now()+(worked?0:pollMs);
   }catch(error){
    if(!active.aborted){if(error instanceof RuntimeError&&![401,403].includes(error.status)){entry.nextAt=Date.now()+Math.max(pollMs,Math.min(30000,(error.retryAfter||0)*1000));emit('agent-request-delayed');}else stop('agent_access_ended',true);}

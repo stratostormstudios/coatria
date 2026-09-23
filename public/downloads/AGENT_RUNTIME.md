@@ -15,7 +15,7 @@ The private state file defaults to a credential-specific path under `~/.coatria/
 ## Connect Codex
 
 1. Install the current Codex CLI on the machine that will run the worker and authenticate it under that machine's worker account. The adapter uses `codex exec`, which can reuse the account's saved CLI login. Verify the CLI works before starting Coatria; the download does not install Codex, sign in, or change your user configuration. See [official non-interactive setup](https://learn.chatgpt.com/docs/non-interactive-mode).
-2. Download [agent-worker.mjs](agent-worker.mjs), [agent-mcp.mjs](agent-mcp.mjs) and [codex-adapter.mjs](codex-adapter.mjs) into the same private, operator-controlled directory. Use Node.js 22 or later.
+2. Download [agent-worker.mjs](agent-worker.mjs), [agent-mcp.mjs](agent-mcp.mjs), [provider-adapter.mjs](provider-adapter.mjs) and [codex-adapter.mjs](codex-adapter.mjs) into the same private, operator-controlled directory. Use Node.js 22 or later.
 3. Supply `COATRIA_AGENT_TOKEN` privately and set `COATRIA_CODEX_WORKSPACE` to an existing, absolute path for a dedicated clean working directory. Set these through the operator's local secret environment or service manager; do not paste credentials into prompts or checked-in configuration. Optional `COATRIA_CODEX_BIN` selects the actual executable if `codex` is not on PATH. On Windows, use a native executable path when a command shim cannot be spawned without a shell.
 4. Start:
 
@@ -46,6 +46,10 @@ For an interrupted execution without a saved completion, review the request's co
 ## Adapter contract
 
 Export an asynchronous `execute({run, context, tools, signal, recovering, mcpEnvironment})` function. Return `{result, artifactUrl?}`. `result` is plain text of 1–12,000 characters; `artifactUrl`, when supplied, is an HTTP(S) review link. Returning a result records a run outcome; it does not approve a contribution or publish external code. `mcpEnvironment` is trusted local adapter configuration containing `COATRIA_URL`, `COATRIA_RUN_ID` and `COATRIA_RUN_LEASE`; pass it only to the approved MCP child process. It is deliberately outside `run` and `context`. Never serialize the entire adapter argument into a model prompt or log.
+
+Managed Runpod adapters also receive the trusted `inference` facility. The current worker explicitly submits protocol version 2; use it with a server supporting that protocol. `inference.complete({step, requestId: tools.key('inference:' + step), signal, timeoutMs})` returns an immutable object branded inside `agent-worker.mjs`, containing `runId`, `step`, `inferenceId`, `output`, `usage` and the server's `disposition`. This replaces the earlier raw-output return value. Use the matching `provider-adapter.mjs`, which checks the private brand and run/step binding. Never construct, copy or JSON-roundtrip that object to bypass the check, and never expose `inference` as a model tool.
+
+When disposition is `validation_feedback`, the server has recorded that every call in that batch was unexecuted, including valid siblings. The adapter consumes the feedback without parsing or executing those arguments and requests the next step under the same lease, deadline and cumulative limits. At most two correction batches are permitted per run; corrected calls need fresh call IDs. Model JSON cannot select this disposition or grant itself a correction. Unknown outcomes, authorization failures, invalid identities, untrusted usage and truncated responses still stop execution. Older workers that omit protocol version 2 retain the terminal-only behavior; update the reviewed worker and adapter together before using bounded corrections.
 
 This small reference adapter performs a real authorized workspace lookup and formats the returned data. It is deliberately a deterministic API example, not a model-powered agent:
 

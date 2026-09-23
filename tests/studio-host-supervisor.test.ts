@@ -68,12 +68,23 @@ test('explicit inference broker mode runs a hosted specialist without forwarding
   const clients=clientFactory(f.bundles,item=>{
    const client=jobClient(item,{complete:async()=>{completed++;f.control.abort();return{run:{status:'succeeded'}};}});
    return{...client,listTools:async()=>({tools:[]}),submitInference:async(runId:string,payload:any)=>{
-    inferenceCalls++;assert.deepEqual(Object.keys(payload).sort(),['leaseToken','requestId','step']);
-    return{inference:{id:randomUUID(),runId,step:payload.step,status:'succeeded',deadlineAt:new Date(Date.now()+60000).toISOString(),output:{usage:{prompt_tokens:100,completion_tokens:30},choices:[{finish_reason:'stop',message:{role:'assistant',content:'Synthetic server-brokered result.'}}]}}};
+    inferenceCalls++;assert.deepEqual(Object.keys(payload).sort(),['leaseToken','protocolVersion','requestId','step']);assert.equal(payload.protocolVersion,2);
+    return{inference:{id:randomUUID(),runId,step:payload.step,status:'succeeded',protocolVersion:2,disposition:'execute',usage:{promptTokens:100,completionTokens:30,totalTokens:130},deadlineAt:new Date(Date.now()+60000).toISOString(),output:{usage:{prompt_tokens:100,completion_tokens:30},choices:[{finish_reason:'stop',message:{role:'assistant',content:'Synthetic server-brokered result.'}}]}}};
    }};
   });
   const result=await runStudioHost({...f.options,settings:{...settings,COATRIA_INFERENCE_MODE:'coatria_broker_v1'},clientFactory:clients,executorFactory:({settings:explicit}:any)=>{configured.push(explicit);return createProviderExecutor({settings:explicit,fetch:(async()=>{directCalls++;throw Error('No direct provider transport');}) as typeof fetch});}});
   assert.equal(result.cleanupComplete,true);assert.equal(inferenceCalls,1);assert.equal(completed,1);assert.equal(directCalls,0);assert.equal(configured[0].COATRIA_INFERENCE_MODE,'coatria_broker_v1');assert(Object.isFrozen(configured[0]));assert(!('RUNPOD_API_KEY'in configured[0]));assert(!('COATRIA_RUNPOD_ENDPOINT_ID'in configured[0]));assert(!JSON.stringify(f.events).includes(settings.RUNPOD_API_KEY));
+ }finally{await f.remove();}
+});
+
+test('terminal broker failure stops one execution and retains only safe run diagnostics in host logs',async()=>{
+ const f=await fixture();let inferenceCalls=0,failed:any,runId:string|undefined;
+ try{
+  const clients=clientFactory(f.bundles,item=>{const base=jobClient(item,{fail:async(_id:string,payload:any)=>{failed=payload;f.control.abort();return{run:{status:'failed'}};}});return{...base,listTools:async()=>({tools:[]}),submitInference:async(id:string,payload:any)=>{runId=id;inferenceCalls++;return{inference:{id:randomUUID(),runId:id,step:payload.step,status:'failed',protocolVersion:2,deadlineAt:new Date(Date.now()+60000).toISOString(),errorCode:'INFERENCE_OUTPUT_INVALID',error:secret}};}};});
+  const result=await runStudioHost({...f.options,settings:{...settings,COATRIA_INFERENCE_MODE:'coatria_broker_v1'},clientFactory:clients});
+  assert.equal(result.cleanupComplete,true);assert.equal(inferenceCalls,1);assert.equal(failed.retryable,false);assert.match(failed.error,/INFERENCE_OUTPUT_INVALID/);
+  assert.deepEqual(f.events.find(row=>row.event==='adapter-failed'),{at:f.events.find(row=>row.event==='adapter-failed').at,event:'adapter-failed',runId,code:'INFERENCE_OUTPUT_INVALID'});
+  assert.equal(f.events.find(row=>row.event==='failure-recorded').status,'failed');assert(!JSON.stringify(f.events).includes(secret));assert(f.events.every(row=>Object.keys(row).every(key=>['at','event','runId','code','status'].includes(key))));
  }finally{await f.remove();}
 });
 

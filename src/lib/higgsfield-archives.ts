@@ -4,7 +4,7 @@ import type {PoolClient} from 'pg';
 import type {z} from 'zod';
 import {fail,hashToken,id} from './security';
 import {authorizeProjectStorageActor} from './project-storage';
-import {higgsfieldArchiveAvailability} from './higgsfield-archive-config';
+import {companyHiggsfieldArchiveAvailability} from './higgsfield-archive-config';
 import {higgsfieldArchiveProposalInput,higgsfieldArchiveListInput,higgsfieldArchiveApproveInput,higgsfieldArchiveRevokeInput,type HiggsfieldArchiveActor,type HiggsfieldArchive,type HiggsfieldArchivePage} from './higgsfield-archive-protocol';
 
 type Row=Record<string,any>;
@@ -122,10 +122,11 @@ export async function listHiggsfieldArchives(db:PoolClient,actor:HiggsfieldArchi
 }
 export async function approveHiggsfieldArchive(db:PoolClient,actor:HiggsfieldArchiveActor,archiveId:string,input:unknown){
  const data=parse(higgsfieldArchiveApproveInput,input);await actorAuthority(db,actor,'admin');return once(db,actor,data.clientId,'approve:'+id(archiveId),data,async()=>{
-  if(!higgsfieldArchiveAvailability().enabled)fail(503,'Archive processing is not enabled for this deployment.','HIGGSFIELD_ARCHIVE_UNAVAILABLE');
   const archive=await archiveRow(db,actor.companyId,archiveId,true);if(archive.status!=='proposed'||archive.revoked_at)changed('HIGGSFIELD_ARCHIVE_NOT_PROPOSED');if(archive.revision!==data.revision||archive.request_hash!==data.requestHash)changed('HIGGSFIELD_ARCHIVE_REVISION_CONFLICT');
+  const processing=await companyHiggsfieldArchiveAvailability(db,actor.companyId,archive.project_id);if(!processing.enabled)fail(503,'Archive processing is not enabled for this project.','HIGGSFIELD_ARCHIVE_UNAVAILABLE');
   const current=await facts(db,archive);if(current.project.revision!==data.projectRevision||current.binding.revision!==data.bindingRevision)changed('HIGGSFIELD_ARCHIVE_REVISION_CONFLICT');
-  const row=(await db.query("UPDATE higgsfield_output_archives SET status='queued',revision=revision+1,approved_by=$3,approved_at=statement_timestamp(),expires_at=statement_timestamp()+make_interval(hours=>$4),approved_project_revision=$5,approved_binding_revision=$6,updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2 RETURNING *",[actor.companyId,archiveId,actor.userId,data.expiresInHours,data.projectRevision,data.bindingRevision])).rows[0];
+  const row=(await db.query("WITH approval_clock AS MATERIALIZED (SELECT clock_timestamp() AS at) UPDATE higgsfield_output_archives SET status='queued',revision=revision+1,approved_by=$3,approved_at=tick.at,expires_at=LEAST(tick.at+make_interval(hours=>$4),$7::timestamptz),approved_project_revision=$5,approved_binding_revision=$6,updated_at=tick.at FROM approval_clock tick WHERE company_id=$1 AND id=$2 AND ($7::timestamptz IS NULL OR $7::timestamptz>tick.at) RETURNING higgsfield_output_archives.*",[actor.companyId,archiveId,actor.userId,data.expiresInHours,data.projectRevision,data.bindingRevision,processing.expiresAt])).rows[0];
+  if(!row)fail(409,'The archive service deadline ended during approval.','HIGGSFIELD_ARCHIVE_UNAVAILABLE');
   await db.query("INSERT INTO higgsfield_archive_receipts(company_id,project_id,archive_id,action_id,operation,phase,detail) VALUES($1,$2,$3,$4,'approve','returned',$5)",[actor.companyId,row.project_id,row.id,data.clientId,JSON.stringify({approvedBy:actor.userId,requestHash:row.request_hash,expiresAt:iso(row.expires_at)})]);return {archive:await view(db,row)};
  });
 }

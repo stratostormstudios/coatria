@@ -2,7 +2,7 @@
 // Authorization and durable transfer receipts belong to the service/gateway, not this adapter.
 import {createHash} from 'node:crypto';
 import {Readable} from 'node:stream';
-import {S3Client, ListObjectsV2Command, HeadObjectCommand, GetObjectCommand, CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand, AbortMultipartUploadCommand} from '@aws-sdk/client-s3';
+import {S3Client, ListObjectsV2Command, HeadBucketCommand, HeadObjectCommand, GetObjectCommand, CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand, AbortMultipartUploadCommand} from '@aws-sdk/client-s3';
 import {RUNPOD_STORAGE_REGIONS,runpodStorageEndpoint} from './project-storage-protocol';
 
 export {RUNPOD_STORAGE_REGIONS,runpodStorageEndpoint};
@@ -19,6 +19,8 @@ function text(value:unknown,max=2048,code:RunpodStorageErrorCode='STORAGE_PROVID
 function etag(value:unknown){return text(value,256);}
 function mediaType(value:unknown){if(typeof value!=='string'||value.length>160||!/^[-\w.+]+\/[-\w.+]+$/.test(value))fail('STORAGE_INPUT_INVALID');return value;}
 function status(value:Record<string,unknown>){return record(value.$metadata).httpStatusCode;}
+// Runpod replies may include one leading slash; request keys remain canonical.
+function matchesObjectKey(value:unknown,expected:string){return value===expected||value==='/'+expected;}
 export function runpodProjectRoot(companyId:string,projectId:string){return `coatria/companies/${id(companyId)}/projects/${id(projectId)}/`;}
 export function runpodProjectObjectKey(companyId:string,projectId:string,versionId:string){return runpodProjectRoot(companyId,projectId)+'objects/'+id(versionId);}
 
@@ -36,6 +38,8 @@ export interface RunpodObjectMetadata {versionId:string;bytes:number;etag:string
 export interface RunpodObjectPage {objects:RunpodObjectMetadata[];cursor:string|null}
 export interface RunpodObjectRead {stream:ReadableStream<Uint8Array>;bytes:number;totalBytes:number;etag:string;contentType:string|null;contentRange:string|null;range:{start:number;end:number}|null}
 export interface RunpodProjectStorage {
+ /** Confirms a successful HEAD of the configured volume. Does not prove write permissions. */
+ verifyBucketAccess(options?:RunpodStorageOptions):Promise<void>;
  list(input?:{cursor?:string;limit?:number}&RunpodStorageOptions):Promise<RunpodObjectPage>;
  head(versionId:string,options?:RunpodStorageOptions):Promise<RunpodObjectMetadata|null>;
  createMultipart(input:{versionId:string;bytes:number;contentType:string}&RunpodStorageOptions):Promise<RunpodMultipartUpload>;
@@ -90,7 +94,8 @@ function sdkTransport(endpoint:string,bucket:string,objectPrefix:string,maxObjec
    const response=await untilAborted(signal,()=>{const pending=transport.fetch(url,{method:request.method,headers,body:request.body as BodyInit|undefined,...request.body instanceof Readable?{duplex:'half'}:{},redirect:'error',cache:'no-store',signal});void pending.then(late=>{if(signal.aborted)cancel(late.body);},()=>{});return pending;});
    if(signal.aborted){cancel(response.body);throw abortError(signal);}
    if(response.headers.get('content-encoding')&&!['identity',''].includes(response.headers.get('content-encoding')!)){cancel(response.body);fail('STORAGE_PROVIDER_PROTOCOL');}
-   const objectGet=request.method==='GET'&&request.path.startsWith('/'+bucket+'/'+objectPrefix)&&!queryString;
+   // GetObject carries the SDK's x-id marker. Other queries (including multipart metadata) keep the metadata cap.
+   const objectGet=request.method==='GET'&&request.path.startsWith('/'+bucket+'/'+objectPrefix)&&Object.entries(request.query??{}).every(([name,value])=>name==='x-id'&&value==='GetObject');
    const maxBytes=objectGet&&response.ok?maxObjectBytes:1024*1024;
    // HEAD's Content-Length describes the object, not an HTTP response body.
    const length=request.method==='HEAD'?null:response.headers.get('content-length');if(length!==null&&(!/^\d+$/.test(length)||Number(length)>maxBytes)){cancel(response.body);fail('STORAGE_RESPONSE_TOO_LARGE');}
@@ -115,7 +120,8 @@ export function createRunpodProjectStorage(config:RunpodProjectStorageConfig,tra
  if(!RUNPOD_STORAGE_REGIONS.includes(config.region)||!/^[-a-z0-9]{4,64}$/.test(config.volumeId)||!/^user_[A-Za-z0-9_-]{4,160}$/.test(config.credentials?.accessKeyId??'')||!/^rps_[A-Za-z0-9_-]{8,256}$/.test(config.credentials?.secretAccessKey??''))fail('STORAGE_CONFIG_INVALID');
  const timeoutMs=integer(config.timeoutMs??30000,1,7_200_000,'STORAGE_CONFIG_INVALID'),partBytes=integer(config.partBytes??8*1024*1024,1,64*1024*1024,'STORAGE_CONFIG_INVALID'),maxObjectBytes=integer(config.maxObjectBytes??64*1024**3,1,4_000_000_000_000,'STORAGE_CONFIG_INVALID');
  const prefix=root+'objects/',binding=createHash('sha256').update(JSON.stringify([config.region,config.volumeId,root])).digest('hex');
- const client=new S3Client({endpoint,region:config.region,credentials:{...config.credentials},forcePathStyle:true,maxAttempts:1,followRegionRedirects:false,requestChecksumCalculation:'WHEN_REQUIRED',responseChecksumValidation:'WHEN_REQUIRED',requestHandler:sdkTransport(endpoint,config.volumeId,prefix,maxObjectBytes,transport),logger:{debug(){},info(){},warn(){},error(){},trace(){}}});
+ // Native fetch cannot negotiate Expect: 100-continue. Disable SDK insertion before signing.
+ const client=new S3Client({endpoint,region:config.region,credentials:{...config.credentials},forcePathStyle:true,maxAttempts:1,followRegionRedirects:false,expectContinueHeader:false,requestChecksumCalculation:'WHEN_REQUIRED',responseChecksumValidation:'WHEN_REQUIRED',requestHandler:sdkTransport(endpoint,config.volumeId,prefix,maxObjectBytes,transport),logger:{debug(){},info(){},warn(){},error(){},trace(){}}});
  const active=new Set<ReturnType<typeof scope>>();let closed=false;
  const key=(versionId:string)=>prefix+id(versionId);
  function begin(signal?:AbortSignal){if(closed)fail('STORAGE_ABORTED');const current=scope(timeoutMs,signal);active.add(current);return {current,finish(){current.dispose();active.delete(current);}};}
@@ -125,6 +131,9 @@ export function createRunpodProjectStorage(config:RunpodProjectStorageConfig,tra
  function metadata(value:unknown,versionId:string):RunpodObjectMetadata{const o=record(value);const modified=o.LastModified instanceof Date&&!Number.isNaN(o.LastModified.valueOf())?o.LastModified.toISOString():null;const contentType=typeof o.ContentType==='string'?o.ContentType.slice(0,160):null;return {versionId,bytes:integer(o.ContentLength??o.Size,0,maxObjectBytes,'STORAGE_PROVIDER_PROTOCOL'),etag:etag(o.ETag),modifiedAt:modified,contentType};}
  return {
   validateMultipart:upload,
+  async verifyBucketAccess(options={}){
+   const context=begin(options.signal);try{const result=record(await untilAborted(context.current.signal,()=>client.send(new HeadBucketCommand({Bucket:config.volumeId}),{abortSignal:context.current.signal})));if(status(result)!==200)fail('STORAGE_PROVIDER_PROTOCOL');}catch(e){throw error(e,false);}finally{context.finish();}
+  },
   async list(input={}){
    const limit=integer(input.limit??50,1,100);let continuation:string|undefined;
    if(input.cursor!==undefined){try{const raw=JSON.parse(Buffer.from(text(input.cursor,8192,'STORAGE_INPUT_INVALID'),'base64url').toString('utf8'));if(raw.scope!==binding)fail('STORAGE_INPUT_INVALID');continuation=text(raw.token,2048,'STORAGE_INPUT_INVALID');}catch{fail('STORAGE_INPUT_INVALID');}}
@@ -142,7 +151,7 @@ export function createRunpodProjectStorage(config:RunpodProjectStorageConfig,tra
   async createMultipart(input){
    const bytes=integer(input.bytes,1,maxObjectBytes);if(Math.ceil(bytes/partBytes)>10000)fail('STORAGE_INPUT_INVALID');const path=key(input.versionId),contentType=mediaType(input.contentType);
    const result=record(await send(new CreateMultipartUploadCommand({Bucket:config.volumeId,Key:path,ContentType:contentType}),true,input.signal));
-   if(status(result)!==200||result.Bucket!==config.volumeId||result.Key!==path)fail('STORAGE_PROVIDER_UNCERTAIN');let uploadId:string;try{uploadId=text(result.UploadId);}catch{fail('STORAGE_PROVIDER_UNCERTAIN');}
+   if(status(result)!==200||result.Bucket!==config.volumeId||!matchesObjectKey(result.Key,path))fail('STORAGE_PROVIDER_UNCERTAIN');let uploadId:string;try{uploadId=text(result.UploadId);}catch{fail('STORAGE_PROVIDER_UNCERTAIN');}
    return {scope:binding,versionId:input.versionId,uploadId,bytes,partBytes};
   },
   async uploadPart(input){
@@ -160,7 +169,7 @@ export function createRunpodProjectStorage(config:RunpodProjectStorageConfig,tra
    const handle=upload(input.upload),count=Math.ceil(handle.bytes/partBytes);if(!Array.isArray(input.parts)||input.parts.length!==count)fail('STORAGE_INPUT_INVALID');
    const parts=input.parts.map((p,index)=>{if(p.partNumber!==index+1||p.bytes!==Math.min(partBytes,handle.bytes-index*partBytes))fail('STORAGE_INPUT_INVALID');return {PartNumber:p.partNumber,ETag:text(p.etag,256,'STORAGE_INPUT_INVALID')};});
    const result=record(await send(new CompleteMultipartUploadCommand({Bucket:config.volumeId,Key:key(handle.versionId),UploadId:handle.uploadId,MultipartUpload:{Parts:parts}}),true,input.signal));
-   if(status(result)!==200||result.Bucket!==config.volumeId||result.Key!==key(handle.versionId))fail('STORAGE_PROVIDER_UNCERTAIN');try{return {versionId:handle.versionId,etag:etag(result.ETag)};}catch{fail('STORAGE_PROVIDER_UNCERTAIN');}
+   if(status(result)!==200||result.Bucket!==config.volumeId||!matchesObjectKey(result.Key,key(handle.versionId)))fail('STORAGE_PROVIDER_UNCERTAIN');try{return {versionId:handle.versionId,etag:etag(result.ETag)};}catch{fail('STORAGE_PROVIDER_UNCERTAIN');}
   },
   async abortMultipart(input){const handle=upload(input.upload);const result=record(await send(new AbortMultipartUploadCommand({Bucket:config.volumeId,Key:key(handle.versionId),UploadId:handle.uploadId}),true,input.signal));if(status(result)!==204)fail('STORAGE_PROVIDER_UNCERTAIN');},
   async get(input){

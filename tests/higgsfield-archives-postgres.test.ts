@@ -11,6 +11,7 @@ import {sealHiggsfieldSecret} from '../src/lib/higgsfield-secrets';
 import {createProjectStorageConnection,bindProjectStorage,createProjectStorageFolder} from '../src/lib/project-storage';
 import {proposeHiggsfieldArchive,approveHiggsfieldArchive,getHiggsfieldArchive,revokeHiggsfieldArchive,authorizeHiggsfieldArchive} from '../src/lib/higgsfield-archives';
 import {createHiggsfieldArchiveWorker} from '../src/lib/higgsfield-archive-worker';
+import {assertHiggsfieldArchiveDatabase,HIGGSFIELD_ARCHIVE_WORKER_ROLE} from '../src/lib/higgsfield-archive-preflight';
 import type {RunpodProjectStorage,RunpodMultipartUpload} from '../src/lib/project-storage-runpod';
 
 const integration=process.env.COATRIA_INTEGRATION_DATABASE_URL;
@@ -22,7 +23,7 @@ const sha=(value:Uint8Array|string)=>createHash('sha256').update(value).digest('
 // no provider, existing database rows, account tokens or paid API is contacted.
 test('PostgreSQL separates archive approval authority from the dedicated transfer worker',{skip:!localPostgres,timeout:180000},async t=>{
  const suffix=randomUUID().replaceAll('-',''),dbName='coatria_archives_'+suffix;
- const roles={runtime:'coatria_archive_api_'+suffix,worker:'coatria_archive_worker_'+suffix};
+ const roles={runtime:'coatria_archive_api_'+suffix,worker:HIGGSFIELD_ARCHIVE_WORKER_ROLE};
  const prior={pool:(globalThis as any).coatriaPool,url:process.env.DATABASE_URL,key:process.env.COATRIA_HOSTING_KEYRING,enabled:process.env.COATRIA_HIGGSFIELD_ARCHIVE_ENABLED,fetch:globalThis.fetch};
  const control=new Pool({connectionString:integration,max:1,connectionTimeoutMillis:10000}),ownerUrl=new URL(integration!);ownerUrl.pathname='/'+dbName;
  let owner:Pool|undefined,runtime:Pool|undefined,workerPool:Pool|undefined,created=false,scratchRoot:string|undefined;
@@ -50,6 +51,21 @@ test('PostgreSQL separates archive approval authority from the dedicated transfe
    const script=await readFile('database/'+(kind==='runtime'?'runtime-permissions.sql':'higgsfield-archive-worker-permissions.sql'),'utf8');await owner.query(script.replaceAll(kind==='runtime'?'coatria_runtime_v1':'coatria_higgsfield_archive_worker_v1',role));
    const url=new URL(ownerUrl);url.username=role;url.password=password;const pool=new Pool({connectionString:url.href,max:2,connectionTimeoutMillis:10000});if(kind==='runtime')runtime=pool;else workerPool=pool;await identity(pool,role);
   }
+  await t.test('startup accepts only the dedicated LOGIN with exact current effective archive privileges',async()=>{
+   assert.equal((await assertHiggsfieldArchiveDatabase(workerPool!)).status,'passed');
+   await assert.rejects(()=>assertHiggsfieldArchiveDatabase(owner!),{code:'ARCHIVE_DB_IDENTITY'});
+   await assert.rejects(()=>assertHiggsfieldArchiveDatabase(runtime!),{code:'ARCHIVE_DB_IDENTITY'});
+   const impersonated=await owner!.connect();try{await impersonated.query('SET ROLE '+roles.worker);await assert.rejects(()=>assertHiggsfieldArchiveDatabase(impersonated),{code:'ARCHIVE_DB_IDENTITY'});}finally{await impersonated.query('RESET ROLE');impersonated.release();}
+   await control.query(`GRANT ${roles.runtime} TO ${roles.worker}`);try{await assert.rejects(()=>assertHiggsfieldArchiveDatabase(workerPool!),{code:'ARCHIVE_DB_ROLE'});}finally{await control.query(`REVOKE ${roles.runtime} FROM ${roles.worker}`);}
+   const grants=await readFile('database/higgsfield-archive-worker-permissions.sql','utf8');
+   for(const sql of[`REVOKE UPDATE(status) ON project_storage_uploads FROM ${roles.worker}`,`GRANT SELECT(sealed) ON higgsfield_connections TO ${roles.worker}`,`GRANT UPDATE(role) ON memberships TO ${roles.worker}`,`GRANT SELECT ON schema_migrations TO ${roles.worker} WITH GRANT OPTION`]){
+    await owner!.query(sql);try{await assert.rejects(()=>assertHiggsfieldArchiveDatabase(workerPool!),{code:'ARCHIVE_DB_PRIVILEGES'});}finally{await owner!.query(grants);}
+   }
+   await owner!.query('GRANT SELECT ON sessions TO PUBLIC');try{await assert.rejects(()=>assertHiggsfieldArchiveDatabase(workerPool!),{code:'ARCHIVE_DB_PRIVILEGES'});}finally{await owner!.query('REVOKE SELECT ON sessions FROM PUBLIC');}
+   await owner!.query("CREATE FUNCTION public.archive_preflight_fixture() RETURNS integer LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'");try{await assert.rejects(()=>assertHiggsfieldArchiveDatabase(workerPool!),{code:'ARCHIVE_DB_PRIVILEGES'});await owner!.query('REVOKE ALL ON FUNCTION public.archive_preflight_fixture() FROM PUBLIC');assert.equal((await assertHiggsfieldArchiveDatabase(workerPool!)).status,'passed');}finally{await owner!.query('DROP FUNCTION public.archive_preflight_fixture()');}
+   await owner!.query("DELETE FROM schema_migrations WHERE name='029_higgsfield_archives.sql'");try{await assert.rejects(()=>assertHiggsfieldArchiveDatabase(workerPool!),{code:'ARCHIVE_DB_MIGRATIONS'});}finally{await owner!.query("INSERT INTO schema_migrations(name) VALUES('029_higgsfield_archives.sql')");}
+   assert.equal((await assertHiggsfieldArchiveDatabase(workerPool!)).status,'passed');assert.equal((await owner!.query('SELECT count(*)::int n FROM higgsfield_output_archives')).rows[0].n,0);
+  });
   process.env.DATABASE_URL=ownerUrl.href;process.env.COATRIA_HIGGSFIELD_ARCHIVE_ENABLED='true';process.env.COATRIA_HOSTING_KEYRING=JSON.stringify({activeKeyId:'fixture',keys:{fixture:randomBytes(32).toString('base64')}});
   await owner.query("INSERT INTO users(id,name,email,password_hash) VALUES($1,'Synthetic archive owner',$2,'not-a-login')",[userId,userId+'@example.invalid']);
   await owner.query("INSERT INTO companies(id,name,slug,template) VALUES($1,'Isolated archive PostgreSQL fixture',$2,'blank')",[companyId,companyId]);await owner.query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'owner')",[companyId,userId]);
@@ -93,7 +109,7 @@ test('PostgreSQL separates archive approval authority from the dedicated transfe
     fetchOutput:async input=>{counts.fetch++;assert.equal(input.locator,locator);await input.assertAuthority(input.signal!);await input.consume(body,input.signal!);return {bytes:body.length,sha256:sha(body)};},
     inspectMedia:async input=>{counts.inspect++;const bytes=await readFile(input.path);assert.equal(bytes.length,input.expectedBytes);assert.equal(sha(bytes),input.expectedSha256);return {kind:'image',format:'png',contentType:'image/png',bytes:bytes.length,sha256:sha(bytes),verification:'full_decode',inspectionVersion:1,width:32,height:32,codec:'png',color:{space:null,primaries:null,transfer:null,range:null}};},
     providerFactory:config=>{assert.equal(config.credentials.secretAccessKey,storageSecret);assert.equal(config.companyId,companyId);assert.equal(config.projectId,projectId);const provider:RunpodProjectStorage={
-     list:async()=>({objects:[],cursor:null}),head:async()=>null,validateMultipart:value=>value as RunpodMultipartUpload,
+     verifyBucketAccess:async()=>{throw Error('Operator preflight is not part of this archive test');},list:async()=>({objects:[],cursor:null}),head:async()=>null,validateMultipart:value=>value as RunpodMultipartUpload,
      createMultipart:async input=>{counts.create++;await checkIntent('initiate');const descriptor={scope:companyId,versionId:input.versionId,uploadId:randomUUID(),bytes:input.bytes,partBytes:config.partBytes!};parts.set(descriptor.uploadId,new Map());return descriptor;},
      uploadPart:async input=>{counts.part++;await checkIntent('part');const bytes=input.body instanceof Uint8Array?Buffer.from(input.body):Buffer.from(await new Response(input.body as ReadableStream<Uint8Array>).arrayBuffer());parts.get(input.upload.uploadId)!.set(input.partNumber,bytes);return {partNumber:input.partNumber,bytes:bytes.length,etag:'"part-'+sha(bytes)+'"'};},
      completeMultipart:async input=>{counts.complete++;await checkIntent('complete');objects.set(input.upload.versionId,Buffer.concat(input.parts.map(part=>parts.get(input.upload.uploadId)!.get(part.partNumber)!)));return {versionId:input.upload.versionId,etag:'"stored-object"'};},

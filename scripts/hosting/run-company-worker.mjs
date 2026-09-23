@@ -5,7 +5,7 @@ import {mkdir,lstat,chmod,writeFile,rename,unlink} from 'node:fs/promises';
 import {resolve,join,isAbsolute,dirname} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {randomUUID} from 'node:crypto';
-import {createRuntimeClient,openWorkerState,workOnce,createAutonomyTicker,RuntimeError,pause} from '../../public/downloads/agent-worker.mjs';
+import {createRuntimeClient,openWorkerState,workOnce,workerDiagnostic,createAutonomyTicker,RuntimeError,pause} from '../../public/downloads/agent-worker.mjs';
 import {createProviderExecutor} from '../../public/downloads/provider-adapter.mjs';
 
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -31,7 +31,7 @@ export async function runHostedWorker({directory,companyId,agentId,deadlineMs,cl
  if(process.platform!=='win32')await chmod(directory,0o700);
  const control=new AbortController(),pending=new Set(),startedAt=new Date().toISOString(),statusPath=join(directory,'host-status.json');
  let state,deadlineTimer,writing=Promise.resolve(),reason='completed',exitCode=0,cleanupComplete=true,lastContactAt=null,ownsState=false;
- const emit=event=>{const entry={at:new Date().toISOString(),event};try{log(entry);}catch{/* Diagnostic sinks cannot alter a run. */}};
+ const emit=(event,details)=>{try{log({at:new Date().toISOString(),event,...workerDiagnostic(details)});}catch{/* Diagnostic sinks cannot alter a run. */}};
  const report=status=>{const value={version:1,pid:process.pid,companyId,agentId,startedAt,updatedAt:new Date().toISOString(),deadlineAt:new Date(deadlineMs).toISOString(),status,reason,lastContactAt,exitCode,cleanupComplete};const bytes=JSON.stringify(value);writing=writing.then(async()=>{const temporary=statusPath+'.'+randomUUID()+'.tmp';try{await writeFile(temporary,bytes,{flag:'wx',mode:0o600});await rename(temporary,statusPath);}finally{await unlink(temporary).catch(error=>{if(error.code!=='ENOENT')throw error;});}});return writing;};
  const stop=why=>{if(!control.signal.aborted){reason=why;control.abort(new Error('Hosted worker stopped.'));emit('host-stopping');}};
  const externalStop=()=>stop('operator_stop'),signalStop=()=>stop('signal');
@@ -53,7 +53,7 @@ export async function runHostedWorker({directory,companyId,agentId,deadlineMs,cl
   while(!control.signal.aborted){
    try{
     await tick(state,control.signal);await report('polling');
-    const worked=await workOnce({client,state,execute:tracked,signal:control.signal,log:entry=>{if(['result-recorded','failure-recorded','adapter-failed','heartbeat-delayed'].includes(entry.event))emit(entry.event);}});
+    const worked=await workOnce({client,state,execute:tracked,signal:control.signal,log:entry=>{if(['result-recorded','failure-recorded','adapter-failed','heartbeat-delayed'].includes(entry.event))emit(entry.event,entry);}});
     lastContactAt=new Date().toISOString();await report('idle');if(!worked)await pause(pollMs,control.signal);
    }catch(error){
     if(control.signal.aborted)break;

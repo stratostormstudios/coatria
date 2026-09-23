@@ -14,6 +14,6 @@ export function authorityReader(reader:ReadableStreamDefaultReader<Uint8Array>,c
  const timer=setInterval(()=>{void validate(true).catch(()=>{});},intervalMs);
  return {
   async read(){await validate();const chunk=await reader.read();await validate();if(failure)throw failure;return chunk;},
-  async close(){ended=true;clearInterval(timer);await reader.cancel().catch(()=>{});try{reader.releaseLock();}catch{/* A cancelled outstanding read will release naturally. */}}
+  async close(){ended=true;clearInterval(timer);await reader.cancel().catch(()=>{});await pending?.catch(()=>{});try{reader.releaseLock();}catch{/* A cancelled outstanding read will release naturally. */}}
  };
 }

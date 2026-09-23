@@ -10,13 +10,27 @@ All three endpoints require the exact agent bearer credential, its live run leas
 
 | Endpoint | Request |
 | --- | --- |
-| `POST /api/agent/runs/{runId}/inference` | `{leaseToken, requestId, step}`; UUID request ID, zero-based step, no other fields |
+| `POST /api/agent/runs/{runId}/inference` | `{leaseToken, requestId, step, protocolVersion?:2}`; UUID request ID, zero-based step, no model or context fields |
 | `GET /api/agent/runs/{runId}/inference/{inferenceId}` | `X-Coatria-Run-Lease` header |
 | `POST /api/agent/runs/{runId}/inference/{inferenceId}/cancel` | `{leaseToken, requestId}` |
 
 Responses contain `inference` with its UUID, run ID, step, status, creation time, absolute deadline, sanitized error code, reserved/used tokens and `billingVerified:false`. Only `succeeded` contains a validated bounded OpenAI chat completion in `output`. States are `submitting`, `queued`, `running`, `succeeded`, `failed`, `uncertain`, `cancel_requested`, `cancelled`, and `expired`. A cancellation request is idempotent; cancellation cannot undo completed provider work or committed tool actions.
 
 The worker uses `stableRequestId(runId, 'inference:'+step)` and tool receipts use `stableRequestId(runId, 'provider:'+step+':'+callId)`. A complete step with no requested tools ends reasoning; it cannot be followed by another inference step. The worker executes requested tools through the ordinary leased API, then completes its run separately.
+
+## Bounded argument correction (runtime API 1.17.0)
+
+New reviewed workers submit `protocolVersion:2`, pinned in immutable job limits for the whole run. Every corresponding response identifies protocol 2. Successful provider completions additionally carry server-owned `disposition`, measured `usage`, and, when needed, `validationFeedback`. Provider output remains its original completion; fields inside it never determine this disposition. The trusted worker's `inference.complete()` now returns a frozen, privately branded wrapper containing `output`, `usage` and disposition. Custom managed adapters must implement this contract. Direct-provider adapters retain their existing behavior.
+
+Only a matching, terminal provider completion with valid usage, complete output and allowed unique tool identities can request correction. Malformed argument JSON, actual tool-schema failures, and a closed set of pure staffing grouping failures are recoverable. Unsafe JSONB strings (NUL or unpaired surrogates), unknown tools, duplicate call IDs, truncation, usage errors, uncertain outcomes and authority failures remain terminal or uncertain. Database, authorization and business-commit errors are never converted into model feedback.
+
+If any call fails argument validation, **none of that batch's tools execute**. One transaction saves its successful provider completion, actual token usage, per-call nonexecution disposition and immutable receipts in `studio_inference_tool_receipts`. Invalid calls receive bounded fixed-code/schema-derived feedback; valid siblings receive `BATCH_NOT_EXECUTED`. These receipts bind company, agent, run, inference, exact stable tool request ID and argument hash. Parsed arguments use the existing canonical JSON hash; malformed JSON strings use a tagged raw-string hash. Feedback includes no supplied values, unknown field names, parser messages or private exception details.
+
+The next numbered inference step verifies those exact server receipts and appends a tool response for each original call ID. It cannot accept worker-supplied feedback. Corrected calls must use new model call IDs, pass ordinary authority/schema/business checks, and execute through the leased tool API. A pre-effect tool fence also rejects blocked siblings, changed arguments, arbitrary replacement request IDs, and historical calls once a newer inference step exists. Direct harness runs with no broker jobs keep their ordinary behavior.
+
+There are at most **two correction batches per run**, counted durably across valid intermediate steps and process restarts. A third invalid batch terminates with `INFERENCE_VALIDATION_LIMIT`. Correction consumes the existing step, tool-call, token, time, per-host job and lifetime monetary allowances; no reservation is refunded or deadline extended. Cancellation, host stop or lost authority before commit suppresses corrective output and receipts just as it suppresses ordinary completion output.
+
+Omitting the version preserves the old terminal-only broker contract. New workers reject missing or mismatched protocol metadata. Old workers cannot execute a rejected batch, even if they ignore new metadata: the server tool fence rejects it before effects. This requires a newly reviewed worker source commit, bootstrap hash and managed-host plan; publishing server code does not upgrade an existing immutable Pod. No migration, new endpoint, permission grant, model retry or live provider activation is part of this change.
 
 ## Trusted model context
 

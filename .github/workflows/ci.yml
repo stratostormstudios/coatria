@@ -27,7 +27,7 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - name: Typecheck media qualification and diagnostic modules
-        run: node node_modules/typescript/bin/tsc --noEmit --allowImportingTsExtensions --strict --skipLibCheck --target ES2022 --module esnext --moduleResolution bundler --esModuleInterop scripts/hosting/media-sandbox-linux-canary.mts scripts/hosting/media-sandbox-startup-diagnostic.test.mts
+        run: node node_modules/typescript/bin/tsc --noEmit --allowJs --allowImportingTsExtensions --strict --skipLibCheck --target ES2022 --module esnext --moduleResolution bundler --esModuleInterop scripts/hosting/media-sandbox-linux-canary.mts scripts/hosting/media-sandbox-startup-diagnostic.test.mts scripts/hosting/run-archive-host.mts tests/archive-host-package.test.ts
       - name: Test bounded diagnostic classification and fail-closed invocation
         run: node --import tsx --test scripts/hosting/media-sandbox-startup-diagnostic.test.mts scripts/hosting/media-apparmor-ci.test.mjs
       - name: Prepare pinned closure and one capped delegated service
@@ -36,6 +36,9 @@ jobs:
       - name: Drop privilege and prove the real isolation boundary and seven decoders
         run: |
           sudo env CI=true COATRIA_MEDIA_QUALIFICATION="$COATRIA_MEDIA_QUALIFICATION" "$(command -v node)" scripts/hosting/run-media-sandbox-ci.mjs
+      - name: Build the exact archive release and qualify its disabled systemd service
+        run: |
+          sudo env CI=true GITHUB_SHA="$GITHUB_SHA" COATRIA_MEDIA_QUALIFICATION="$COATRIA_MEDIA_QUALIFICATION" COATRIA_NPM_CACHE="$(npm config get cache)" "$(command -v node)" scripts/hosting/qualify-archive-host-ci.mjs
       - name: Preserve scoped AppArmor mode and sanitized kernel denial categories
         if: always() && env.COATRIA_MEDIA_QUALIFICATION != ''
         run: |
@@ -114,10 +117,38 @@ jobs:
       - run: npm run db:migrate
       - name: Prepare checksum-pinned native media inspection tools
         run: node scripts/hosting/prepare-media-inspector-ci.mjs
+      - name: Install Chromium for the synthetic production-workspace browser lane
+        run: node node_modules/@playwright/test/cli.js install --with-deps chromium
       - run: npm test
       - run: npm run test:agent:fixture
       - run: npm run typecheck
+      - name: Build standalone trusted services from the exact reviewed checkout
+        run: |
+          node --input-type=module <<'NODE'
+          import {mkdir} from 'node:fs/promises';
+          import {join} from 'node:path';
+          import {buildTrustedServiceBundle} from './scripts/hosting/build-trusted-service-bundle.mjs';
+          const output=join(process.env.RUNNER_TEMP,'coatria-trusted-services');
+          await mkdir(output);
+          for(const service of ['archive','gateway','media-qualification']) {
+            const result=await buildTrustedServiceBundle({root:process.cwd(),commit:process.env.GITHUB_SHA,service,output:join(output,service)});
+            console.log(JSON.stringify({service,sourceCommit:result.sourceCommit,bundleSha256:result.bundleSha256,runtimeBytes:result.runtime.bytes,qualified:false,providerCalled:false}));
+          }
+          NODE
       - run: npm run build
+      - name: Exercise generated-media and legacy studio workflows in the production build
+        env:
+          COATRIA_BROWSER_START: '1'
+          COATRIA_TEST_URL: http://127.0.0.1:4180
+        run: node node_modules/@playwright/test/cli.js test tests/browser/studio-generated.spec.ts tests/browser/studio-generated-workflow.spec.ts tests/browser/studio-generated-coordination.spec.ts tests/browser/studio-generated-client.spec.ts tests/browser/studio-generated-revisions.spec.ts tests/browser/generated-project-wizard.spec.ts tests/browser/studio-roles.spec.ts tests/browser/higgsfield-archives.spec.ts tests/browser/higgsfield-tracking.spec.ts
+      - name: Preserve synthetic studio browser evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coatria-studio-browser-${{ github.run_id }}
+          path: test-results
+          retention-days: 14
+          if-no-files-found: ignore
   scale:
     runs-on: ubuntu-latest
     timeout-minutes: 15

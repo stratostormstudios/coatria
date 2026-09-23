@@ -44,9 +44,11 @@ async function verify(plan:StorageConformancePlan,storage:RunpodProjectStorage,r
 /** No mutation retries, no deletion, no volume creation; every mutation requires
  * a durable intent callback. A failed journal write prevents the next I/O. */
 export async function runStorageConformance(input:unknown,deps:Dependencies){
- const plan=storageConformancePlanSchema.parse(input),factory=deps.factory??createRunpodProjectStorage,config=providerConfig(plan,deps.credentials),signal=deps.signal,save=deps.record,transport=deps.transport;active(signal);let storage=factory(config,transport),step='preflight';
+ const plan=storageConformancePlanSchema.parse(input),factory=deps.factory??createRunpodProjectStorage,config=providerConfig(plan,deps.credentials),signal=deps.signal,save=deps.record,transport=deps.transport;active(signal);let storage=factory(config,transport),step='known-bucket-access';
  const record=recorder(save,signal);
  try{
+  await storage.verifyBucketAccess({signal});await record({step,phase:'passed',detail:{operation:'HeadBucket',writePermissionEstablished:false}});
+  step='preflight';
   insist(await storage.head(plan.versionId,{signal})===null&&await storage.head(plan.abortVersionId,{signal})===null);
   await record({step,phase:'passed',detail:{planSha256:storageConformancePlanSha256(plan)}});
   step='create-multipart';await record({step,phase:'intent'});const upload=await storage.createMultipart({versionId:plan.versionId,bytes:plan.bytes,contentType:'application/octet-stream',signal});await record({step,phase:'returned',detail:{upload}});

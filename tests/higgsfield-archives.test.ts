@@ -9,6 +9,10 @@ import {recordHiggsfieldSubmission} from '../src/lib/higgsfield-jobs';
 import {createProjectStorageConnection,bindProjectStorage} from '../src/lib/project-storage';
 import {proposeHiggsfieldArchive,listHiggsfieldArchives,getHiggsfieldArchive,approveHiggsfieldArchive,revokeHiggsfieldArchive,authorizeHiggsfieldArchive} from '../src/lib/higgsfield-archives';
 import {higgsfieldArchiveProposalInput,higgsfieldArchiveApproveInput,type HiggsfieldArchiveActor} from '../src/lib/higgsfield-archive-protocol';
+import {companyHiggsfieldArchiveAvailability} from '../src/lib/higgsfield-archive-config';
+import {revokeCompanyRuntimeConfiguration} from '../src/lib/company-runtime-config';
+import {revokeArchiveExecutorCredential} from '../src/lib/company-runtime-executor';
+import {companyArchiveRuntimeFixture} from './fixtures/company-archive-runtime';
 
 test('archive proposals and finite human authority pin the actual source and project storage',{timeout:120000},async t=>{
  const previous={url:process.env.DATABASE_URL,pool:process.env.DATABASE_POOL_MAX,key:process.env.COATRIA_HOSTING_KEYRING,enabled:process.env.COATRIA_HIGGSFIELD_ARCHIVE_ENABLED,fetch:globalThis.fetch,savedPool:(globalThis as any).coatriaPool};
@@ -58,6 +62,37 @@ test('archive proposals and finite human authority pin the actual source and pro
   return {company,owner,admin,member,outsider,project,connectionId,task,work,request,providerJob,root,parent,sessions,actor,adminActor,memberActor,producer,agent,providerSecret,locator,credentials,job,output,connection,binding,input,propose,approval,approve,authorized,approved,get};
  }
  try{
+  await t.test('durable archive readiness is project scoped, requires a live service, and clamps approved transfer lifetime',async()=>{
+   const f=await fixture(),runtime=await companyArchiveRuntimeFixture(f.company,f.owner,f.project),availability=()=>transaction(client=>companyHiggsfieldArchiveAvailability(client,f.company,f.project));
+   delete process.env.COATRIA_HIGGSFIELD_ARCHIVE_ENABLED;
+   assert.equal((await availability()).enabled,true);assert.equal((await availability()).expiresAt,runtime.preset.expiresAt);
+   assert.equal((await transaction(client=>companyHiggsfieldArchiveAvailability(client,f.company,randomUUID()))).enabled,false);
+   const proposal=(await f.propose()).archive,approved=await f.approve(proposal);assert.equal(approved.archive.expiresAt,runtime.preset.expiresAt);
+   assert(+new Date(approved.archive.expiresAt)-+new Date(approved.archive.approvedAt)<24*3600000);
+   for(const patch of ["phase='provisioning'","stop_requested_at=clock_timestamp()","last_reconciled_at=clock_timestamp()-interval '3 minutes'","provider_status='EXITED'","expires_at=clock_timestamp()+interval '30 seconds'"]){
+    await query('UPDATE trusted_service_provisions SET '+patch+' WHERE id=$1',[runtime.provision.id]);assert.equal((await availability()).enabled,false);
+    await query("UPDATE trusted_service_provisions SET phase='running',stop_requested_at=NULL,last_reconciled_at=clock_timestamp(),provider_status='RUNNING',expires_at=$2 WHERE id=$1",[runtime.provision.id,runtime.preset.expiresAt]);
+   }
+   const stored=(await query('SELECT plan,plan_hash,expected_environment_hashes FROM trusted_service_provisions WHERE id=$1',[runtime.provision.id])).rows[0];
+   await query('UPDATE trusted_service_provisions SET plan=$2 WHERE id=$1',[runtime.provision.id,JSON.stringify({...stored.plan,service:'gateway'})]);assert.equal((await availability()).enabled,false,'A plan whose reviewed hash no longer matches is not archive authority');
+   await query('UPDATE trusted_service_provisions SET plan=$2,expected_environment_hashes=$3 WHERE id=$1',[runtime.provision.id,JSON.stringify(stored.plan),JSON.stringify({...stored.expected_environment_hashes,COATRIA_VERCEL_MEDIA_TOKEN:'0'.repeat(64)})]);assert.equal((await availability()).enabled,false,'A running pod with a different executor credential is not ready');
+   await query('UPDATE trusted_service_provisions SET expected_environment_hashes=$2 WHERE id=$1',[runtime.provision.id,JSON.stringify(stored.expected_environment_hashes)]);assert.equal((await availability()).enabled,true);
+   process.env.COATRIA_HIGGSFIELD_ARCHIVE_ENABLED='false';assert.equal((await availability()).enabled,false);process.env.COATRIA_HIGGSFIELD_ARCHIVE_ENABLED='true';
+  });
+  await t.test('preflight and revoked company selections never inherit the deployment archive enable flag',async()=>{
+   const f=await fixture(),runtime=await companyArchiveRuntimeFixture(f.company,f.owner,f.project,'preflight');
+   assert.equal((await transaction(client=>companyHiggsfieldArchiveAvailability(client,f.company,f.project))).enabled,false);
+   await transaction(client=>revokeCompanyRuntimeConfiguration(client,runtime.member,'archive',{clientId:randomUUID(),expectedRevision:1}));
+   assert.equal((await transaction(client=>companyHiggsfieldArchiveAvailability(client,f.company,f.project))).enabled,false);
+   const untouched=await fixture();assert.equal((await transaction(client=>companyHiggsfieldArchiveAvailability(client,untouched.company,untouched.project))).enabled,true);
+   await assert.rejects(f.approved(),{code:'HIGGSFIELD_ARCHIVE_UNAVAILABLE'});
+  });
+  await t.test('executor revocation disables new archive approval while preserving old exact receipts',async()=>{
+   const f=await fixture(),runtime=await companyArchiveRuntimeFixture(f.company,f.owner,f.project),proposal=(await f.propose()).archive,input=f.approval(proposal);
+   await f.approve(proposal,input);await transaction(client=>revokeArchiveExecutorCredential(client,runtime.member,runtime.selection.configurationId,runtime.credential.id));
+   assert.equal((await transaction(client=>companyHiggsfieldArchiveAvailability(client,f.company,f.project))).enabled,false);
+   assert.equal((await f.approve(proposal,input)).replayed,true);await assert.rejects(f.approved(),{code:'HIGGSFIELD_ARCHIVE_UNAVAILABLE'});
+  });
   await t.test('proposal is honest, scoped, idempotent, bounded and secret-free',async()=>{
    const f=await fixture(),input=f.input(),result=await f.propose(input),a=result.archive;
    assert.equal(a.status,'proposed');assert.equal(a.bytesVerified,false);assert.equal(a.fetched,null);assert.equal(a.approvedBy,null);assert.equal(a.versionId,null);assert.equal(a.sourceAttribution.requestedBy,f.owner);assert.equal(a.sourceAttribution.approvedBy,f.admin);assert.deepEqual(a.destination.ancestors.map((item:any)=>item.name),['Delivery','Approved']);

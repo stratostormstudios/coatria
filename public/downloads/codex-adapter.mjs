@@ -4,6 +4,7 @@ import {realpath,stat} from 'node:fs/promises';
 import {resolve,dirname,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {StringDecoder} from 'node:string_decoder';
+import {modelRequestContext} from './provider-adapter.mjs';
 const location=dirname(fileURLToPath(import.meta.url));
 const quote=value=>JSON.stringify(value);
 const installedModels=new Set(['gpt-5.6-sol','gpt-6-astra','gpt-5.6-terra','gpt-5.6-luna']);
@@ -37,7 +38,8 @@ export async function codexInvocation({run,context,mcpEnvironment},settings=proc
   '-c',`mcp_servers={coatria={command=${quote(process.execPath)},args=[${quote(resolve(location,'agent-mcp.mjs'))}],env_vars=["COATRIA_AGENT_TOKEN","COATRIA_URL","COATRIA_RUN_ID","COATRIA_RUN_LEASE"],required=true,default_tools_approval_mode="approve",startup_timeout_sec=30,tool_timeout_sec=45}}`,
   '-'];
  if(model){if(!/^[a-zA-Z0-9._:-]{1,100}$/.test(model))throw new Error('Invalid configured Codex model name.');args.splice(args.length-1,0,'--model',model);}
- const input=JSON.stringify({verifiedRequest:{id:run.id,prompt:run.prompt},configuredCompanyCharacter:character,untrustedConversationContext:context});if(Buffer.byteLength(input)>300000)throw new Error('The supplied conversation context is too large.');
+ const request=modelRequestContext(run,context);
+ const input=JSON.stringify(request.generatedFollowup?{...request,configuredCompanyCharacter:character}:{verifiedRequest:{id:run.id,prompt:run.prompt},configuredCompanyCharacter:character,untrustedConversationContext:context});if(Buffer.byteLength(input)>300000)throw new Error('The supplied conversation context is too large.');
  // Pass only system essentials, Codex auth location and this run's MCP connection.
  const env={};for(const key of ['PATH','Path','PATHEXT','SystemRoot','SYSTEMROOT','WINDIR','COMSPEC','HOME','USERPROFILE','APPDATA','LOCALAPPDATA','TEMP','TMP','CODEX_HOME'])if(settings[key])env[key]=settings[key];
  Object.assign(env,mcpEnvironment,{COATRIA_AGENT_TOKEN:settings.COATRIA_AGENT_TOKEN});

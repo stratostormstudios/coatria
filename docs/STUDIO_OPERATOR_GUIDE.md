@@ -1,16 +1,20 @@
 # Running an AI production studio in Coatria
 
-The current production scope uses Higgsfield for references and generations: **brief → references → generation → review → delivery**. The Studio workspace keeps responsibilities, planning tasks and approvals separate from actual generation jobs and media evidence. Workstation and render-server execution are deferred. Existing Blender projects and execution records remain available under **Generations & references → Advanced / legacy**; they are not Higgsfield jobs.
+This guide describes the generated-media workflow, updated 2026-09-21. Production remains at source `550140f` with migrations through 034. Runtime candidate `120c6a8` passed all four CI jobs: 1,147 application tests passed/four explicit skips, 72 browser cases and 17 deterministic agent-harness checks. It is deployed to an isolated protected preview, where simulated company creation, separate reviewer membership, reviewed paused specialist staffing and correctly assigned project tasks passed through live APIs. Actual Runpod multipart storage transport also passed. The deployed storage gateway, archive host and complete live media workflow still need qualification. See [release status](RELEASE_STATUS.md) and [draft PR #1](https://github.com/stratostormstudios/coatria/pull/1). Past compute observations do not establish a current authorized session.
 
-Heavy footage, EXRs and renders remain on local, NAS or cloud storage. The current connected-drive service indexes a folder's file metadata only, including a cloud folder already mounted by your operator. It does not provide a cloud-object adapter, upload or download media, or grant a generation provider access to originals. Approve each reference or proxy before sending it externally. A provider result URL alone does not prove that the media was archived on your storage or delivered to a client.
+The current path is **brief → references → Higgsfield generation → verified project file → independent review → exact package → authenticated client response**. New projects can use image, video or audio specifications. Existing frame-based Blender projects retain their legacy path; native workstation and general render-server expansion remain deferred.
+
+There are two distinct storage integrations. The local/native drive connector indexes folder metadata only, including a folder already mounted by its operator. **Project files** uses an existing Runpod volume through the separately qualified gateway for actual upload, stored-byte verification and download. Neither integration automatically shares originals with Higgsfield. Approve references before supplying provider-supported arguments; a provider URL alone is not a verified archive or client delivery.
 
 ## Set up the company
 
-Open **Production studio → Build an AI team**. Describe your production business, choose the disciplines and team size, then inspect the proposed roles, shared skills, model, and permissions. Related responsibilities can share one agent. Apply the proposal to create real paused specialists.
+Open **Production studio → Build an AI team**. Choose the **AI creative production studio** structure, describe the business and team size, then inspect the proposed roles, shared skills, model and permissions. Its producer, coordinator, creative director, reference specialist, generation specialist and delivery responsibilities may share agents. The separate QC responsibility belongs to an eligible human administrator. Apply the exact reviewed proposal to create paused specialists; existing company structures and saved work are preserved.
 
 Select **Include a separate AI planning reviewer** to create a dedicated review identity without installing a plugin manually. It uses one slot within the total team size: a team of three becomes two production specialists plus one reviewer. Review its name, working style, exact `studio.read` and `studio.review` grants, versioned role instructions and model limits before applying. The instructions are saved in its installation; they do not create or access a private skill-vault entry. It starts paused with no producing or human QC role. Return to **Agent hosts** to enroll it separately. Staffing creates no review policy, host or compute, and does not change previously saved plans that omit this option.
 
-The new staffing draft describes the Higgsfield scope and initially selects only compositing as an existing planning/handoff responsibility. Existing role titles, shared instructions, permissions and saved proposals are preserved. Choosing these responsibilities does not install a Higgsfield connection or certify an automated DCC skill. The reasoning model selected for company agents is separate from the generation service.
+Review role-specific creative and storage grants in the proposal. New coordinator/reference/delivery roles can receive storage read/organize. Newly proposed AI generation specialists receive creative read/write plus `storage.read` for authorized project-file evidence, verified-output registration and a separately approved generated continuation; a standalone generation role receives no folder-organization or upload grant. Existing agents and previously saved plans keep their exact reviewed grants. An older generation specialist without `storage.read` needs an explicit permission review in Plugins before using these generated-output operations or joining a new staffing plan. These permissions do not install Higgsfield, authorize paid generation, permit uploads or share files with clients. The company's reasoning model remains separate from its generation service.
+
+Use **Manage studio team** for human or existing-agent assignments. Human assignment provides responsibility for linked tasks and updates unstarted work. Work already in progress or awaiting review must be completed or reset before reassignment; completed attribution stays intact. QC offers human owners/administrators only, and a saved ineligible reviewer must be replaced or left unassigned. Actual review still enforces per-output independence.
 
 StratoStorm's earlier procedural pilot used three specialists; their saved identities have not been renamed or reconfigured by this UI change:
 
@@ -20,7 +24,7 @@ StratoStorm's earlier procedural pilot used three specialists; their saved ident
 | VFX supervisor & team | Creative supervision, media provenance, CG and animation |
 | Lighting & render specialist & team | Lighting, rendering, compositing and finishing |
 
-Final media quality review stays with a suitable human administrator. A person who produced or sponsored a version cannot independently approve it. For routine planning, a company can explicitly authorize a different reviewer agent in **Coordination → Set planning review policy**. Give that dedicated agent only the required `studio.read` and `studio.review` grants. The optional shared-sponsor setting permits a sole administrator to sponsor distinct producer and planning-reviewer agents; acceptance is always labeled **machine planning review**. This accepts the planning contribution, not the commercial estimate or production gate. Without that policy, the existing independent human acceptance rules apply.
+Final media quality review stays with a suitable human administrator. A generated version's producer, agent sponsor, provider sponsor and registrar cannot approve it. For routine planning, explicitly authorize a different reviewer agent in **Coordination → Set planning review policy**. Give it only `studio.read` and `studio.review`. Estimate and breakdown are the default allowed stages; reference planning requires explicit selection. Shared-sponsor consent can permit distinct producer and reviewer agents sponsored by one administrator; acceptance remains labeled **machine planning review** and does not approve media or business gates.
 
 ## Connect the workers
 
@@ -34,11 +38,11 @@ Keep the one-time host credential in the server's private configuration. After t
 
 ## Bring in the brief
 
-Choose **New project** and enter the client or internal project name, brief, AI-use policy, shots, exact frame ranges, handles, dimensions, rational frame rate, output format, and color space.
+Choose **New project → AI media production**. Enter the project/client brief and AI-use policy, choose one output kind, and define named deliverables. Review the complete draft before creating it. A creation retry retains the exact reviewed request; if opening the created project fails, reopen that project rather than creating another.
 
-The **Production path** selector defaults to **Higgsfield · generations & references**, with a five-second, 1,920 × 1,080, 24 fps MP4 / Rec.709 planning specification and no handles. These are desired delivery settings, not a claim that every Higgsfield model supports that exact output. Confirm the chosen generation model's supported settings in **Generations & references**. Creating a project creates planning tasks; it does not submit a provider job, archive media, or approve the client's AI-use policy. Existing task stages remain visible and must not be interpreted as automatically connected generation steps.
+Images specify PNG/JPEG/WebP, dimensions and an explicit color policy. Video specifies MP4/MOV, codec, dimensions, rational constant frame rate, duration interval and embedded-audio policy. Audio specifies WAV/MP3, codec, sample rate, channels and duration interval. Images and audio have no invented frame ranges or handles. Confirm that the chosen provider model can meet these requirements; unknown color tags are never assumed to be correct.
 
-**Manual production planning** keeps the draft's current custom specification. Selecting either the Higgsfield preset or **Advanced / legacy · Blender turntable preset** replaces draft shot/specification settings, never the brief or AI-use permission. The legacy preset is retained for existing controlled-render workflows: one lighting shot, frames 1001–1004, no handles, 384 × 384, 24 fps, Linear Rec.709 EXR and fixed original procedural geometry. Its existing capability checks remain in place. It does not turn a freeform brief into client footage or start compute, and render-server setup is outside the current production scope.
+Existing VFX projects and the explicit legacy creation path retain frame ranges, handles and their original contracts. The controlled Blender preset remains a small original turntable, not a freeform client-footage renderer. Creating either kind of project creates work and dependencies; it does not submit generation, archive files, start compute or approve AI use.
 
 Coatria prepares existing tasks in dependency order:
 
@@ -46,16 +50,25 @@ Coatria prepares existing tasks in dependency order:
 flowchart LR
   Brief[Client brief] --> Scope[Scope and estimate]
   Scope --> Plan[Shot breakdown and schedule]
-  Plan --> Ingest[Media ingest and provenance]
-  Ingest --> Work[Specialist production]
-  Work --> Review[Version review and shot QC]
-  Review --> Package[Approved delivery manifest]
-  Package --> Acceptance[Recorded client acceptance]
+  Plan --> References[Reference preparation]
+  References --> Work[Reviewed generation request]
+  Work --> Archive[Verified archive and registered version]
+  Archive --> Review[Independent media review and task acceptance]
+  Review --> Package[Exact package and accepted handoff]
+  Package --> Acceptance[External account download and response]
 ```
 
 Human decisions approve the brief, scope, and production. Unknown or restricted AI-use permission is a real constraint. Creating a project or writing a confident agent reply does not approve these gates.
 
-The saved **Studio pilot · Original product turntable** is an internal StratoStorm trial: frames 1001–1004, 384 × 384, 24 fps, Linear Rec.709 EXR, with no client footage or external delivery. Its brief is approved for planning. It is not a completed client production.
+The earlier **Studio pilot · Original product turntable** was an internal StratoStorm trial with no client footage or external delivery. Its recorded planning approval is historical; it does not establish current live company state or completed client production.
+
+## Generate, archive and register
+
+In **Generations & references**, select the exact generation task and a supported official tool from the connected Higgsfield catalog. Review the saved arguments, current task/project/connection revisions and credit consent before sending. Provider estimates are advisory. An uncertain submission stops for reconciliation; do not submit another request to guess whether the first one succeeded.
+
+Tracked jobs distinguish queued/running/provider-completed results from verified bytes. Older or unrecognized receipts may not support tracking. A compatible adopted output can be saved to **Project files**: choose its exact linked folder and filename/version, review the source/destination and transfer bounds, then approve that archive. Archiving has separate authority from the original generation and requires the qualified worker/gateway. Wait for both source inspection and stored-byte verification.
+
+Use **Register verified output** for the exact generation task. The picker checks the archive's request/task association; the server loads immutable source facts and compares them to the approved specification. Registration preserves the original producer and records the registrar separately. Inspect the exact version download and provenance; a file checksum, specification digest and artifact-manifest digest identify different evidence. Registration does not approve or submit the work.
 
 ## Let the coordinator delegate
 
@@ -65,7 +78,15 @@ Use **Schedule coordinator** to prepare a recurring mission. The mission starts 
 
 Activation schedules the next eligible cycle after the configured interval. For the first test, use **Run next cycle now** after activation to queue a cycle immediately; it counts toward the existing cycle limit.
 
+New generated-project coordinator missions use objective version 3. They first inspect current client change-request evidence and all relevant plan/deliverable pages. They are instructed to select an existing applicable revision draft or prepare at most one complete draft, then stop for human application. Stale evidence, ambiguous or technical-scope changes, and insufficient model context remain blockers. Earlier saved missions keep their reviewed objectives; replacing or editing one requires administrator review. See [revision rounds](STUDIO_GENERATED_REVISIONS.md) for the fresh gates, media and client response required after application.
+
+When one identity holds both coordination and generation responsibilities, explicitly enable **coordinator generation** in a newly reviewed coordination policy. The coordinator queues a separate generation run and completes its current cycle before that child can claim work. The child can read its production context, claim its assigned generation task and propose an exact request for human credit approval; it cannot inherit coordination, transfer, media-registration, submission or approval authority. A failed coordinator cycle or revoked policy prevents the child from running. Existing policies remain off until reviewed.
+
+The generation child can also read exact accepted planning predecessors in its current production round. Follow the dependency IDs returned by `studio_get` to inspect the accepted reference instructions, breakdown and estimate. These are shared company contributions, not private employee skills or permission to use arbitrary reference media. Missing or unaccepted instructions remain a blocker; do not invent consent or source material. Unrelated work and writes to those planning tasks remain outside the generation run's scope.
+
 The run allowance counts coordinator-created specialist requests across the project's lifetime, including failed or cancelled requests. Editing the policy does not reset usage. Coordinator cycles and manually queued requests have separate limits; the allowance is not a dollar spending cap. Failed or uncertain handoffs need operator review before another attempt.
+
+For version 2 projects, **Allow verified generated output continuations** is off by default. Review a new policy revision to enable it. A current coordinator may then resume the original assigned specialist from one exact verified archive, using the existing lifetime/concurrency allowance. The child can claim the existing task, register or reuse its pinned artifact and submit for independent review. It cannot generate again, transfer files, approve work or delegate. Archive completion alone starts no inference; an authorized active coordinator cycle must request the continuation. Failed children and competing registration require reconciliation. This is distinct from a new production pass after client feedback.
 
 The coordinator is instructed to stop and report missing inputs or blocked work. The server enforces task dependencies, permissions, and approval gates; these controls do not guarantee an accurate model narrative. Confirm claimed progress against actual tool receipts, persisted task and run states, and independent review rather than accepting the agent's report alone.
 
@@ -81,16 +102,20 @@ Promote the fully verified sequence to a pending Studio version. For a coordinat
 
 ## Prepare delivery
 
-After all required production work and independent reviews are accepted, open **Review & delivery** and prepare a manifest containing the latest approved final version of every shot. This preserves versions, checksums, specification, and review receipts.
+In **Review & delivery**, an eligible independent human reviews the exact registered media, records findings and attests technical QC. The producing/sponsoring/registrar identities cannot approve their own version. Then accept the separate generation and QC tasks under the existing self-review rules. Prepare the internal package from the latest independently approved final for each deliverable; it pins versions, hashes, specification and review receipts. Accept the delivery-handoff task before creating a client invitation.
 
-The prepared manifest alone is **not transferred**. For server-verified private image sequences, use the client-delivery panel to bind the exact package to a designated external Coatria account. The client can sign in at `/delivery` without joining your company and give you its account ID through your existing trusted communication channel. Confirm that identity out of band, review the package and access expiry, then create the invitation. Coatria does not send it automatically; share the link through an authorized client channel.
+The prepared manifest retains **not transferred** as its historical preparation state. The client-delivery panel supports verified generated image/video/audio versions and retained v1 private sequences through their separate transport contracts. The client signs in at `/delivery` without joining your company and gives you its account ID through an existing trusted channel. Confirm the exact identity, review package/expiry, then create the invitation. Coatria does not send it automatically; share the link through an authorized client channel.
 
-The portal issues temporary access only to the included verified files. It records portal opens, download access issuance, and the designated client’s acknowledgement or change request separately. Issuing a link does not prove bytes were received. Authenticated acknowledgement rechecks the current approved package, records exact client identity and package checksum, and closes that production. External artifact URLs alone cannot use this private-file portal. No billing or invoice is sent. Never impersonate a real client to complete a test.
+Generated clients download exact immutable storage versions in bounded 4 MiB ranges. The browser reuses a live grant, renews before its expiry/age threshold and checks the complete length/SHA-256 before committing a save. Each gateway GET checks current authority, including reused grants. A cancelled, denied or corrupted transfer aborts without automatic retry; the fallback without a file-save picker is capped at 128 MiB and downloads are not resumable.
+
+Portal opens, access issuance, local checksum success and explicit client response are separate events. Only the designated external account can acknowledge the exact package or request changes; the generated project displays that provenance read-only. No administrator manual-acceptance shortcut exists. A change request preserves evidence and returns the project to review, but does not plan revisions, create new work or authorize more generation automatically. No billing or invoice is sent.
 
 ## External harness access
 
 The REST contract is published at [Coatria agent OpenAPI](https://coatria.com/api/agent/openapi). A connected harness discovers allowed tools through `/api/agent/tools`. Its tools use the same project state, role assignments, permissions, leases, and approval gates as the interface.
 
-Company structure and task evidence are shared company records. Personal employee skill vaults remain separate. Current production is scoped to Higgsfield generations and references, with storage-only connected drives. The earlier controlled Blender pilot and private image-sequence portal remain documented as separate capabilities; they do not establish delivery of every generated movie or access to arbitrary connected-drive media. A company reasoning host is distinct from a workstation or render server. Neither this scope nor the earlier pilot certifies unrestricted fleet provisioning, a company-wide dollar ledger or million-user capacity. Rejected planning work needs a reviewed new producer pass; specialist coordination does not automatically retry uncertain or failed work.
+Company structure and task evidence are shared records; employee skill vaults remain separate. Harnesses explicitly opt into `contractVersion=2` to read or create generated projects and use the same registration/continuation services as the UI. Current scopes, live leases, exact role/task authority and independent review apply; public tool discovery grants no new permission. Grant-bearing file transport stays in the trusted worker, outside model context. Client invitations, revocation and responses remain human/account-specific operations.
+
+The implemented generated-delivery and reviewed creative-revision flow still needs its actual deployed host, storage and recipient pilot. Technical/commercial scope changes, native NAS/workstation access, general VFX, autonomous hiring/commerce, multi-tenant fleet recovery and million-user capacity remain outside this candidate. A reasoning host is not a renderer or storage server, and cycle/token limits are not a company-wide dollar cap.
 
 Operational detail: [machine planning review](STUDIO_MACHINE_REVIEW.md), [managed CPU hosting](STUDIO_CPU_PROVISIONING.md), [server inference](STUDIO_INFERENCE.md), and [client delivery](STUDIO_CLIENT_DELIVERY.md).

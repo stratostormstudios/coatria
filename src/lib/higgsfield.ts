@@ -4,7 +4,8 @@ import {z} from 'zod';
 import {query,transaction} from './db';
 import {requireMembership,type Membership} from './auth';
 import {memberMutation} from './company';
-import {body,fail,hashToken,id,json,rateLimit,secret} from './security';
+import {ApiError,body,fail,hashToken,id,json,rateLimit,secret} from './security';
+import {endedHiggsfieldConnectionPage} from './higgsfield-connection-page';
 import {sealHiggsfieldSecret,openHiggsfieldSecret} from './higgsfield-secrets';
 import {higgsfieldProposalInput,higgsfieldReadInput,higgsfieldExecuteInput,higgsfieldEstimateInput,HIGGSFIELD_READ_TOOLS,HIGGSFIELD_GENERATION_TOOLS} from './higgsfield-protocol';
 import {discoverHiggsfield,registerHiggsfield,higgsfieldAuthorizationUrl,exchangeHiggsfieldCode,refreshHiggsfieldToken,listHiggsfieldTools,callHiggsfieldTool,HIGGSFIELD_MCP_ENDPOINT,type HiggsfieldMetadata,type HiggsfieldClient,type HiggsfieldToken} from './higgsfield-mcp';
@@ -75,7 +76,7 @@ async function finish(request:Request){
  const member=await requireMembership(request,hint.company_id,true);
  const attempt=await memberMutation(member,true,async db=>{
   const row=(await db.query('SELECT * FROM higgsfield_oauth_attempts WHERE state_hash=$1 AND company_id=$2 AND user_id=$3 FOR UPDATE',[hashToken(state),member.companyId,member.userId])).rows[0];
-  if(!row||row.consumed_at||+new Date(row.expires_at)<=Date.now())fail(409,'This connection attempt ended. Start a new Higgsfield connection.');
+  if(!row||row.consumed_at||+new Date(row.expires_at)<=Date.now())fail(409,'This connection attempt ended. Check the company connection in Plugins before starting another.','HIGGSFIELD_CONNECTION_ATTEMPT_ENDED');
   await db.query('UPDATE higgsfield_oauth_attempts SET consumed_at=clock_timestamp() WHERE id=$1',[row.id]);return row;
  });
  if(url.searchParams.has('error')||!code)return new Response(null,{status:303,headers:{Location:'https://coatria.com/#plugins','Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
@@ -208,7 +209,9 @@ async function estimate(member:Membership,requestId:string,input:unknown){
  return {requestId,requestHash:data.requestHash,estimateOnly:true,spendingAuthorized:false,priceGuaranteed:false,result:await callHiggsfieldTool(saved.token,prepared.tool,prepared.arguments,{timeoutMs:20000})};
 }
 export async function higgsfieldRoute(request:Request,parts:string[],method:string):Promise<Response|null>{
- if(parts.join('/')==='higgsfield/callback'&&method==='GET')return finish(request);
+ if(parts.join('/')==='higgsfield/callback'&&method==='GET'){
+  try{return await finish(request);}catch(error){if(error instanceof ApiError&&error.code==='HIGGSFIELD_CONNECTION_ATTEMPT_ENDED'&&request.headers.get('accept')?.includes('text/html'))return endedHiggsfieldConnectionPage();throw error;}
+ }
  if(parts[0]!=='companies'||parts[2]!=='higgsfield')return null;
  const companyId=id(parts[1]),member=await requireMembership(request,companyId,method!=='GET');
  if(parts.length===3&&method==='GET')return json(await memberMutation(member,false,db=>higgsfieldConnectionView(db,companyId)));

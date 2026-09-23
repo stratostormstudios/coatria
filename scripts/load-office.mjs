@@ -188,7 +188,7 @@ export async function runOfficeLoad(options){
   const collaboration=(async()=>{
    posted=await Promise.all(clients.map(client=>request(client,conversationPath('messages'),'POST',payload(client),'chat-write',201)));
    retried=await Promise.all(clients.map(client=>request(client,conversationPath('messages'),'POST',payload(client),'chat-retry',200)));
-   await Promise.all(clients.map(client=>request(client,path('tasks/'+client.taskId),'PATCH',{title:`Updated load task ${client.index}`,status:'doing'},'task-write')));
+   await Promise.all(clients.map(client=>request(client,path('tasks/'+client.taskId),'PATCH',{title:`Updated load task ${client.index}`,status:'doing',expectedRevision:1},'task-write')));
   })();
   await Promise.all([collaboration,...clients.flatMap(client=>[
    cadence(client,policy.movementMs,move),

@@ -4,7 +4,7 @@ import {realpath,stat} from 'node:fs/promises';
 import {dirname,isAbsolute,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {StringDecoder} from 'node:string_decoder';
-import {bridgePolicy,characterInstructions,providerConfiguration} from './provider-adapter.mjs';
+import {bridgePolicy,characterInstructions,providerConfiguration,modelRequestContext} from './provider-adapter.mjs';
 const location=dirname(fileURLToPath(import.meta.url));
 // Stable local classifications only. Raw CLI events, stderr and provider errors
 // must never be included in worker logs or shared failure receipts.
@@ -36,7 +36,7 @@ export async function claudeInvocation({run,context,tools,mcpEnvironment},settin
   '--append-system-prompt',bridgePolicy+characterInstructions(context.installation)];
  if(names.length)args.push('--allowedTools',names.join(','));
  const dollars=Number(settings.COATRIA_CLAUDE_MAX_BUDGET_USD||1);if(!Number.isFinite(dollars)||dollars<=0||dollars>100)throw fault('CLAUDE_CONFIGURATION','Configure a Claude cost guard between zero and 100 USD.');args.push('--max-budget-usd',String(dollars));
- const input=JSON.stringify({verifiedRequest:{id:run.id,prompt:run.prompt},untrustedConversationContext:{messages:context.messages||[]}});if(Buffer.byteLength(input)>300000)throw fault('CLAUDE_CONTEXT_LIMIT','The supplied conversation context is too large.');
+ let input;try{input=JSON.stringify(modelRequestContext(run,context));}catch{throw fault('CLAUDE_PROTOCOL_INVALID','The supplied continuation context is invalid.');}if(Buffer.byteLength(input)>300000)throw fault('CLAUDE_CONTEXT_LIMIT','The supplied conversation context is too large.');
  const env={};for(const key of['PATH','Path','PATHEXT','SystemRoot','SYSTEMROOT','WINDIR','COMSPEC','HOME','USERPROFILE','APPDATA','LOCALAPPDATA','TEMP','TMP','CLAUDE_CONFIG_DIR'])if(settings[key])env[key]=settings[key];
  Object.assign(env,{COATRIA_URL:mcpEnvironment.COATRIA_URL,COATRIA_RUN_ID:mcpEnvironment.COATRIA_RUN_ID,COATRIA_RUN_LEASE:mcpEnvironment.COATRIA_RUN_LEASE,COATRIA_AGENT_TOKEN:settings.COATRIA_AGENT_TOKEN,...(authMode==='api-key'?{ANTHROPIC_API_KEY:config.key}:{}),CLAUDE_CODE_MAX_OUTPUT_TOKENS:String(config.limits.maxOutputTokens),CLAUDE_CODE_MAX_RETRIES:'0',CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY:'1',DISABLE_AUTOUPDATER:'1',MCP_TIMEOUT:'30000',MCP_TOOL_TIMEOUT:'45000',MAX_MCP_OUTPUT_TOKENS:'16000'});
  return {command:settings.COATRIA_CLAUDE_BIN||'claude',args,cwd,env,input,timeoutMs:config.limits.timeoutSeconds*1000,maxTotalTokens:config.limits.maxTotalTokens,allowedTools:names};

@@ -1,7 +1,8 @@
 import {z} from 'zod';
 import {requireMembership} from './auth';
 import {memberMutation} from './company';
-import {body,id,json,rateLimit} from './security';
+import {body,fail,id,json,rateLimit} from './security';
+import {readStudioHostProviderReadiness} from './studio-host-readiness';
 import {studioHostProvisionPlanInput,studioHostProvisionStartInput,studioHostProvisionStopInput} from './studio-host-provisioning-protocol';
 import {createStudioHostProvisionPlan,startStudioHostProvision,stopStudioHostProvision,getStudioHostProvision,listStudioHostProvisions,reconcileStudioHostProvision} from './studio-host-provisioning';
 
@@ -17,6 +18,13 @@ export async function studioHostProvisioningRoute(request:Request,parts:string[]
  }
  if(parts.length<5)return null;
  const provisionId=id(parts[4]);
+ if(parts.length===6&&parts[5]==='readiness'&&method==='GET'){
+  if(new URL(request.url).search)fail(400,'Provider readiness does not accept query parameters.','VALIDATION_ERROR');
+  await rateLimit(`studio-cpu-readiness:${member.companyId}:${member.userId}`,4,60);
+  const readiness=await readStudioHostProviderReadiness(member,provisionId);
+  await requireMembership(request,member.companyId,true);
+  return json({readiness});
+ }
  if(parts.length===5&&method==='GET')return json({provision:await memberMutation(member,true,client=>getStudioHostProvision(client,member.companyId,provisionId))});
  if(parts.length!==6||method!=='POST')return null;
  const action=parts[5];if(!['start','stop','reconcile'].includes(action))return null;

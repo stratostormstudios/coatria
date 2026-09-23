@@ -1,4 +1,4 @@
-/** CI-only diagnostics, never an executor or qualification fallback. The only
+/** Synthetic qualification diagnostics, never an executor or qualification fallback. The only
  * process run is a pinned conformance probe or real decoder's fixed FD-help
  * command, with its own known executable as input, never arbitrary media.
  * Capture is bounded and only enum/numeric facts leave this module. */
@@ -10,6 +10,7 @@ import {dirname,join} from 'node:path';
 import type {Readable,Writable} from 'node:stream';
 import {setTimeout as delay} from 'node:timers/promises';
 import {parseMediaSandboxProfile} from '../../src/lib/higgsfield-media-sandbox';
+import {archiveHostDelegatedPath} from './archive-host-package.mjs';
 
 type Config={profiles:{conformance:{profilePath:string;expectedProfileSha256:string};real?:{profilePath:string;expectedProfileSha256:string}};cgroupRoot:string;supervisorGroup:string;uid:number;gid:number};
 const hash=(data:Buffer)=>createHash('sha256').update(data).digest('hex');
@@ -46,17 +47,27 @@ async function trusted(path:string,directory=false){
 async function immutableFile(path:string,expectedHash:string,expectedBytes?:number){const info=await trusted(path);if(info.size>512*1024**2||expectedBytes!==undefined&&info.size!==expectedBytes||hash(await readFile(path))!==expectedHash)problem();}
 const numbers=(value:string)=>Object.fromEntries(value.split('\n').map(line=>line.trim().split(/\s+/)).filter(([key,value])=>['low','high','max','oom','oom_kill','oom_group_kill','usage_usec'].includes(key)&&/^\d+$/.test(value)).map(([key,value])=>[key,Number(value)]));
 
-export async function diagnoseMediaSandboxStartup(config:Config,profileKind:'conformance'|'real'='conformance'){
+/** Pure identity gate for the separate installed qualifier. No worker/preflight,
+ * unrelated release, arbitrary profile or ancestor cgroup is accepted. */
+export function archiveStartupIdentity(config:Config,profileKind:'conformance'|'real',profile:{runtimeRoot:string;launcher:{path:string}},selfCgroup:string,invocationId:string,executable:string){
+ try{const paths=archiveHostDelegatedPath(selfCgroup,'qualify'),match=/^\/var\/lib\/coatria-archive-releases\/([a-f0-9]{64})\/runtime\/media\/(conformance|real)$/.exec(profile.runtimeRoot);
+  return !!match&&match[2]===profileKind&&/^[a-f0-9]{32}$/.test(invocationId)&&config.profiles[profileKind]?.profilePath==='/etc/coatria-archive/'+profileKind+'.json'&&config.cgroupRoot===paths.cgroupRoot&&config.supervisorGroup===paths.supervisorGroup&&profile.launcher.path==='/var/lib/coatria-archive-releases/'+match[1]+'/runtime/media-sandbox-launch'&&executable==='/var/lib/coatria-archive-releases/'+match[1]+'/runtime/node';
+ }catch{return false;}
+}
+export async function diagnoseMediaSandboxStartup(config:Config,profileKind:'conformance'|'real'='conformance'){return diagnoseStartup(config,profileKind,'ci');}
+export async function diagnoseArchiveHostSandboxStartup(config:Config,profileKind:'conformance'|'real'='conformance'){return diagnoseStartup(config,profileKind,'archive');}
+async function diagnoseStartup(config:Config,profileKind:'conformance'|'real',scope:'ci'|'archive'){
  const phases:string[]=[],report:Record<string,unknown>={diagnosticOnly:true,qualified:false,profileKind,phases};
  let group:string|undefined,created=false,control:FileHandle|undefined,input:FileHandle|undefined,child:ChildProcess|undefined,timer:ReturnType<typeof setTimeout>|undefined,exitPromise:Promise<void>|undefined;
  const stderr:Buffer[]=[],stdout:Buffer[]=[];let stderrBytes=0,stdoutBytes=0;
  try{
-  if(process.env.CI!=='true'||process.platform!=='linux'||process.arch!=='x64'||!process.getuid||process.getuid()===0||process.getuid()!==config.uid||process.getgid!()!==config.gid)problem();
-  if(!['conformance','real'].includes(profileKind))problem();const pin=config.profiles[profileKind];if(!pin||!new RegExp('^/var/lib/coatria-media-ci-[a-f0-9-]+/'+profileKind+'\\.json$').test(pin.profilePath)||!/^[a-f0-9]{64}$/.test(pin.expectedProfileSha256))problem();
-  await immutableFile(pin!.profilePath,pin!.expectedProfileSha256);const profile=parseMediaSandboxProfile(JSON.parse(await text(pin!.profilePath)));if(profile.runtimeRoot!==dirname(pin!.profilePath)+'/'+profileKind||profile.launcher.path!==dirname(pin!.profilePath)+'/media-sandbox-launch')problem();await trusted(profile.runtimeRoot,true);
+  if(scope==='ci'&&process.env.CI!=='true'||process.platform!=='linux'||process.arch!=='x64'||!process.getuid||process.getuid()===0||process.getuid()!==config.uid||process.getgid!()!==config.gid)problem();
+  if(!['conformance','real'].includes(profileKind))problem();const pin=config.profiles[profileKind];if(!pin||!(scope==='ci'?new RegExp('^/var/lib/coatria-media-ci-[a-f0-9-]+/'+profileKind+'\\.json$').test(pin.profilePath):pin.profilePath==='/etc/coatria-archive/'+profileKind+'.json')||!/^[a-f0-9]{64}$/.test(pin.expectedProfileSha256))problem();
+  await immutableFile(pin!.profilePath,pin!.expectedProfileSha256);const profile=parseMediaSandboxProfile(JSON.parse(await text(pin!.profilePath)));
+  if(scope==='ci'?profile.runtimeRoot!==dirname(pin!.profilePath)+'/'+profileKind||profile.launcher.path!==dirname(pin!.profilePath)+'/media-sandbox-launch':!archiveStartupIdentity(config,profileKind,profile,await readFile('/proc/self/cgroup','utf8'),process.env.INVOCATION_ID??'',await realpath(process.execPath)))problem();await trusted(profile.runtimeRoot,true);
   const expected=new Map(profile.files.map(file=>[file.path,file]));async function closure(path:string,relative=''){for(const name of await readdir(path)){const member=join(path,name),inside=relative+'/'+name;if((await lstat(member)).isDirectory()){await trusted(member,true);await closure(member,inside);}else{const file=expected.get(inside);if(!file)problem();await immutableFile(member,file!.sha256,file!.bytes);expected.delete(inside);}}}await closure(profile.runtimeRoot);if(expected.size)problem();
   for(const file of [profile.launcher,profile.bubblewrap])await immutableFile(file.path,file.sha256);const probe=profile.files.find(file=>file.path==='/bin/ffprobe'),other=profile.files.find(file=>file.path==='/bin/ffmpeg');if(!probe||!other||profileKind==='conformance'&&probe.sha256!==other.sha256)problem();
-  if(!/^\/sys\/fs\/cgroup\/coatria-media-ci-[a-f0-9-]+\/decoders$/.test(config.cgroupRoot)||await realpath(config.cgroupRoot)!==config.cgroupRoot||(await statfs(config.cgroupRoot)).type!==0x63677270||await text(join(config.cgroupRoot,'cgroup.procs'))!==''||!(await text('/proc/self/cgroup')).includes(config.supervisorGroup.slice('/sys/fs/cgroup'.length)))problem();
+  if(scope==='ci'&&!/^\/sys\/fs\/cgroup\/coatria-media-ci-[a-f0-9-]+\/decoders$/.test(config.cgroupRoot)||await realpath(config.cgroupRoot)!==config.cgroupRoot||(await statfs(config.cgroupRoot)).type!==0x63677270||await text(join(config.cgroupRoot,'cgroup.procs'))!==''||!(await text('/proc/self/cgroup')).includes(config.supervisorGroup.slice('/sys/fs/cgroup'.length)))problem();
   phases.push('pins_checked');report.profileSha256=pin!.expectedProfileSha256;
   const policy:Record<string,number|string|null>={};for(const[key,path]of Object.entries({apparmorRestrictedUserns:'/proc/sys/kernel/apparmor_restrict_unprivileged_userns',unprivilegedUsernsClone:'/proc/sys/kernel/unprivileged_userns_clone',maxUserNamespaces:'/proc/sys/user/max_user_namespaces',apparmorEnabled:'/sys/module/apparmor/parameters/enabled'})){try{const value=await text(path);policy[key]=/^\d{1,12}$/.test(value)?Number(value):/^[YN]$/.test(value)?value:null;}catch{policy[key]=null;}}try{policy.supervisorAppArmor=(await text('/proc/self/attr/current'))==='unconfined'?'unconfined':'confined';}catch{policy.supervisorAppArmor='unavailable';}report.hostPolicy=policy;
   group=join(config.cgroupRoot,'diagnostic-'+randomUUID());await mkdir(group,{mode:0o700});created=true;const limits=profile.limits;

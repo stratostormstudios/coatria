@@ -1,3 +1,4 @@
+import {currentTaskPatchForFixture} from './task-fixture-revision';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,randomBytes} from 'node:crypto';
@@ -39,7 +40,8 @@ test('company OAuth, exact spending intent, revocation and uncertain generation 
   else if(command.method==='tools/call'){if(command.params.name.startsWith('generate_')){if(command.params.arguments.params?.get_cost===true){estimates++;assert.deepEqual(Object.keys(command.params.arguments),['params']);result={content:[],structuredContent:{cost:2,estimate:true}};}else{paid++;if(mode==='uncertain')throw Error('Synthetic connection loss after submit');result={content:[{type:'text',text:'Fixture provider accepted job'}],...(mode==='tool_error'?{isError:true}:{structuredContent:{job_ids:[randomUUID()],status:'queued'}})};}}else result={content:[{type:'text',text:'Fixture read response'}]};}
   else throw Error('Unexpected RPC');return Response.json({jsonrpc:'2.0',id:command.id,result});
  };
- async function call(path:string,method='GET',payload?:unknown,actor:keyof typeof sessions|'none'|'agent'='owner',expected=200){const headers:Record<string,string>={Origin:origin};if(actor==='agent')headers.Authorization='Bearer '+creativeToken;else if(actor!=='none')headers.Cookie='coatria_session='+sessions[actor];if(payload!==undefined)headers['Content-Type']='application/json';const response=await handleApi(new Request(origin+'/api/'+path,{method,headers,...payload===undefined?{}:{body:JSON.stringify(payload)}}),path.split('?')[0].split('/'));const value=response.status===303?{}:await response.json();assert.equal(response.status,expected,`${method} ${path} returned ${JSON.stringify(value)}`);assert(!JSON.stringify(value).includes(access));assert(!JSON.stringify(value).includes(refresh));return {response,value};}
+ async function call(path:string,method='GET',payload?:unknown,actor:keyof typeof sessions|'none'|'agent'='owner',expected=200){payload=await currentTaskPatchForFixture(path,method,payload);
+    const headers:Record<string,string>={Origin:origin};if(actor==='agent')headers.Authorization='Bearer '+creativeToken;else if(actor!=='none')headers.Cookie='coatria_session='+sessions[actor];if(payload!==undefined)headers['Content-Type']='application/json';const response=await handleApi(new Request(origin+'/api/'+path,{method,headers,...payload===undefined?{}:{body:JSON.stringify(payload)}}),path.split('?')[0].split('/'));const value=response.status===303?{}:await response.json();assert.equal(response.status,expected,`${method} ${path} returned ${JSON.stringify(value)}`);assert(!JSON.stringify(value).includes(access));assert(!JSON.stringify(value).includes(refresh));return {response,value};}
  let proposal:any;
  try{
   for(const[id,name]of [[owner,'owner'],[member,'member'],[other,'other']])await query('INSERT INTO users(id,name,email,password_hash) VALUES($1,$2,$3,$4)',[id,name,id+'@example.invalid','fixture']);

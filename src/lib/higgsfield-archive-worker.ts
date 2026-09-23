@@ -11,7 +11,7 @@ import {openProjectStorageCredentials} from './project-storage';
 import {STORAGE_MAX_FILE_BYTES,STORAGE_PART_BYTES} from './project-storage-config';
 import {createRunpodProjectStorage,runpodProjectObjectKey,type RunpodProjectStorage,type RunpodProjectStorageConfig} from './project-storage-runpod';
 import type {HiggsfieldOutputRead} from './higgsfield-output-fetch';
-import type {inspectHiggsfieldArchiveMedia} from './higgsfield-media-inspection';
+import type {HiggsfieldArchiveMediaInput,HiggsfieldMediaDescriptor} from './higgsfield-media-inspection';
 
 type Row=Record<string,any>;
 type Code='HIGGSFIELD_ARCHIVE_POLICY_INVALID'|'HIGGSFIELD_ARCHIVE_AUTHORITY_CHANGED'|'HIGGSFIELD_ARCHIVE_SOURCE_CHANGED'|'HIGGSFIELD_ARCHIVE_MEDIA_REJECTED'|'HIGGSFIELD_ARCHIVE_FETCH_FAILED'|'HIGGSFIELD_ARCHIVE_STORAGE_UNCERTAIN'|'HIGGSFIELD_ARCHIVE_STORED_BYTES_MISMATCH'|'HIGGSFIELD_ARCHIVE_WORKER_FAILED'|'HIGGSFIELD_ARCHIVE_BUDGET_EXHAUSTED'|'HIGGSFIELD_ARCHIVE_DEADLINE'|'HIGGSFIELD_ARCHIVE_ABORTED'|'HIGGSFIELD_ARCHIVE_TRANSFER_LIMIT';
@@ -21,9 +21,13 @@ const active=['queued','fetching','uploading','verifying'];
 const sha=(bytes:Uint8Array|string)=>createHash('sha256').update(bytes).digest('hex');
 const validHash=(value:unknown):value is string=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
 const etag=(value:unknown):value is string=>typeof value==='string'&&value.length>0&&value.length<=256&&!/[\u0000-\u001f\u007f]/.test(value);
+export type ArchiveInspectionContext=Readonly<{companyId:string;projectId:string;archiveId:string;leaseId:string;locatorIdentity:string;requestHash:string;expectedBytes:number;expectedSha256:string;expectedKind:'image'|'video'|'audio'}>;
+export type ArchiveWorkerScope=Readonly<{companyId:string;projectIds:readonly string[]}>;
 type Options={
  fetchOutput:(input:HiggsfieldOutputRead)=>Promise<{bytes:number;sha256:string}>;
- inspectMedia:typeof inspectHiggsfieldArchiveMedia;
+ inspectMedia:(input:HiggsfieldArchiveMediaInput,context:ArchiveInspectionContext)=>Promise<HiggsfieldMediaDescriptor>;
+ /** Trusted host configuration, never supplied by an agent or API caller. */
+ scope?:ArchiveWorkerScope;
  scratchRoot:string;
  providerFactory?:(config:RunpodProjectStorageConfig)=>RunpodProjectStorage;
  /** Trusted worker/test composition only; never accepted from a route/agent. */
@@ -59,10 +63,14 @@ export function createHiggsfieldArchiveWorker(options:Options){
  const {fetchOutput,inspectMedia}=options,factory=options.providerFactory??createRunpodProjectStorage,scratchRoot=resolve(options.scratchRoot),deadline=options.operationDeadlineMs??2*60*60*1000,interval=options.authorityIntervalMs??1000,checkTimeout=options.authorityTimeoutMs??5000,partBytes=options.partBytes??STORAGE_PART_BYTES;
  if(!Number.isSafeInteger(deadline)||deadline<1||deadline>7200000||!Number.isSafeInteger(interval)||interval<1||interval>5000||!Number.isSafeInteger(checkTimeout)||checkTimeout<1||checkTimeout>5000)fail('HIGGSFIELD_ARCHIVE_POLICY_INVALID');
  if(!Number.isSafeInteger(partBytes)||partBytes<5*1024**2||partBytes>STORAGE_PART_BYTES)fail('HIGGSFIELD_ARCHIVE_POLICY_INVALID');
+ const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
+ if(options.scope&&(!uuid.test(options.scope.companyId)||!Array.isArray(options.scope.projectIds)||!options.scope.projectIds.length||options.scope.projectIds.length>100||options.scope.projectIds.some(value=>!uuid.test(value))||new Set(options.scope.projectIds).size!==options.scope.projectIds.length))fail('HIGGSFIELD_ARCHIVE_POLICY_INVALID');
+ const workerScope=options.scope?Object.freeze({companyId:options.scope.companyId,projectIds:Object.freeze([...options.scope.projectIds])}):undefined;
+ const assertScope=(value:Row)=>{if(workerScope&&(value.company_id!==workerScope.companyId||!workerScope.projectIds.includes(value.project_id)))fail('HIGGSFIELD_ARCHIVE_AUTHORITY_CHANGED');};
 
  async function claim():Promise<{row:Row;lease:string}|Result>{
   return transaction(async db=>{
-   const row=(await db.query("SELECT * FROM higgsfield_output_archives WHERE status IN ('queued','fetching','uploading','verifying') AND (lease_id IS NULL OR lease_expires_at<=clock_timestamp()) ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1")).rows[0];if(!row)return {processed:false};
+   const row=(await db.query("SELECT * FROM higgsfield_output_archives WHERE status IN ('queued','fetching','uploading','verifying') AND (lease_id IS NULL OR lease_expires_at<=clock_timestamp())"+(workerScope?' AND company_id=$1 AND project_id=ANY($2::uuid[])':'')+' ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1',workerScope?[workerScope.companyId,workerScope.projectIds]:[])).rows[0];if(!row)return {processed:false};assertScope(row);
    const prior=row.upload_id?(await db.query('SELECT * FROM project_storage_uploads WHERE company_id=$1 AND id=$2 AND archive_id=$3 FOR UPDATE',[row.company_id,row.upload_id,row.id])).rows[0]:null;
    if(prior&&(prior.action_id||['initiating','completing','uncertain'].includes(prior.status))){
     await db.query("UPDATE project_storage_uploads SET status='uncertain',updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2",[row.company_id,prior.id]);
@@ -78,9 +86,9 @@ export function createHiggsfieldArchiveWorker(options:Options){
  async function runNext(input:{signal?:AbortSignal}={}):Promise<Result>{
   const claimed=await claim();if('processed'in claimed)return claimed;
   const {row,lease}=claimed;let adapter:RunpodProjectStorage|undefined,scratch:string|undefined,root:string|undefined,file:FileHandle|undefined,storedStream:ReadableStream<Uint8Array>|undefined,phase='fetching',intent:{id:string;operation:string}|undefined;
-  const fenced=(db:PoolClient)=>authorizeHiggsfieldArchive(db,row.company_id,row.id,{leaseId:lease});
+  const fenced=async(db:PoolClient)=>{const current=await authorizeHiggsfieldArchive(db,row.company_id,row.id,{leaseId:lease});assertScope(current);return current;};
   const scope=authorityScope(()=>transaction(async db=>{await fenced(db);const renewed=await db.query("UPDATE higgsfield_output_archives SET lease_expires_at=LEAST(expires_at,clock_timestamp()+interval '120 seconds') WHERE company_id=$1 AND id=$2 AND lease_id=$3 AND lease_expires_at>clock_timestamp() AND expires_at>clock_timestamp() AND revoked_at IS NULL AND status IN ('queued','fetching','uploading','verifying')",[row.company_id,row.id,lease]);if(!renewed.rowCount)fail('HIGGSFIELD_ARCHIVE_AUTHORITY_CHANGED');}),{deadline,interval,checkTimeout,signal:input.signal});
-  const atomic=<T>(run:(db:PoolClient,current:Row)=>Promise<T>,exclusiveBinding=false)=>scope.bound(transaction(async db=>{scope.current();const current=await authorizeHiggsfieldArchive(db,row.company_id,row.id,{leaseId:lease,exclusiveBinding});const result=await run(db,current);scope.current();return result;}));
+  const atomic=<T>(run:(db:PoolClient,current:Row)=>Promise<T>,exclusiveBinding=false)=>scope.bound(transaction(async db=>{scope.current();const current=await authorizeHiggsfieldArchive(db,row.company_id,row.id,{leaseId:lease,exclusiveBinding});assertScope(current);const result=await run(db,current);scope.current();return result;}));
   async function uploadState(){return atomic(async(db,current)=>{const upload=(await db.query('SELECT * FROM project_storage_uploads WHERE company_id=$1 AND project_id=$2 AND id=$3 AND archive_id=$4 FOR UPDATE',[row.company_id,row.project_id,current.upload_id,row.id])).rows[0];if(!upload)fail('HIGGSFIELD_ARCHIVE_WORKER_FAILED');return upload;});}
   async function begin(operation:string,status:string,partNumber?:number){
    const actionId=randomUUID();const saved=await atomic(async(db,current)=>{const upload=(await db.query('SELECT * FROM project_storage_uploads WHERE company_id=$1 AND id=$2 AND archive_id=$3 FOR UPDATE',[row.company_id,current.upload_id,row.id])).rows[0];if(!upload||upload.action_id||upload.status!==(operation==='initiate'?'allocated':'uploading'))fail('HIGGSFIELD_ARCHIVE_STORAGE_UNCERTAIN');await db.query('UPDATE project_storage_uploads SET status=$3,active_part=$4,action_id=$5,action_expires_at=LEAST(expires_at,clock_timestamp()+interval \'120 seconds\'),updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2',[row.company_id,upload.id,status,partNumber??null,actionId]);await receipt(db,current,actionId,operation,'intent',{uploadId:upload.id,versionId:upload.version_id,...partNumber?{partNumber}:{}});return upload;});intent={id:actionId,operation};return saved;
@@ -101,7 +109,8 @@ export function createHiggsfieldArchiveWorker(options:Options){
     const fetched=await scope.io(()=>fetchOutput({locator,maxBytes:Number(current.max_bytes),deadlineMs:deadline,signal:scope.signal,assertAuthority:async()=>scope.authorize(true),consume:async chunk=>{scope.current();if(!(chunk instanceof Uint8Array)||bytes+chunk.byteLength>Number(current.max_bytes))fail('HIGGSFIELD_ARCHIVE_FETCH_FAILED');let offset=0;while(offset<chunk.byteLength){await scope.authorize();const written=await scope.bound(file!.write(chunk,offset,chunk.byteLength-offset,bytes+offset));if(written.bytesWritten<1)fail('HIGGSFIELD_ARCHIVE_FETCH_FAILED');offset+=written.bytesWritten;}hash.update(chunk);bytes+=chunk.byteLength;}}));
     const digest=hash.digest('hex');if(!bytes||fetched.bytes!==bytes||fetched.sha256!==digest)fail('HIGGSFIELD_ARCHIVE_FETCH_FAILED');await scope.io(()=>file!.sync());
     if(source&&(Number(source.bytes)!==bytes||source.sha256!==digest||source.locator_identity!==current.locator_identity))fail('HIGGSFIELD_ARCHIVE_SOURCE_CHANGED');
-    phase='inspecting';const media=await scope.io(()=>inspectMedia({path,expectedKind:current.output.kind,expectedBytes:bytes,expectedSha256:digest,signal:scope.signal}));
+    const inspectionContext:ArchiveInspectionContext=Object.freeze({companyId:row.company_id,projectId:row.project_id,archiveId:row.id,leaseId:lease,locatorIdentity:current.locator_identity,requestHash:current.request_hash,expectedBytes:bytes,expectedSha256:digest,expectedKind:current.output.kind});
+    phase='inspecting';const media=await scope.io(()=>inspectMedia({path,expectedKind:current.output.kind,expectedBytes:bytes,expectedSha256:digest,signal:scope.signal},inspectionContext));
     if(!media||media.kind!==current.output.kind||media.bytes!==bytes||media.sha256!==digest||media.verification!=='full_decode'||typeof media.contentType!=='string'||!new RegExp('^'+current.output.kind+'/[-a-zA-Z0-9.+]+$').test(media.contentType))fail('HIGGSFIELD_ARCHIVE_MEDIA_REJECTED');
     const extension=extname(current.destination_name).toLowerCase(),extensions:Record<string,string>={'.png':'png','.jpg':'jpeg','.jpeg':'jpeg','.webp':'webp','.mp4':'mp4','.mov':'mov','.wav':'wav','.mp3':'mp3'};
     if(extension&&extensions[extension]!==media.format)fail('HIGGSFIELD_ARCHIVE_MEDIA_REJECTED');
