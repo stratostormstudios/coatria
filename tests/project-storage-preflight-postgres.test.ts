@@ -32,7 +32,7 @@ test('PostgreSQL gateway preflight requires the actual dedicated restricted LOGI
    const identity=(await pool.query('SELECT current_user,session_user')).rows[0];assert.deepEqual(identity,{current_user:name,session_user:name});
   }
   await t.test('exact shipped gateway LOGIN passes while owner, application and owner SET ROLE fail',async()=>{
-   const result=await assertProjectStorageGatewayDatabase(gateway!);assert.equal(result.status,'passed');assert.equal(result.role,role);assert.equal(result.checkedMigrations,34);
+   const result=await assertProjectStorageGatewayDatabase(gateway!);assert.equal(result.status,'passed');assert.equal(result.role,role);assert.equal(result.checkedMigrations,37);assert.equal(result.migrationFloor,37);assert.equal(result.contractVersion,2);
    for(const pool of[owner!,application!])await assert.rejects(()=>assertProjectStorageGatewayDatabase(pool),{code:'STORAGE_DB_IDENTITY'});
    const client=await owner!.connect();try{await client.query('SET ROLE '+role);await assert.rejects(()=>assertProjectStorageGatewayDatabase(client),{code:'STORAGE_DB_IDENTITY'});}finally{await client.query('RESET ROLE');client.release();}
   });
@@ -53,7 +53,7 @@ test('PostgreSQL gateway preflight requires the actual dedicated restricted LOGI
    await owner!.query('CREATE SEQUENCE gateway_preflight_extra');try{await change(`GRANT USAGE ON SEQUENCE gateway_preflight_extra TO ${role}`,`REVOKE USAGE ON SEQUENCE gateway_preflight_extra FROM ${role}`);}finally{await owner!.query('DROP SEQUENCE gateway_preflight_extra');}
    await owner!.query("CREATE FUNCTION gateway_preflight_definer() RETURNS integer LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'");try{await assert.rejects(()=>assertProjectStorageGatewayDatabase(gateway!),{code:'STORAGE_DB_PRIVILEGES'});await owner!.query('REVOKE ALL ON FUNCTION gateway_preflight_definer() FROM PUBLIC');assert.equal((await assertProjectStorageGatewayDatabase(gateway!)).status,'passed');}finally{await owner!.query('DROP FUNCTION gateway_preflight_definer()');}
    await owner!.query(`CREATE TABLE gateway_owned_fixture(value integer); ALTER TABLE gateway_owned_fixture OWNER TO ${role}`);try{await assert.rejects(()=>assertProjectStorageGatewayDatabase(gateway!),{code:'STORAGE_DB_PRIVILEGES'});}finally{await owner!.query('DROP TABLE gateway_owned_fixture');}
-   const last='034_studio_coordinator_generation.sql';
+   const last='037_project_gateway_bindings.sql';
    await owner!.query('DELETE FROM schema_migrations WHERE name=$1',[last]);try{await assert.rejects(()=>assertProjectStorageGatewayDatabase(gateway!),{code:'STORAGE_DB_MIGRATIONS'});}finally{await owner!.query('INSERT INTO schema_migrations(name) VALUES($1)',[last]);}
   });
   await t.test('actual CLI preflight passes with no HTTP listener, worker claim or provider work',{timeout:15000},async()=>{
