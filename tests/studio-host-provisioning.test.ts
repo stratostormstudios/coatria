@@ -171,6 +171,42 @@ test('managed CPU saga uses actual transactions and fake Runpod transport withou
   await t.test('a disabled inference endpoint or restricted-key health denial never starts CPU or enables GPU',async()=>{
    for(const disabled of [true,false]){const a=await fixture(),p=(await a.plan()).provision;await a.start(p);const provider=transportFixture();if(disabled)provider.setEndpoint(false);else provider.setHealth(false);await reconcile(p.id,provider);const current=await a.get(p.id);assert.equal(current.phase,'failed');assert.equal(current.errorCode,'CPU_INFERENCE_UNAVAILABLE');assert.equal(current.readiness.ready,false);assert.equal(provider.creates(),0);assert(provider.calls.every(c=>c.method==='GET'));}
   });
+  await t.test('failed preflight cleanup revokes only its unused enrollment without any provider effect or refunded reservation',async()=>{
+   const a=await fixture();await selectRuntime(a);const p=(await a.plan()).provision;await a.start(p);const provider=transportFixture();provider.setEndpoint(false);await reconcile(p.id,provider);
+   const failed=await a.get(p.id),original=(await query('SELECT plan,plan_hash,preset,error_code,sealed_host_token FROM studio_host_provisions WHERE id=$1',[p.id])).rows[0];
+   const issued=(await query('SELECT token_hash FROM agents WHERE id=$1',[a.installation.agentId])).rows[0].token_hash;
+   const reservations=(await query('SELECT * FROM studio_host_compute_reservations WHERE company_id=$1',[a.companyId])).rows;
+   const stop={clientId:randomUUID(),revision:failed.revision};await memberMutation(a.member,true,c=>stopStudioHostProvision(c,a.member,p.id,stop));
+   // Cleanup must not depend on live configuration, a surviving sponsor, or
+   // encryption/provider credentials. No external request is allowed at all.
+   await revokeRuntime(a);await query("UPDATE memberships SET role='member' WHERE company_id=$1 AND user_id=$2",[a.companyId,a.userId]);
+   const ring=process.env.COATRIA_HOSTING_KEYRING,key=process.env.MANAGED_RUNPOD_API_KEY;delete process.env.COATRIA_HOSTING_KEYRING;delete process.env.MANAGED_RUNPOD_API_KEY;
+   let calls=0;try{
+    const result=await reconcileStudioHostProvision(p.id,{fetch:async()=>{calls++;throw Error('Cleanup may not access the provider');}});assert.equal(result.skipped,false);
+    const closed=await a.get(p.id);assert.equal(closed.phase,'stopped');assert.equal(closed.computeStopped,true);assert.equal(closed.credentialsRevoked,true);assert.equal(closed.errorCode,'CPU_INFERENCE_UNAVAILABLE');assert.equal(closed.submittedAt,null);assert.equal(closed.podId,null);assert.equal(closed.billingVerified,false);
+    const host=(await query('SELECT status,lease_owner,lease_expires_at FROM studio_managed_hosts WHERE id=$1',[closed.hostId])).rows[0];assert.equal(host.status,'revoked');assert.equal(host.lease_owner,null);assert(host.lease_expires_at);
+    assert.equal(Number((await query('SELECT count(*) FROM studio_host_credentials WHERE host_id=$1 AND revoked_at IS NULL',[closed.hostId])).rows[0].count),0);
+    const agent=(await query('SELECT status,token_hash FROM agents WHERE id=$1',[a.installation.agentId])).rows[0];assert.equal(agent.status,'paused');assert.notEqual(agent.token_hash,issued);
+    assert.deepEqual((await query('SELECT plan,plan_hash,preset,error_code,sealed_host_token FROM studio_host_provisions WHERE id=$1',[p.id])).rows[0],original);assert.deepEqual((await query('SELECT * FROM studio_host_compute_reservations WHERE company_id=$1',[a.companyId])).rows,reservations);
+    assert.equal(Number((await query("SELECT count(*) FROM activity WHERE company_id=$1 AND kind='studio.host_failed_cleanup'",[a.companyId])).rows[0].count),1);
+    const revision=closed.revision;assert.equal((await reconcileStudioHostProvision(p.id,{fetch:async()=>{calls++;throw Error();}})).skipped,true);assert.equal((await a.get(p.id)).revision,revision);assert.equal(calls,0);assert.equal(provider.creates(),0);
+   }finally{process.env.COATRIA_HOSTING_KEYRING=ring;process.env.MANAGED_RUNPOD_API_KEY=key;updatePreset();}
+  });
+  await t.test('failed cleanup requires explicit stop and both submission fences; active leases remain fenced',async()=>{
+   const a=await fixture(),p=(await a.plan()).provision;await a.start(p);const provider=transportFixture();provider.setEndpoint(false);await reconcile(p.id,provider);const before=await a.get(p.id);provider.calls.length=0;
+   assert.equal((await reconcile(p.id,provider)).skipped,true);assert.equal((await a.get(p.id)).phase,'failed');assert.equal(provider.calls.length,0);
+   await memberMutation(a.member,true,c=>stopStudioHostProvision(c,a.member,p.id,{clientId:randomUUID(),revision:before.revision}));
+   for(const patch of ["submitted_at=clock_timestamp()","pod_id='unconfirmed-fixture-pod'","lease_id='11111111-1111-4111-8111-111111111111',lease_expires_at=clock_timestamp()+interval '1 hour'"]){
+    await query('UPDATE studio_host_provisions SET '+patch+' WHERE id=$1',[p.id]);assert.equal((await reconcile(p.id,provider)).skipped,true);assert.equal((await a.get(p.id)).computeStopped,false);assert.equal((await a.get(p.id)).credentialsRevoked,false);assert.equal(provider.calls.length,0);
+    await query('UPDATE studio_host_provisions SET submitted_at=NULL,pod_id=NULL,lease_id=NULL,lease_expires_at=NULL WHERE id=$1',[p.id]);
+   }
+   // An agent whose credential was rotated elsewhere must not be paused by
+   // cleanup of this old host. Only the old encrypted binding is revoked.
+   const replacement=hashToken('separately-rotated-fixture');await query('UPDATE agents SET token_hash=$2 WHERE id=$1',[a.installation.agentId,replacement]);
+   await query("UPDATE studio_host_provisions SET last_reconciled_at='1900-01-01T00:00:00Z' WHERE id=$1",[p.id]);
+   const batch=await reconcileStudioHostProvisions(1,{fetch:provider.transport});assert.equal((batch.results[0] as any).provision.id,p.id);assert.equal((await a.get(p.id)).phase,'stopped');assert.equal(provider.calls.length,0);
+   const agent=(await query('SELECT status,token_hash FROM agents WHERE id=$1',[a.installation.agentId])).rows[0];assert.equal(agent.status,'active');assert.equal(agent.token_hash,replacement);
+  });
   await t.test('mutated origin, model, provider destination, budget or token environment is rejected before further control',async()=>{
    const a=await fixture(),p=(await a.plan()).provision;await a.start(p);const provider=transportFixture();await reconcile(p.id,provider);const env=structuredClone(provider.pods[0].env);
    for(const key of ['COATRIA_URL','COATRIA_HOST_MODEL_ID','COATRIA_RUNPOD_ENDPOINT_ID','COATRIA_HOST_CONCURRENCY','COATRIA_MAX_TOTAL_TOKENS','COATRIA_HOST_TOKEN','RUNPOD_API_KEY']){provider.pods[0].env={...env,[key]:'mutated'};await reconcile(p.id,provider);assert.equal((await a.get(p.id)).errorCode,'CPU_IDENTITY_MISMATCH');}provider.pods[0].env={...env,NODE_OPTIONS:'--inspect=0.0.0.0'};await reconcile(p.id,provider);assert.equal((await a.get(p.id)).phase,'needs_attention');assert.equal(provider.creates(),1);assert.equal(provider.stops(),0);

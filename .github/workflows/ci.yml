@@ -117,6 +117,8 @@ jobs:
       - run: npm run db:migrate
       - name: Prepare checksum-pinned native media inspection tools
         run: node scripts/hosting/prepare-media-inspector-ci.mjs
+      - name: Install Chromium for the synthetic production-workspace browser lane
+        run: node node_modules/@playwright/test/cli.js install --with-deps chromium
       - run: npm test
       - run: npm run test:agent:fixture
       - run: npm run typecheck
@@ -134,8 +136,6 @@ jobs:
           }
           NODE
       - run: npm run build
-      - name: Install Chromium for the synthetic production-workspace browser lane
-        run: node node_modules/@playwright/test/cli.js install --with-deps chromium
       - name: Exercise generated-media and legacy studio workflows in the production build
         env:
           COATRIA_BROWSER_START: '1'
