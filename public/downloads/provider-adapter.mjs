@@ -1,5 +1,6 @@
 // Operator-owned model bridge. Provider credentials never enter Coatria or model prompts.
 // No URL, script, plugin package, hosted tool, or shell is accepted from a model.
+import {isBrokerInferenceCompletion} from './agent-worker.mjs';
 const PROVIDERS={
  openai:{url:'https://api.openai.com/v1/responses',key:'OPENAI_API_KEY',protocol:'responses'},
  xai:{url:'https://api.x.ai/v1/responses',key:'XAI_API_KEY',protocol:'responses'},
@@ -228,7 +229,7 @@ export function createProviderExecutor({settings=process.env,fetch:transport=glo
   const policy=bridgePolicy+characterInstructions(context.installation),prompt=encoded(modelRequestContext(run,context),300000);
   const history=config.protocol==='responses'?[{role:'user',content:prompt}]:[{role:'user',content:prompt}];
   const toolDefs=definitions.map(tool=>config.protocol==='anthropic'?{name:tool.name,description:tool.description,input_schema:tool.inputSchema}:config.protocol==='responses'?{type:'function',name:tool.name,description:tool.description,parameters:tool.inputSchema,strict:false}:{type:'function',function:{name:tool.name,description:tool.description,parameters:tool.inputSchema}});
-  let spent=0,callCount=0;const seenCalls=new Set();
+  let spent=0,callCount=0,correctionCount=0;const seenCalls=new Set();
   for(let step=0;step<config.limits.maxSteps;step++){
    active.throwIfAborted();
    const body=config.protocol==='responses'?{model:config.model,instructions:policy,input:history,tools:toolDefs,max_output_tokens:config.limits.maxOutputTokens,parallel_tool_calls:false,store:false,...(config.provider==='openai'?{include:['reasoning.encrypted_content']}:{})}:config.protocol==='anthropic'?{model:config.model,system:policy,messages:history,...(toolDefs.length?{tools:toolDefs,tool_choice:{type:'auto',disable_parallel_tool_use:true}}:{}),max_tokens:config.limits.maxOutputTokens}:{model:config.model,messages:[{role:'system',content:policy},...history],...(toolDefs.length?{tools:toolDefs}:{}),max_tokens:config.limits.maxOutputTokens,stream:false};
@@ -238,10 +239,26 @@ export function createProviderExecutor({settings=process.env,fetch:transport=glo
    if(spent+Buffer.byteLength(bytes)+config.limits.maxOutputTokens+1024>config.limits.maxTotalTokens)throw new Error('The request reached its total token budget before another inference call.');
    // The trusted client owns its bounded cancellation cleanup. Await it so the
    // host supervisor retains the slot until that cleanup completes.
-   let data;if(config.inferenceMode==='coatria_broker_v1')data=await inference.complete({step,requestId:tools.key('inference:'+step),signal:active,timeoutMs:Math.max(1,Math.ceil(endsAt-performance.now()))});
+   let data,brokerResult;if(config.inferenceMode==='coatria_broker_v1'){
+    brokerResult=await inference.complete({step,requestId:tools.key('inference:'+step),signal:active,timeoutMs:Math.max(1,Math.ceil(endsAt-performance.now()))});
+    if(!isBrokerInferenceCompletion(brokerResult)||brokerResult.runId!==run.id||brokerResult.step!==step)throw new Error('The trusted Coatria inference client did not return its bound protocol result.');data=brokerResult.output;
+   }
    else if(config.provider==='runpod')data=await runpodCompletion({endpointId:config.endpointId,key:config.key,body,signal:active,timeoutMs:Math.max(1,Math.ceil(endsAt-performance.now())),fetch:transport});
    else{let response;try{response=await untilAborted(()=>transport(config.url,{method:'POST',redirect:'error',signal:active,headers:{'Content-Type':'application/json',...(config.protocol==='anthropic'?{'x-api-key':config.key,'anthropic-version':'2023-06-01'}:{Authorization:'Bearer '+config.key})},body:bytes}),active);}catch{throw new Error('The model request stopped or failed; it was not automatically retried.');}data=await readResponse(response,active);}
    active.throwIfAborted();spent+=usageTokens(data,config.protocol);if(spent>config.limits.maxTotalTokens)throw new Error('The model exceeded the run token budget.');
+   if(brokerResult){
+    if(brokerResult.usage.completionTokens>config.limits.maxOutputTokens)throw new Error('The model exceeded the run output token budget.');
+    if(brokerResult.disposition==='validation_feedback'){
+     const feedback=brokerResult.validationFeedback;
+     if(feedback.correction!==correctionCount+1||feedback.correction>2||callCount+feedback.calls.length>64)throw new Error('The run exceeded its validation correction or tool call limit.');
+     for(const call of feedback.calls){if(seenCalls.has(call.id)||!allowed.has(call.name))throw new Error('The model requested an unauthorized or duplicate tool call.');seenCalls.add(call.id);}
+     correctionCount=feedback.correction;callCount+=feedback.calls.length;
+     // The server owns immutable non-execution receipts and reconstructs the
+     // next model context. Never parse arguments or execute any rejected call,
+     // including valid siblings. This still consumes the same step and budget.
+     continue;
+    }
+   }
    const result=normalize(data,config.protocol);
    if(!result.calls.length){if(!result.text||result.text.length>12000)throw new Error('The model did not provide a bounded final result.');return {result:result.text};}
    if(result.calls.length>8||callCount+result.calls.length>64)throw new Error('The model exceeded its tool call limit.');

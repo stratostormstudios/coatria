@@ -4,7 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {readFile,readdir} from 'node:fs/promises';
 import {database,query,transaction} from '../src/lib/db';
 import {hashToken} from '../src/lib/security';
-import {STUDIO_STAFFING_CAPABILITIES,STUDIO_PLANNING_REVIEW_CAPABILITIES,STUDIO_PLANNING_REVIEW_INSTRUCTIONS,draftStudioStaffing,studioStaffingPlanInput,studioStaffingApplyInput} from '../src/lib/studio-staffing-protocol';
+import {STUDIO_STAFFING_CAPABILITIES,STUDIO_STAFFING_ROLE_KEYS,STUDIO_PLANNING_REVIEW_CAPABILITIES,STUDIO_PLANNING_REVIEW_INSTRUCTIONS,draftStudioStaffing,studioStaffingPlanInput,studioStaffingApplyInput} from '../src/lib/studio-staffing-protocol';
 import {proposeStudioStaffing} from '../src/lib/studio-staffing';
 
 const provider={pluginId:'runpod',manifestVersion:'1.0.0',runtimeConfig:{providerId:'runpod',modelId:'Qwen/Qwen3.8-27B-FP8',maxSteps:8,maxOutputTokens:2048,maxTotalTokens:24000,timeoutSeconds:180}};
@@ -52,6 +52,7 @@ test('staffing human API and generated agent tool schemas describe the same opti
  const human=spec.paths['/api/companies/{companyId}/studio/staffing/proposals'].post.requestBody.content['application/json'].schema;
  const tool=spec.paths['/api/agent/tools/studio_staffing_propose'].post.requestBody.content['application/json'].schema.properties.arguments;
  for(const schema of [human,tool]){assert(!schema.required.includes('planningReviewer'));const reviewer=schema.properties.planningReviewer;assert.equal(reviewer.additionalProperties,false);assert.deepEqual(reviewer.required,['name']);assert.equal(reviewer.properties.name.minLength,1);assert.equal(reviewer.properties.name.maxLength,80);assert.equal(reviewer.properties.persona.maxLength,500);assert.match(reviewer.description,/separately approved/);for(const key of ['capabilities','existingAgentId','roleKeys','status'])assert.equal(key in reviewer.properties,false);}
+ for(const schema of [human,tool]){const role=schema.properties.specialists.items.properties.roleKeys.items;assert.deepEqual(role.enum,STUDIO_STAFFING_ROLE_KEYS);assert(!role.enum.includes('qc'));assert.match(role.description,/independent human/);}
  assert.deepEqual(human.properties.planningReviewer,tool.properties.planningReviewer);
  const schemas=spec.components.schemas,plan=schemas.StudioStaffingPlan,application=schemas.StudioStaffingApplication;
  for(const schema of [plan,application]){assert.equal(schema.additionalProperties,false);assert(!schema.required.includes('planningReviewer'));assert(schema.required.includes('specialists'));const pinned=schema.properties.planningReviewer.allOf[1].properties;assert.deepEqual(pinned.roleKeys.const,[]);assert.deepEqual(pinned.capabilities.const,['studio.read','studio.review']);assert.equal(pinned.mode.const,'create');}

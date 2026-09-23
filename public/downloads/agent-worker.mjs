@@ -12,7 +12,7 @@ const terminalCodes=new Set(['RUN_LEASE_LOST','RUN_CANCELLED','COORDINATION_AUTH
 // Failure of external execution is not evidence that replay is safe.
 // Never copy arbitrary Error.message, code, stack, cause or CLI diagnostics.
 const terminalClaudeFailures=new Set(['CLAUDE_REPLAY_UNSAFE','CLAUDE_CONFIGURATION','CLAUDE_CONTEXT_LIMIT','CLAUDE_TOOL_CATALOG','CLAUDE_START_FAILED','CLAUDE_CANCELLED','CLAUDE_TIMEOUT','CLAUDE_TOKEN_LIMIT','CLAUDE_OUTPUT_LIMIT','CLAUDE_PROTOCOL_INVALID','CLAUDE_MCP_UNAVAILABLE','CLAUDE_TOOL_SCOPE','CLAUDE_RESULT_INVALID','CLAUDE_TURN_LIMIT','CLAUDE_COST_LIMIT','CLAUDE_EXIT_FAILED']);
-const inferenceFailureCodes=new Set(['INFERENCE_FAILED','INFERENCE_CANCELLED','INFERENCE_EXPIRED','INFERENCE_UNCERTAIN','INFERENCE_OUTPUT_INVALID','INFERENCE_CONTEXT_LIMIT','INFERENCE_DEADLINE','INFERENCE_HOST_UNAVAILABLE','INFERENCE_JOB_BUDGET','INFERENCE_LIMITS_INVALID','INFERENCE_MONEY_BUDGET','INFERENCE_PROVIDER_IDENTITY','INFERENCE_PROVIDER_UNCONFIRMED','INFERENCE_SEQUENCE','INFERENCE_SUBMISSION_UNCERTAIN','INFERENCE_TOKEN_BUDGET','INFERENCE_TOOL_MISMATCH','INFERENCE_TOOLS_PENDING','INFERENCE_UNAVAILABLE','INVALID_INFERENCE_RESPONSE','INVALID_INFERENCE_OUTPUT','NETWORK_ERROR']);
+const inferenceFailureCodes=new Set(['INFERENCE_FAILED','INFERENCE_CANCELLED','INFERENCE_EXPIRED','INFERENCE_UNCERTAIN','INFERENCE_OUTPUT_INVALID','INFERENCE_VALIDATION_LIMIT','INFERENCE_PROTOCOL_REQUIRED','INFERENCE_CONTEXT_LIMIT','INFERENCE_DEADLINE','INFERENCE_HOST_UNAVAILABLE','INFERENCE_JOB_BUDGET','INFERENCE_LIMITS_INVALID','INFERENCE_MONEY_BUDGET','INFERENCE_PROVIDER_IDENTITY','INFERENCE_PROVIDER_UNCONFIRMED','INFERENCE_SEQUENCE','INFERENCE_SUBMISSION_UNCERTAIN','INFERENCE_TOKEN_BUDGET','INFERENCE_TOOL_MISMATCH','INFERENCE_TOOLS_PENDING','INFERENCE_UNAVAILABLE','INVALID_INFERENCE_RESPONSE','INVALID_INFERENCE_OUTPUT','NETWORK_ERROR']);
 const diagnosticCodes=new Set(['ADAPTER_FAILED',...terminalClaudeFailures,...inferenceFailureCodes]);
 function adapterFailure(error){
  let code;
@@ -90,7 +90,7 @@ export function createRuntimeClient({token=process.env.COATRIA_AGENT_TOKEN,url=p
   claim:(workerId,claimId,signal)=>post('/api/agent/runs/claim',{workerId,claimId},signal),
   heartbeat:(runId,leaseToken,signal)=>post(runPath(runId)+'/heartbeat',{leaseToken},signal),
   context:(runId,leaseToken,signal)=>request(runPath(runId)+'/context',{headers:{'X-Coatria-Run-Lease':leaseToken},signal}),
-  submitInference:(runId,{leaseToken,requestId,step},signal)=>{if(!UUID.test(requestId)||!Number.isSafeInteger(step)||step<0||step>19)throw new Error('A stable inference request UUID and bounded step are required.');return post(runPath(runId)+'/inference',{leaseToken,requestId,step},signal);},
+  submitInference:(runId,{leaseToken,requestId,step,protocolVersion},signal)=>{if(!UUID.test(requestId)||!Number.isSafeInteger(step)||step<0||step>19||protocolVersion!==undefined&&protocolVersion!==2)throw new Error('A stable inference request UUID and bounded step are required.');return post(runPath(runId)+'/inference',{leaseToken,requestId,step,...protocolVersion===2?{protocolVersion}:{}},signal);},
   readInference:(runId,inferenceId,leaseToken,signal)=>{if(!UUID.test(inferenceId))throw new Error('An inference UUID is required.');return request(runPath(runId)+'/inference/'+inferenceId,{headers:{'X-Coatria-Run-Lease':leaseToken},signal});},
   cancelInference:(runId,inferenceId,{leaseToken,requestId},signal)=>{if(!UUID.test(inferenceId)||!UUID.test(requestId))throw new Error('Inference and cancellation UUIDs are required.');return post(runPath(runId)+'/inference/'+inferenceId+'/cancel',{leaseToken,requestId},signal);},
   complete:(runId,payload,signal)=>post(runPath(runId)+'/complete',payload,signal),
@@ -102,6 +102,48 @@ export function createRuntimeClient({token=process.env.COATRIA_AGENT_TOKEN,url=p
    if(storageTransportVersion!==undefined&&(storageTransportVersion!=='1'||!['storage_upload_reserve','storage_file_access'].includes(name)))throw new Error('Unsupported storage transport protocol or tool.');
    return request('/api/agent/tools/'+encodeURIComponent(name),{method:'POST',body:{runId,leaseToken,requestId,arguments:args},signal,headers:storageTransportVersion==='1'?{'X-Coatria-Storage-Transport':'1'}:{}});
   }};
+}
+
+// Only the trusted HTTP client can brand an inference result. Provider JSON,
+// including objects with these same field names, never acquires this identity.
+const brokerCompletions=new WeakSet();
+export const isBrokerInferenceCompletion=value=>!!value&&typeof value==='object'&&brokerCompletions.has(value);
+const inferenceObject=value=>!!value&&typeof value==='object'&&!Array.isArray(value);
+const inferenceKeys=(value,required,optional=[])=>inferenceObject(value)&&required.every(key=>Object.hasOwn(value,key))&&Object.keys(value).every(key=>required.includes(key)||optional.includes(key));
+const feedbackCodes=new Set(['ARGUMENT_JSON_INVALID','ARGUMENT_SCHEMA_INVALID','STAFFING_VALIDATION_INVALID','BATCH_NOT_EXECUTED']);
+const feedbackIssueCodes=new Set(['invalid_type','invalid_value','too_small','too_big','invalid_format','unrecognized_keys','custom','invalid_union','staffing_roles','staffing_identity','staffing_reviewer']);
+const feedbackExpected=new Set(['string','number','integer','boolean','object','array','null']);
+const inferenceName=/^[-a-zA-Z0-9_]{1,80}$/,inferenceCallId=/^[-a-zA-Z0-9_]{1,120}$/;
+function brokerCompletion(item,runId,step){
+ const invalid=()=>{throw new RuntimeError(502,'INVALID_INFERENCE_RESPONSE');};
+ if(!['execute','validation_feedback'].includes(item.disposition)||!inferenceObject(item.output)||!inferenceKeys(item.usage,['promptTokens','completionTokens','totalTokens']))invalid();
+ const usage=item.usage;
+ if(![usage.promptTokens,usage.completionTokens].every(value=>Number.isSafeInteger(value)&&value>=0&&value<=10000000)||usage.totalTokens!==usage.promptTokens+usage.completionTokens||item.output.usage?.prompt_tokens!==usage.promptTokens||item.output.usage?.completion_tokens!==usage.completionTokens)invalid();
+ if(item.disposition==='execute'){if(Object.hasOwn(item,'validationFeedback'))invalid();}
+ else{
+  const feedback=item.validationFeedback;
+  if(!inferenceKeys(feedback,['version','correction','calls'])||feedback.version!==1||!Number.isSafeInteger(feedback.correction)||feedback.correction<1||feedback.correction>2||!Array.isArray(feedback.calls)||feedback.calls.length<1||feedback.calls.length>8)invalid();
+  const choices=item.output.choices,message=Array.isArray(choices)&&choices.length===1?choices[0]?.message:null;
+  if(choices?.[0]?.finish_reason!=='tool_calls'||message?.role!=='assistant'||!Array.isArray(message.tool_calls)||message.tool_calls.length!==feedback.calls.length)invalid();
+  const seen=new Set();let invalidCalls=0;
+  for(const [index,call]of feedback.calls.entries()){
+   if(!inferenceKeys(call,['id','name','requestId','response'])||typeof call.id!=='string'||!inferenceCallId.test(call.id)||seen.has(call.id)||typeof call.name!=='string'||!inferenceName.test(call.name)||call.requestId!==stableRequestId(runId,'provider:'+step+':'+call.id))invalid();
+   seen.add(call.id);const raw=message.tool_calls[index];if(raw?.type!=='function'||raw.id!==call.id||raw.function?.name!==call.name)invalid();
+   const response=call.response;if(!inferenceKeys(response,['version','executed','code','issues'])||response.version!==1||response.executed!==false||!feedbackCodes.has(response.code)||!Array.isArray(response.issues)||response.issues.length>12)invalid();
+   if(response.code==='BATCH_NOT_EXECUTED'){if(response.issues.length)invalid();}else{invalidCalls++;if(!response.issues.length)invalid();}
+   for(const issue of response.issues){
+    if(!inferenceKeys(issue,['path','code'],['expected','allowed','minimum','maximum'])||!feedbackIssueCodes.has(issue.code)||!Array.isArray(issue.path)||issue.path.length>12||issue.path.some(part=>typeof part!=='string'||part!=='*'&&!/^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(part)))invalid();
+    if(Object.hasOwn(issue,'expected')&&!feedbackExpected.has(issue.expected))invalid();
+    if(Object.hasOwn(issue,'allowed')&&(!Array.isArray(issue.allowed)||issue.allowed.length>40||issue.allowed.some(value=>typeof value!=='string'||value.length>160)))invalid();
+    for(const name of ['minimum','maximum'])if(Object.hasOwn(issue,name)&&(!Number.isFinite(issue[name])||issue[name]<0||issue[name]>1e9))invalid();
+   }
+  }
+  if(!invalidCalls)invalid();
+ }
+ // Copy the bounded JSON before branding so the caller cannot mutate a raw
+ // transport object later and turn rejected work into an executable batch.
+ let result;try{const text=JSON.stringify({runId,step,inferenceId:item.id,output:item.output,disposition:item.disposition,usage,...item.disposition==='validation_feedback'?{validationFeedback:item.validationFeedback}:{}});if(Buffer.byteLength(text)>1048576)invalid();result=JSON.parse(text);}catch{invalid();}
+ const freeze=value=>{if(value&&typeof value==='object'){for(const nested of Object.values(value))freeze(nested);Object.freeze(value);}};freeze(result);brokerCompletions.add(result);return result;
 }
 
 /** A trusted adapter facility, never a model tool or provider configuration.
@@ -118,9 +160,9 @@ export function createRunInferenceClient({client,runId,leaseToken,signal,pollMs=
   const active=AbortSignal.any([AbortSignal.timeout(timeoutMs),...[signal,extra].filter(Boolean)]);let inferenceId,terminal=false;
   function inspect(value){
    const item=value?.inference;
-   if(!item||!UUID.test(item.id)||item.runId!==runId||item.step!==step||inferenceId&&item.id!==inferenceId||!Number.isFinite(Date.parse(item.deadlineAt)))throw new RuntimeError(502,'INVALID_INFERENCE_RESPONSE');
+   if(!item||item.protocolVersion!==2||!UUID.test(item.id)||item.runId!==runId||item.step!==step||inferenceId&&item.id!==inferenceId||!Number.isFinite(Date.parse(item.deadlineAt)))throw new RuntimeError(502,'INVALID_INFERENCE_RESPONSE');
    inferenceId=item.id;
-   if(item.status==='succeeded'){terminal=true;if(!item.output||typeof item.output!=='object'||Array.isArray(item.output))throw new RuntimeError(502,'INVALID_INFERENCE_OUTPUT');return item.output;}
+   if(item.status==='succeeded'){terminal=true;if(!item.output||typeof item.output!=='object'||Array.isArray(item.output))throw new RuntimeError(502,'INVALID_INFERENCE_OUTPUT');return brokerCompletion(item,runId,step);}
    if(['failed','cancelled','expired'].includes(item.status)){terminal=true;const code=item.status==='failed'&&inferenceFailureCodes.has(item.errorCode)?item.errorCode:'INFERENCE_'+item.status.toUpperCase();throw new RuntimeError(409,code);}
    if(item.status==='uncertain')throw new RuntimeError(409,'INFERENCE_UNCERTAIN');
    if(!['submitting','queued','running','cancel_requested'].includes(item.status)||Object.hasOwn(item,'output'))throw new RuntimeError(502,'INVALID_INFERENCE_RESPONSE');
@@ -128,7 +170,7 @@ export function createRunInferenceClient({client,runId,leaseToken,signal,pollMs=
    return null;
   }
   try{
-   let output=inspect(await untilStopped(()=>client.submitInference(runId,{leaseToken,requestId,step},active),active));if(output)return output;
+   let output=inspect(await untilStopped(()=>client.submitInference(runId,{leaseToken,requestId,step,protocolVersion:2},active),active));if(output)return output;
    while(true){await pause(pollMs,active);output=inspect(await untilStopped(()=>client.readInference(runId,inferenceId,leaseToken,active),active));if(output)return output;}
   }finally{
    if(inferenceId&&!terminal){const cancellation=AbortSignal.timeout(cancelTimeoutMs);try{await untilStopped(()=>client.cancelInference(runId,inferenceId,{leaseToken,requestId:stableRequestId(runId,'inference-cancel:'+step)},cancellation),cancellation);}catch{/* Server deadlines/reconciliation also bound jobs when cancellation cannot be confirmed. */}}

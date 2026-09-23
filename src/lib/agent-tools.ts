@@ -37,7 +37,7 @@ import {studioReviewPolicyGetInput,studioReviewDispatchInput,studioReviewReadInp
 import {studioReviewAgentSnapshot,dispatchStudioReview,readStudioPlanningReview,decideStudioPlanningReview} from './studio-review-policy';
 import {studioClientDeliveryListInput} from './studio-client-delivery-protocol';
 import {studioClientDeliveryList} from './studio-client-delivery';
-import {recordStudioInferenceToolReceipt} from './studio-inference';
+import {recordStudioInferenceToolReceipt,assertStudioInferenceTool} from './studio-inference';
 import {higgsfieldAgentConnection,proposeHiggsfieldRequest,higgsfieldAgentRequests} from './higgsfield';
 import {higgsfieldProposalInput} from './higgsfield-protocol';
 import {higgsfieldJobsInput,listHiggsfieldJobs} from './higgsfield-jobs';
@@ -195,6 +195,7 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
   const context=await authorizeRunTool(client,agent,command.runId,command.leaseToken);await assertRenderFollowupTool(client,context.agent,context.run,name,args);await assertCreativeFollowupTool(client,context.agent,context.run,name,args);await assertGeneratedFollowupTool(client,context.agent,context.run,name,args);await assertCoordinatorGenerationTool(client,context.agent,context.run,name,args);
   if(![definition.capability,...definition.additionalCapabilities??[]].every(capability=>context.capabilities.includes(capability)))fail(403,'This run does not have permission for this tool.','AGENT_CAPABILITY_REQUIRED');
   if((['studio.write','studio.execute','studio.review','creative.write'].includes(definition.capability)||name==='studio_staffing_get')&&!['owner','admin'].includes(context.requesterRole))fail(403,'Studio changes, planning review and staffing require a current owner or administrator request.','STUDIO_REQUESTER_ACCESS');
+  await assertStudioInferenceTool(client,context.agent,command.runId,command.requestId,name,command.arguments);
   // All operations on a run are serialized after current authority and lease checks.
   await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`agent-tool:${agent.company_id}:${agent.id}:${command.requestId}`]);
   const previous=(await client.query('SELECT request_hash,response FROM agent_tool_receipts WHERE company_id=$1 AND agent_id=$2 AND request_id=$3',[agent.company_id,agent.id,command.requestId])).rows[0];

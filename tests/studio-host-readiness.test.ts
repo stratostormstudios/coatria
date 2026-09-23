@@ -39,7 +39,7 @@ test('provider shape errors distinguish mismatched endpoint, numeric type and ma
 });
 test('OpenAPI readiness is a bounded human-admin GET and cannot authorize a provider action',()=>{
  const spec:any=agentRuntimeOpenApi,path=spec.paths['/api/companies/{companyId}/studio/host-provisions/{provisionId}/readiness'];assert.deepEqual(Object.keys(path),['get']);assert.deepEqual(path.get.security,[{sessionCookie:[]}]);assert.deepEqual(path.get['x-coatria-roles'],['owner','admin']);assert.equal(path.get.requestBody,undefined);assert.match(path.get.description,/two independent GET/);assert.match(path.get.description,/after configuration revocation/);
- const schema=spec.components.schemas.StudioHostProviderReadiness;assert.equal(schema.properties.readOnly.const,true);assert.equal(schema.properties.authorizesStart.const,false);assert.equal(schema.properties.checks.maxItems,2);assert.equal(spec.info.version,'1.16.0');
+ const schema=spec.components.schemas.StudioHostProviderReadiness;assert.equal(schema.properties.readOnly.const,true);assert.equal(schema.properties.authorizesStart.const,false);assert.equal(schema.properties.checks.maxItems,2);assert.equal(spec.info.version,'1.17.0');
 });
 
 const emulate=process.env.COATRIA_TEST_EMULATOR==='1',integrationUrl=process.env.COATRIA_INTEGRATION_DATABASE_URL;
