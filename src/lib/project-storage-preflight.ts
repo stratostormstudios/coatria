@@ -53,7 +53,11 @@ const contract:Readonly<Record<string,Contract>>={
  studio_generated_revision_work:{"SELECT":["company_id","project_id","round_id","work_item_id"]},
  studio_generated_revision_items:{"SELECT":["company_id","project_id","round_id","unit_id","generation_work_item_id","qc_work_item_id","action","artifact_id","review_id","storage_version_id","manifest_sha256","file_sha256"]},
  studio_client_delivery_files:{"SELECT":["company_id","project_id","share_id","file_id","artifact_id","review_id","storage_version_id","storage_name","storage_sha256","storage_bytes","storage_content_type"]},
- studio_client_storage_grants:{"SELECT":["company_id","project_id","share_id","recipient_user_id","storage_version_id","connection_id","connection_revision","package_hash","token_hash","expires_at"]},
+ studio_client_storage_grants:{"SELECT":["company_id","project_id","share_id","recipient_user_id","storage_version_id","connection_id","connection_revision","package_hash","token_hash","expires_at","service_binding_id","service_provision_id"]},
+ project_gateway_bindings:{SELECT:['id','company_id','project_id','provision_id','configuration_hash','origin','verified_by','verified_at','expires_at','revoked_at']},
+ trusted_service_provisions:{SELECT:['id','company_id','service','phase','provider_status','stop_requested_at','pod_id','expires_at','last_reconciled_at','preset','plan','plan_hash','created_by']},
+ company_runtime_selections:{SELECT:['company_id','kind','configuration_id','revision','state']},
+ company_runtime_configurations:{SELECT:['id','company_id','kind','configuration_hash','expires_at']},
  studio_generated_artifact_sources:{"SELECT":["company_id","project_id","artifact_id","archive_id","request_id","job_id","output_id","storage_version_id","archive_approved_by","file_facts"]},
  higgsfield_output_archives:{"SELECT":["id","company_id","project_id","request_id","job_id","output_id","version_id","upload_id","locator_identity","approved_by","provider_connection_id","storage_binding_id","storage_connection_id","storage_connection_snapshot","status","revoked_at"],"UPDATE":["created_at"]},
  higgsfield_jobs:{"SELECT":["company_id","project_id","id","request_id","connection_id","status"],"UPDATE":["created_at"]},
@@ -68,6 +72,7 @@ const migrations=[
  '020_studio_client_delivery.sql','021_studio_inference.sql','022_studio_render_followups.sql','023_studio_creative_assets.sql','024_higgsfield_connections.sql',
  '025_studio_higgsfield_pipeline.sql','026_higgsfield_work_bindings.sql','027_project_storage.sql','028_higgsfield_jobs.sql','029_higgsfield_archives.sql','030_studio_generated_media.sql','031_studio_generated_followups.sql',
  '032_studio_generated_client_delivery.sql','033_studio_generated_revisions.sql','034_studio_coordinator_generation.sql',
+ '035_trusted_services.sql','036_company_runtime_configuration.sql','037_project_gateway_bindings.sql',
 ];
 export class ProjectStorageGatewayPreflightError extends Error{
  constructor(readonly code:'STORAGE_DB_IDENTITY'|'STORAGE_DB_ROLE'|'STORAGE_DB_SCHEMA'|'STORAGE_DB_MIGRATIONS'|'STORAGE_DB_PRIVILEGES'|'STORAGE_DB_CHECK_FAILED'){super(code);this.name='ProjectStorageGatewayPreflightError';}
@@ -129,8 +134,7 @@ export async function assertProjectStorageGatewayDatabase(db:Db){
    WHERE ${userSchema} AND (p.proowner=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=current_user)
     OR p.prosecdef AND pg_catalog.has_function_privilege(current_user,p.oid,'EXECUTE')) LIMIT 1`)).rows;
   if(escaped.length)fail('STORAGE_DB_PRIVILEGES');
-  return {status:'passed' as const,role:PROJECT_STORAGE_GATEWAY_ROLE,contractVersion:1 as const,migrationFloor:34 as const,checkedMigrations:migrations.length,
+  return {status:'passed' as const,role:PROJECT_STORAGE_GATEWAY_ROLE,contractVersion:2 as const,migrationFloor:37 as const,checkedMigrations:migrations.length,
    boundary:'Authenticated dedicated LOGIN, role attributes/memberships, database/schema creation and ownership, effective non-system relation/column grants and grant options, sequence access, and owned or callable SECURITY DEFINER non-system functions.'};
  }catch(error){if(error instanceof ProjectStorageGatewayPreflightError)throw error;fail('STORAGE_DB_CHECK_FAILED');}
 }
-

@@ -33,6 +33,12 @@ GRANT SELECT,INSERT ON studio_planning_reviews,studio_planning_review_reads,stud
 GRANT SELECT,INSERT ON trusted_service_provisions TO coatria_runtime_v1;
 GRANT UPDATE(phase,revision,pod_id,expected_environment_hashes,submitted_at,stop_requested_at,lease_id,lease_expires_at,provider_status,error_code,last_reconciled_at,updated_at) ON trusted_service_provisions TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON trusted_service_reservations,trusted_service_requests TO coatria_runtime_v1;
+GRANT SELECT ON platform_operator_grants TO coatria_runtime_v1;
+GRANT EXECUTE ON FUNCTION coatria_lock_platform_runtime_operator(uuid) TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON company_runtime_configurations,company_runtime_selections,company_runtime_requests,company_runtime_executor_credentials,project_gateway_bindings TO coatria_runtime_v1;
+GRANT UPDATE(configuration_id,revision,state,selected_by,updated_at) ON company_runtime_selections TO coatria_runtime_v1;
+GRANT UPDATE(revoked_at,revoked_by) ON company_runtime_executor_credentials TO coatria_runtime_v1;
+GRANT UPDATE(revoked_at) ON project_gateway_bindings TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON studio_client_deliveries,studio_client_delivery_files,studio_client_delivery_receipts,studio_client_delivery_requests,studio_client_storage_grants TO coatria_runtime_v1;
 GRANT UPDATE(status,revision,revoked_at) ON studio_client_deliveries TO coatria_runtime_v1;
 GRANT UPDATE(status) ON studio_deliveries TO coatria_runtime_v1;

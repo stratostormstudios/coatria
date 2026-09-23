@@ -8,11 +8,14 @@ import {database,query,transaction} from '../src/lib/db';
 import type {Membership} from '../src/lib/auth';
 import {hashToken} from '../src/lib/security';
 import {trustedServicePlanInput,trustedServiceStartInput} from '../src/lib/trusted-service-protocol';
-import {TRUSTED_SERVICE_IMAGE,trustedServicePreset,trustedServiceHash,trustedServiceEnvironment,trustedServiceReadiness,type TrustedServicePreset} from '../src/lib/trusted-service-config';
+import {TRUSTED_SERVICE_IMAGE,trustedServicePreset,trustedServiceHash,trustedServiceEnvironment,trustedServiceReadiness,loadTrustedServicePreset,companyTrustedServiceEnvironment,type TrustedServicePreset} from '../src/lib/trusted-service-config';
 import {planTrustedService,startTrustedService,stopTrustedService,getTrustedServiceProvision,listTrustedServiceProvisions,reconcileTrustedService,reconcileTrustedServices} from '../src/lib/trusted-service-provisioning';
 import {handleApi} from '../src/lib/api';
 import {VERCEL_MEDIA_IMAGE} from '../src/lib/higgsfield-vercel-media-sandbox';
 import {dropFixtureDatabase} from './fixtures/postgres-teardown';
+import {selectCompanyRuntimeConfiguration,revokeCompanyRuntimeConfiguration,companyRuntimeHash} from '../src/lib/company-runtime-config';
+import {companyArchiveRuntimeFixture} from './fixtures/company-archive-runtime';
+import {revokeArchiveExecutorCredential} from '../src/lib/company-runtime-executor';
 
 const code=(value:string)=>({code:value});
 const bootstrapArgs=`node --input-type=module -e "import('data:text/javascript;base64,${Buffer.from('throw Error("Synthetic bootstrap must never execute")').toString('base64')}').catch(()=>{console.error('COATRIA_TRUSTED_SERVICE_BOOTSTRAP_FAILED');process.exit(1)})"`;
@@ -69,9 +72,69 @@ for(const postgres of [false,true])test(`${postgres?'PostgreSQL':'PGlite'} trust
   }
   const verifiedDatabase=async(service:'archive'|'gateway',url:string)=>{assert.equal(new URL(url).username,service==='archive'?'coatria_higgsfield_archive_worker_v1':'coatria_storage_gateway_v1');};
   const reconcile=(id:string,p:ReturnType<typeof provider>)=>reconcileTrustedService(id,{fetch:p.fetch,verifyDatabase:verifiedDatabase});
+  async function selectRuntime(a:Awaited<ReturnType<typeof fixture>>,entry=a.entries[1],expectedRevision=0){
+   await query("INSERT INTO platform_operator_grants(user_id,expires_at) VALUES($1,clock_timestamp()+interval '1 hour') ON CONFLICT DO NOTHING",[a.userId]);
+   await query("INSERT INTO studio_profiles(company_id,template_id,template_version,created_by) VALUES($1,'synthetic',1,$2) ON CONFLICT DO NOTHING",[a.companyId,a.userId]);
+   for(const projectId of entry.projectIds)await query("INSERT INTO studio_projects(id,company_id,name,client_name,brief,spec,ai_policy,created_by) VALUES($1,$2,'Synthetic','SIMULATED client','Synthetic brief','{}','allowed',$3) ON CONFLICT DO NOTHING",[projectId,a.companyId,a.userId]);
+   return transaction(db=>selectCompanyRuntimeConfiguration(db,a.member,entry.service,{clientId:randomUUID(),expectedRevision,phase:'service',expiresAt:entry.expiresAt,preset:entry,configurationHash:companyRuntimeHash(entry)}));
+  }
+  const revokeRuntime=(a:Awaited<ReturnType<typeof fixture>>,expectedRevision=1)=>transaction(db=>revokeCompanyRuntimeConfiguration(db,a.member,'gateway',{clientId:randomUUID(),expectedRevision}));
+  await t.test('a durable selection replaces legacy readiness and binds the exact registry epoch into plans',async()=>{
+   const a=await fixture(),legacy=(await a.plan('gateway')).provision,selection=await selectRuntime(a),cloud=provider();
+   await assert.rejects(a.start(legacy),code('SERVICE_PRESET_CHANGED'));
+   delete process.env.COATRIA_TRUSTED_SERVICE_PRESETS;
+   const current=(await a.plan('gateway')).provision;
+   assert.equal(current.readiness.configured,true);assert.equal(current.plan.runtimeConfiguration.configurationId,selection.configuration.configurationId);
+   assert.equal(current.plan.runtimeConfiguration.configurationHash,companyRuntimeHash(a.entries[1]));assert.equal(current.plan.runtimeConfiguration.selectionRevision,1);
+   assert.equal((await transaction(db=>listTrustedServiceProvisions(db,a.companyId))).readiness.archive.configured,false);
+   await selectRuntime(a,a.entries[1],1);await assert.rejects(a.start(current),code('SERVICE_PRESET_CHANGED'));
+   assert.equal(cloud.calls.length,0);assert.equal((await query('SELECT count(*)::int n FROM trusted_service_reservations WHERE company_id=$1',[a.companyId])).rows[0].n,0);
+  });
+  await t.test('revocation during provider create immediately stops the stored pod and never falls back to valid environment presets',async()=>{
+   const a=await fixture();await selectRuntime(a);const p=(await a.plan('gateway')).provision,cloud=provider();await a.start(p);
+   cloud.onCreate(async()=>{await revokeRuntime(a);});await reconcile(p.id,cloud);
+   assert.equal(cloud.creates(),1);assert.equal(cloud.stops(),1);assert.equal(cloud.pods[0].env.COATRIA_SERVICE_PROVISION_ID,p.id);
+   assert.equal((await a.get(p.id)).phase,'stopping');assert.equal((await a.get(p.id)).readiness.configured,false);
+   await assert.rejects(a.plan('gateway'),code('SERVICE_CONFIGURATION_INACTIVE'));
+   delete process.env.COATRIA_TRUSTED_SERVICE_PRESETS;await reconcile(p.id,cloud);assert.equal((await a.get(p.id)).phase,'stopped');
+   assert.equal((await query('SELECT count(*)::int n FROM trusted_service_reservations WHERE company_id=$1',[a.companyId])).rows[0].n,1);
+   assert.equal(cloud.creates(),1);
+  });
+  await t.test('revocation while database preflight is in flight fences the final paid submission',async()=>{
+   const a=await fixture();await selectRuntime(a);const p=(await a.plan('gateway')).provision,cloud=provider();await a.start(p);
+   await reconcileTrustedService(p.id,{fetch:cloud.fetch,verifyDatabase:async()=>{await revokeRuntime(a);}});
+   assert.equal(cloud.creates(),0);assert.equal((await a.get(p.id)).phase,'stopped');
+   assert.equal((await query('SELECT count(*)::int n FROM trusted_service_reservations WHERE company_id=$1',[a.companyId])).rows[0].n,1);
+  });
+  await t.test('revoking the archive executor stops the exact existing pod and cleanup needs no decryptable active executor',async()=>{
+   const a=await fixture(),projectId=randomUUID();
+   await query("INSERT INTO studio_profiles(company_id,template_id,template_version,created_by) VALUES($1,'synthetic',1,$2)",[a.companyId,a.userId]);
+   await query("INSERT INTO studio_projects(id,company_id,name,client_name,brief,spec,ai_policy,created_by) VALUES($1,$2,'Synthetic','SIMULATED client','Synthetic brief','{}','allowed',$3)",[projectId,a.companyId,a.userId]);
+   const runtime=await companyArchiveRuntimeFixture(a.companyId,a.userId,projectId),cloud=provider();
+   const env=await transaction(async db=>companyTrustedServiceEnvironment(db,await loadTrustedServicePreset(db,a.companyId,'archive'),runtime.provision.id));
+   const pod={id:'synthetic-observation-'+runtime.provision.id,name:'coatria-archive-'+runtime.provision.id,image:TRUSTED_SERVICE_IMAGE,args:runtime.preset.bootstrapArgs,disk:10,cpu:{id:'cpu3c',vcpuCount:2,memory:4},cloud:'SECURE',dataCenterId:runtime.preset.dataCenterId,ports:[],env,status:'RUNNING',actions:['stop']};cloud.pods.push(pod);
+   await query('UPDATE trusted_service_provisions SET expected_environment_hashes=$2 WHERE id=$1',[runtime.provision.id,JSON.stringify(Object.fromEntries(Object.entries(env).map(([key,value])=>[key,hashToken(value)])))]);
+   const gateway=(await a.plan('gateway')).provision;await a.start(gateway);await reconcile(gateway.id,cloud);await query("UPDATE trusted_service_provisions SET last_reconciled_at='2000-01-01T00:00:00Z' WHERE id=$1",[gateway.id]);
+   const before=await a.get(runtime.provision.id);
+   await transaction(db=>revokeArchiveExecutorCredential(db,runtime.member,runtime.selection.configurationId,runtime.credential.id));
+   const requested=await a.get(runtime.provision.id);assert(requested.stopRequestedAt);assert.equal(requested.revision,before.revision+1);assert.equal((await a.get(gateway.id)).stopRequestedAt,null);assert.equal(cloud.stops(),0);
+   await transaction(db=>revokeArchiveExecutorCredential(db,runtime.member,runtime.selection.configurationId,runtime.credential.id));assert.equal((await a.get(runtime.provision.id)).revision,requested.revision);
+   const batch=await reconcileTrustedServices(1,{fetch:cloud.fetch,verifyDatabase:verifiedDatabase});assert.equal((batch.results[0] as any).provision.id,runtime.provision.id);assert.equal(cloud.stops(),1);assert.equal((await a.get(runtime.provision.id)).phase,'stopping');
+   await reconcile(runtime.provision.id,cloud);assert.equal((await a.get(runtime.provision.id)).phase,'stopped');assert.equal((await a.get(runtime.provision.id)).readiness.configured,false);assert.equal(cloud.creates(),1,'Only the unrelated synthetic gateway was created');
+  });
+  await t.test('registry gateway revocation records stop intent before cron and outranks older healthy services',async()=>{
+   const healthy=await fixture(),cloud=provider(),healthyPlan=(await healthy.plan('gateway')).provision;await healthy.start(healthyPlan);await reconcile(healthyPlan.id,cloud);
+   const target=await fixture(true);await selectRuntime(target);const plan=(await target.plan('gateway')).provision;await target.start(plan);await reconcile(plan.id,cloud);
+   await query("UPDATE trusted_service_provisions SET last_reconciled_at='2000-01-01T00:00:00Z' WHERE id=$1",[healthyPlan.id]);
+   const before=await target.get(plan.id),input={clientId:randomUUID(),expectedRevision:1};await transaction(db=>revokeCompanyRuntimeConfiguration(db,target.member,'gateway',input));
+   const requested=await target.get(plan.id);assert(requested.stopRequestedAt);assert.equal(requested.revision,before.revision+1);assert.equal((await healthy.get(healthyPlan.id)).stopRequestedAt,null);assert.equal(cloud.stops(),0);
+   assert.equal((await transaction(db=>revokeCompanyRuntimeConfiguration(db,target.member,'gateway',input))).replayed,true);assert.equal((await target.get(plan.id)).revision,requested.revision);
+   const batch=await reconcileTrustedServices(1,{fetch:cloud.fetch,verifyDatabase:verifiedDatabase});assert.equal((batch.results[0] as any).provision.id,plan.id);assert.equal(cloud.stops(),1);
+   assert.equal((await query('SELECT count(*)::int n FROM trusted_service_reservations WHERE company_id=$1',[target.companyId])).rows[0].n,1);
+  });
   await t.test('tenant scope, admin reauthorization, idempotent plan and explicit no-spend review',async()=>{
    const a=await fixture(),b=await fixture(true),clientId=randomUUID(),p=await a.plan('archive',clientId);assert.equal(p.provision.phase,'planned');assert.equal((await a.plan('archive',clientId)).provision.id,p.provision.id);assert.equal((await a.plan('archive',clientId)).replayed,true);await assert.rejects(a.plan('gateway',clientId),code('IDEMPOTENCY_CONFLICT'));await assert.rejects(transaction(db=>getTrustedServiceProvision(db,b.companyId,p.provision.id)),{status:404});
-   assert.equal((await query('SELECT count(*)::int n FROM trusted_service_reservations')).rows[0].n,0);assert.equal((await query('SELECT count(*)::int n FROM studio_managed_hosts')).rows[0].n,0);await query("UPDATE memberships SET role='member' WHERE company_id=$1",[a.companyId]);await assert.rejects(a.start(p.provision),{status:403});
+   assert.equal((await query('SELECT count(*)::int n FROM trusted_service_reservations WHERE company_id=$1',[a.companyId])).rows[0].n,0);assert.equal((await query('SELECT count(*)::int n FROM studio_managed_hosts WHERE company_id=$1',[a.companyId])).rows[0].n,0);await query("UPDATE memberships SET role='member' WHERE company_id=$1",[a.companyId]);await assert.rejects(a.start(p.provision),{status:403});
   });
   await t.test('separate archive and gateway pods receive minimal purpose-specific credentials with no plaintext persistence',async()=>{
    const a=await fixture(),p=provider();for(const kind of ['archive','gateway'] as const){const plan=(await a.plan(kind)).provision;await a.start(plan);await reconcile(plan.id,p);const current=await a.get(plan.id);assert.equal(current.phase,'running');assert.equal(current.serviceVerified,false);assert.equal(current.billingVerified,false);}
@@ -101,7 +164,7 @@ for(const postgres of [false,true])test(`${postgres?'PostgreSQL':'PGlite'} trust
    const a=await fixture(),p=(await a.plan()).provision,cloud=provider();await a.start(p);await query("UPDATE trusted_service_provisions SET lease_id=$2,lease_expires_at=clock_timestamp()+interval '1 minute' WHERE id=$1",[p.id,randomUUID()]);assert.equal((await reconcile(p.id,cloud)).skipped,true);await a.stop(p.id);await query('UPDATE trusted_service_provisions SET lease_id=NULL,lease_expires_at=NULL WHERE id=$1',[p.id]);await reconcile(p.id,cloud);assert.equal(cloud.calls.length,0);assert.equal((await a.get(p.id)).phase,'stopped');
   });
   await t.test('role preflight, price drift and preset drift fail before any provider POST',async()=>{
-   for(const fault of ['role','price','preset'] as const){const a=await fixture(),p=(await a.plan()).provision,cloud=provider();await a.start(p);if(fault==='price')cloud.setPrice(.04);if(fault==='preset'){a.entries[0].maxHourlyMicrousd=70000;install();}await reconcileTrustedService(p.id,{fetch:cloud.fetch,verifyDatabase:fault==='role'?async()=>{throw Error(secrets.archive);}:verifiedDatabase});assert.equal(cloud.creates(),0);assert.equal((await a.get(p.id)).phase,'failed');assert(!JSON.stringify(await a.get(p.id)).includes(secrets.archive));}
+   for(const fault of ['role','price','preset'] as const){const a=await fixture(),p=(await a.plan()).provision,cloud=provider();await a.start(p);if(fault==='price')cloud.setPrice(.04);if(fault==='preset'){a.entries[0].maxHourlyMicrousd=70000;install();}await reconcileTrustedService(p.id,{fetch:cloud.fetch,verifyDatabase:fault==='role'?async()=>{throw Error(secrets.archive);}:verifiedDatabase});assert.equal(cloud.creates(),0);assert.equal((await a.get(p.id)).phase,fault==='preset'?'stopped':'failed');assert(!JSON.stringify(await a.get(p.id)).includes(secrets.archive));}
   });
   await t.test('lifetime reservations are not reset by stopping and renewing a preset',async()=>{
    const a=await fixture();a.entries[0].lifetimeAllowanceMicrousd=16000;install();const p=(await a.plan()).provision;assert(p.plan.reservation.cpuMicrousd<=16000);await a.start(p);await a.stop(p.id);a.entries[0].id='renewed-preset';install();const next=(await a.plan()).provision;await assert.rejects(a.start(next),code('SERVICE_ALLOWANCE_EXHAUSTED'));

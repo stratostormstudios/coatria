@@ -9,6 +9,7 @@ import {hashToken} from '../src/lib/security';
 import {createStudioHostProvisionPlan,startStudioHostProvision,stopStudioHostProvision,getStudioHostProvision,listStudioHostProvisions,reconcileStudioHostProvision,reconcileStudioHostProvisions,studioCpuPreset,studioCpuReadiness} from '../src/lib/studio-host-provisioning';
 import {studioHostProvisionPlanInput,studioHostProvisionStartInput} from '../src/lib/studio-host-provisioning-protocol';
 import {buildStudioBootstrap} from '../scripts/hosting/build-studio-bootstrap.mjs';
+import {selectCompanyRuntimeConfiguration,revokeCompanyRuntimeConfiguration,companyRuntimeHash} from '../src/lib/company-runtime-config';
 
 test('public CPU approval accepts only exact bounded plans and explicit charges and activation',()=>{
  const request={clientId:randomUUID(),durationMinutes:20,installations:[{installationId:randomUUID(),revision:1}]};assert(studioHostProvisionPlanInput.safeParse(request).success);
@@ -52,7 +53,54 @@ test('managed CPU saga uses actual transactions and fake Runpod transport withou
   return{transport,calls,pods,requests,setEndpoint:(v:boolean)=>endpointEnabled=v,setHealth:(v:boolean)=>healthAllowed=v,setLoseCreate:(v:boolean)=>loseCreate=v,setEmpty:(v:boolean)=>emptyDiscovery=v,setMalformed:(v:boolean)=>malformedDiscovery=v,setPrice:(v:number)=>price=v,setStopConfirmed:(v:boolean)=>stopConfirmed=v,creates:()=>calls.filter(c=>c.method==='POST'&&c.path==='/v2/pods').length,stops:()=>calls.filter(c=>c.method==='POST'&&c.path.endsWith('/action')).length};
  }
  const reconcile=(provisionId:string,provider:ReturnType<typeof transportFixture>)=>reconcileStudioHostProvision(provisionId,{fetch:provider.transport});
+ async function selectRuntime(a:Awaited<ReturnType<typeof fixture>>,expectedRevision=0,expiresAt=new Date(Date.now()+3600000).toISOString()){
+  await query("INSERT INTO platform_operator_grants(user_id,expires_at) VALUES($1,clock_timestamp()+interval '2 hours') ON CONFLICT DO NOTHING",[a.userId]);
+  const preset={...presetBase,companies:companies.filter(c=>c.companyId===a.companyId)};
+  return transaction(db=>selectCompanyRuntimeConfiguration(db,a.member,'managed_agent',{clientId:randomUUID(),expectedRevision,phase:'service',expiresAt,preset,configurationHash:companyRuntimeHash(preset)}));
+ }
+ const revokeRuntime=(a:Awaited<ReturnType<typeof fixture>>,expectedRevision=1)=>transaction(db=>revokeCompanyRuntimeConfiguration(db,a.member,'managed_agent',{clientId:randomUUID(),expectedRevision}));
  try{
+  await t.test('durable CPU configuration pins the selection epoch, works without env presets, and rejects prior approvals',async()=>{
+   const a=await fixture(),legacy=(await a.plan()).provision,selected=await selectRuntime(a);
+   await assert.rejects(a.start(legacy),{code:'CPU_PRESET_CHANGED'});delete process.env.COATRIA_MANAGED_CPU_PRESET;
+   const plan=(await a.plan({...a.planInput,clientId:randomUUID()})).provision;
+   assert.equal(plan.readiness.ready,true);assert.equal(plan.plan.runtimeConfiguration?.configurationId,selected.configuration.configurationId);assert.equal(plan.plan.runtimeConfiguration?.selectionRevision,1);
+   await selectRuntime(a,1);await assert.rejects(a.start(plan),{code:'CPU_PRESET_CHANGED'});
+   assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE company_id=$1',[a.companyId])).rows[0].count),0);
+   updatePreset();await revokeRuntime(a,2);await assert.rejects(a.plan({...a.planInput,clientId:randomUUID()}),{code:'CPU_CONFIGURATION_INACTIVE'});
+   assert.equal((await transaction(db=>listStudioHostProvisions(db,a.companyId))).readiness.ready,false);
+  });
+  await t.test('company runtime deadline must cover the requested CPU lifetime',async()=>{
+   const a=await fixture();await selectRuntime(a,0,new Date(Date.now()+600000).toISOString());
+   await assert.rejects(a.plan(),{code:'CPU_CONFIGURATION_EXPIRED'});
+   assert.equal(Number((await query('SELECT count(*) FROM studio_host_provisions WHERE company_id=$1',[a.companyId])).rows[0].count),0);
+  });
+  await t.test('revocation during catalog preflight fences CPU submission without refunding approval',async()=>{
+   const a=await fixture();await selectRuntime(a);const plan=(await a.plan()).provision;await a.start(plan);const cloud=transportFixture();let revoked=false;
+   const transport:typeof fetch=async(url,init)=>{const response=await cloud.transport(url,init);if(!revoked&&String(url).includes('/catalog/')){revoked=true;await revokeRuntime(a);}return response;};
+   await reconcileStudioHostProvision(plan.id,{fetch:transport});assert.equal(cloud.creates(),0);assert.equal((await a.get(plan.id)).phase,'stopped');
+   assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE company_id=$1',[a.companyId])).rows[0].count),1);
+  });
+  await t.test('revocation during provider create stops the same CPU before returning and cleanup survives removed configuration',async()=>{
+   const a=await fixture();await selectRuntime(a);const plan=(await a.plan()).provision;await a.start(plan);const cloud=transportFixture();
+   const transport:typeof fetch=async(url,init)=>{const response=await cloud.transport(url,init);if(String(url).endsWith('/pods')&&init?.method==='POST')await revokeRuntime(a);return response;};
+   await reconcileStudioHostProvision(plan.id,{fetch:transport});assert.equal(cloud.creates(),1);assert.equal(cloud.stops(),1);assert.equal((await a.get(plan.id)).phase,'stopping');
+   delete process.env.COATRIA_MANAGED_CPU_PRESET;await reconcile(plan.id,cloud);assert.equal((await a.get(plan.id)).phase,'stopped');assert.equal((await a.get(plan.id)).readiness.ready,false);
+   assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE company_id=$1',[a.companyId])).rows[0].count),1);updatePreset();
+  });
+  await t.test('registry revocation durably prioritizes its pinned CPU over older healthy polls and replays without new revisions',async()=>{
+   const healthy=await fixture(),cloud=transportFixture(),healthyPlan=(await healthy.plan()).provision;await healthy.start(healthyPlan);await reconcile(healthyPlan.id,cloud);
+   const target=await fixture();await selectRuntime(target);const plan=(await target.plan()).provision;await target.start(plan);await reconcile(plan.id,cloud);
+   await query("UPDATE studio_host_provisions SET last_reconciled_at='2000-01-01T00:00:00Z' WHERE id=$1",[healthyPlan.id]);
+   const before=(await target.get(plan.id)),input={clientId:randomUUID(),expectedRevision:1};
+   await transaction(db=>revokeCompanyRuntimeConfiguration(db,target.member,'managed_agent',input));
+   const requested=await target.get(plan.id);assert(requested.stopRequestedAt);assert.equal(requested.revision,before.revision+1);assert.equal(requested.phase,before.phase);
+   assert.equal((await healthy.get(healthyPlan.id)).stopRequestedAt,null);assert.equal(cloud.stops(),0);
+   assert.equal((await transaction(db=>revokeCompanyRuntimeConfiguration(db,target.member,'managed_agent',input))).replayed,true);assert.equal((await target.get(plan.id)).revision,requested.revision);
+   const batch=await reconcileStudioHostProvisions(1,{fetch:cloud.transport});assert.equal((batch.results[0] as any).provision.id,plan.id);assert.equal(cloud.stops(),1);
+   assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE company_id=$1',[target.companyId])).rows[0].count),1);
+   await query("UPDATE studio_host_provisions SET phase='stopped' WHERE id=ANY($1::uuid[])",[[healthyPlan.id,plan.id]]);
+  });
   await t.test('fleet batches prioritize shutdowns and rotate deterministically within each priority class',async()=>{
    const provider=transportFixture(),ids:string[]=[];provider.setStopConfirmed(false);
    const batch=async()=>{const result=await reconcileStudioHostProvisions(2,{fetch:provider.transport});return result.results.map(item=>{assert('provision'in item&&item.provision&&typeof item.provision==='object');assert('id'in item.provision&&typeof item.provision.id==='string');return item.provision.id;});};
@@ -164,5 +212,5 @@ test('managed CPU saga uses actual transactions and fake Runpod transport withou
   await t.test('real PostgreSQL concurrent approvals and reconcilers create exactly one host, reservation and Pod',{skip:emulate},async()=>{
    const a=await fixture(),p=(await a.plan()).provision,input={clientId:randomUUID(),revision:p.revision,planHash:p.planHash,acknowledgeCharges:true,activateAgents:true};const approvals=await Promise.all([a.start(p,input),a.start(p,input)]);assert.equal(approvals.filter(r=>r.replayed).length,1);assert.equal(approvals[0].provision.hostId,approvals[1].provision.hostId);assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE company_id=$1',[a.companyId])).rows[0].count),1);const provider=transportFixture();await Promise.all([reconcile(p.id,provider),reconcile(p.id,provider),reconcile(p.id,provider)]);assert.equal(provider.creates(),1);assert.equal((await a.get(p.id)).phase,'provisioning');
   });
- }finally{await query('DELETE FROM companies WHERE id=ANY($1::uuid[])',[companies.map(c=>c.companyId)]);await query('DELETE FROM users WHERE id=ANY($1::uuid[])',[owners]);await database().end();delete(globalThis as any).coatriaPool;await stop?.();for(const[key,value]of Object.entries(before)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
+ }finally{await transaction(async db=>{await db.query("SET LOCAL session_replication_role='replica'");const ids=companies.map(c=>c.companyId);await db.query('DELETE FROM company_runtime_requests WHERE company_id=ANY($1::uuid[])',[ids]);await db.query('DELETE FROM company_runtime_selections WHERE company_id=ANY($1::uuid[])',[ids]);await db.query('DELETE FROM company_runtime_configurations WHERE company_id=ANY($1::uuid[])',[ids]);await db.query('DELETE FROM platform_operator_grants WHERE user_id=ANY($1::uuid[])',[owners]);});await query('DELETE FROM companies WHERE id=ANY($1::uuid[])',[companies.map(c=>c.companyId)]);await query('DELETE FROM users WHERE id=ANY($1::uuid[])',[owners]);await database().end();delete(globalThis as any).coatriaPool;await stop?.();for(const[key,value]of Object.entries(before)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
 });

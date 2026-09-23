@@ -23,7 +23,7 @@ test('gateway startup audits the shipped effective permissions without changing 
   await pg.exec(`CREATE ROLE ${role} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`);
   await pg.exec(await readFile('database/storage-gateway-permissions.sql','utf8'));
   await t.test('current contract passes, including exact limited source-classification columns, using SELECT only',async()=>{
-   const result=await asGateway(()=>assertProjectStorageGatewayDatabase(db));assert.equal(result.status,'passed');assert.equal(result.role,role);assert.equal(result.checkedMigrations,34);assert.equal(result.checkedMigrations,result.migrationFloor);assert(queries.length>0&&queries.every(sql=>sql.trim().startsWith('SELECT')));
+   const result=await asGateway(()=>assertProjectStorageGatewayDatabase(db));assert.equal(result.status,'passed');assert.equal(result.role,role);assert.equal(result.checkedMigrations,37);assert.equal(result.checkedMigrations,result.migrationFloor);assert(queries.length>0&&queries.every(sql=>sql.trim().startsWith('SELECT')));
   });
   await t.test('owner and SET ROLE impersonation are rejected',async()=>{
    await assert.rejects(()=>assertProjectStorageGatewayDatabase(db),{code:'STORAGE_DB_IDENTITY'});
@@ -48,7 +48,7 @@ test('gateway startup audits the shipped effective permissions without changing 
    await pg.exec('CREATE SCHEMA gateway_extra; CREATE TABLE gateway_extra.private_data(value text)');try{await change(`GRANT SELECT(value) ON gateway_extra.private_data TO ${role}`,`REVOKE SELECT(value) ON gateway_extra.private_data FROM ${role}`);}finally{await pg.exec('DROP SCHEMA gateway_extra CASCADE');}
   });
   await t.test('missing ledger entries fail despite the tables remaining present',async()=>{
-   for(const name of['001_initial.sql','027_project_storage.sql','032_studio_generated_client_delivery.sql','033_studio_generated_revisions.sql','034_studio_coordinator_generation.sql']){await pg.query('DELETE FROM schema_migrations WHERE name=$1',[name]);try{await assert.rejects(()=>asGateway(()=>assertProjectStorageGatewayDatabase(db)),{code:'STORAGE_DB_MIGRATIONS'});}finally{await pg.query('INSERT INTO schema_migrations(name) VALUES($1)',[name]);}}
+   for(const name of['001_initial.sql','027_project_storage.sql','032_studio_generated_client_delivery.sql','033_studio_generated_revisions.sql','034_studio_coordinator_generation.sql','035_trusted_services.sql','036_company_runtime_configuration.sql','037_project_gateway_bindings.sql']){await pg.query('DELETE FROM schema_migrations WHERE name=$1',[name]);try{await assert.rejects(()=>asGateway(()=>assertProjectStorageGatewayDatabase(db)),{code:'STORAGE_DB_MIGRATIONS'});}finally{await pg.query('INSERT INTO schema_migrations(name) VALUES($1)',[name]);}}
   });
   await t.test('normal startup and --preflight deny owner credentials before HTTP or queue startup and close the pool',{timeout:25000},async()=>{
    const {PGLiteSocketServer}=await import('@electric-sql/pglite-socket'),dbServer=new PGLiteSocketServer({db:pg,host:'127.0.0.1',port:0,maxConnections:1}),occupied=createServer();await dbServer.start();await new Promise<void>(resolve=>occupied.listen(0,'127.0.0.1',resolve));

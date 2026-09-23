@@ -1,25 +1,27 @@
 // Server-only control plane. File bytes never enter a Vercel route handler.
 import {randomUUID} from 'node:crypto';
 import type {PoolClient} from 'pg';
+import {resolveProjectGateway} from './project-gateway-bindings';
 import {fail,hashToken,secret} from './security';
 import type {ProjectStorageActor,ProjectStorageBinding} from './project-storage-protocol';
 import type {ProjectStorageTransferIntegration} from './project-storage';
-import {STORAGE_GRANT_SECONDS,STORAGE_HUMAN_GRANT_SECONDS,STORAGE_MAX_FILE_BYTES,STORAGE_PART_BYTES,storageGatewayOrigin,storageTransferAvailability} from './project-storage-config';
+import {STORAGE_GRANT_SECONDS,STORAGE_HUMAN_GRANT_SECONDS,STORAGE_MAX_FILE_BYTES,STORAGE_PART_BYTES,storageTransferAvailability} from './project-storage-config';
 
 type Row=Record<string,any>;
 const actorKey=(actor:ProjectStorageActor)=>actor.agentId?'agent:'+actor.agentId:'human:'+actor.userId;
 async function grant(client:PoolClient,actor:ProjectStorageActor,projectId:string,binding:Pick<ProjectStorageBinding,'connectionId'|'connection'>,versionId:string,uploadId:string|null){
- const gateway=storageGatewayOrigin();if(!gateway)fail(503,'The storage transfer service is not connected.','STORAGE_GATEWAY_UNAVAILABLE');
+ const gateway=await resolveProjectGateway(client,actor.companyId,projectId);if(!gateway)fail(503,'The storage transfer service is not connected.','STORAGE_GATEWAY_UNAVAILABLE');
  const lease=actor.agentId?(await client.query("SELECT r.lease_token_hash,a.token_hash FROM agent_runs r JOIN agents a ON a.company_id=r.company_id AND a.id=r.agent_id WHERE r.company_id=$1 AND r.agent_id=$2 AND r.id=$3 AND r.requested_by=$4 AND r.status='running' AND r.lease_expires_at>clock_timestamp()",[actor.companyId,actor.agentId,actor.runId,actor.userId])).rows[0]:null;
  if(actor.agentId&&!lease?.lease_token_hash)fail(403,'The current agent lease is required.');
- const token=secret('stg_'),grantId=randomUUID(),expiresAt=new Date(Date.now()+(actor.agentId?STORAGE_GRANT_SECONDS:STORAGE_HUMAN_GRANT_SECONDS)*1000).toISOString();
- await client.query(`INSERT INTO project_storage_access_receipts(company_id,project_id,version_id,actor_key,user_id,agent_id,run_id,connection_id,connection_revision,upload_id,token_hash,operation,gateway_grant_id,expires_at,agent_lease_hash,agent_token_hash) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,[actor.companyId,projectId,versionId,actorKey(actor),actor.userId,actor.agentId??null,actor.runId??null,binding.connectionId,binding.connection.revision,uploadId,hashToken(token),uploadId?'upload':'read',grantId,expiresAt,lease?.lease_token_hash??null,lease?.token_hash??null]);
- return {token,expiresAt,url:gateway+`/v1/${uploadId?'uploads/'+uploadId:'files/'+versionId}`,grantId};
+ const token=secret('stg_'),grantId=randomUUID(),now=+new Date((await client.query('SELECT clock_timestamp() AS now')).rows[0].now),expiresAt=new Date(Math.min(now+(actor.agentId?STORAGE_GRANT_SECONDS:STORAGE_HUMAN_GRANT_SECONDS)*1000,gateway.expiresAt?Date.parse(gateway.expiresAt):Infinity)).toISOString();
+ if(Date.parse(expiresAt)<=now)fail(503,'The verified gateway deadline ended.','STORAGE_GATEWAY_UNAVAILABLE');
+ await client.query(`INSERT INTO project_storage_access_receipts(company_id,project_id,version_id,actor_key,user_id,agent_id,run_id,connection_id,connection_revision,upload_id,token_hash,operation,gateway_grant_id,expires_at,agent_lease_hash,agent_token_hash,service_binding_id,service_provision_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,[actor.companyId,projectId,versionId,actorKey(actor),actor.userId,actor.agentId??null,actor.runId??null,binding.connectionId,binding.connection.revision,uploadId,hashToken(token),uploadId?'upload':'read',grantId,expiresAt,lease?.lease_token_hash??null,lease?.token_hash??null,gateway.bindingId,gateway.provisionId]);
+ return {token,expiresAt,url:gateway.origin+`/v1/${uploadId?'uploads/'+uploadId:'files/'+versionId}`,grantId};
 }
 export const projectStorageTransfer:ProjectStorageTransferIntegration={
- availability:storageTransferAvailability,
+ async availability(client,companyId,projectId){if(!client||!companyId||!projectId)return storageTransferAvailability();const gateway=await resolveProjectGateway(client,companyId,projectId);return gateway?{available:true,gatewayOrigin:gateway.origin,maxFileBytes:STORAGE_MAX_FILE_BYTES,partBytes:STORAGE_PART_BYTES}:{available:false,code:'STORAGE_GATEWAY_UNAVAILABLE',message:'A verified live gateway is required for this project.'};},
  async reserveUpload(client,actor,projectId,binding,input){
-  if(!storageGatewayOrigin())fail(503,'The storage transfer service is not connected.','STORAGE_GATEWAY_UNAVAILABLE');
+  if(!await resolveProjectGateway(client,actor.companyId,projectId))fail(503,'The storage transfer service is not connected.','STORAGE_GATEWAY_UNAVAILABLE');
   if(input.bytes>STORAGE_MAX_FILE_BYTES)fail(413,'This storage pilot accepts files up to 100 GiB.');
   const key=actorKey(actor),requestHash=hashToken(JSON.stringify(input));
   await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`storage-upload:${actor.companyId}:${key}:${input.clientId}`]);

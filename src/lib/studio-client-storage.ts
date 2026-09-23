@@ -2,7 +2,8 @@
  * agent storage access, a provider URL, or authority over another file version. */
 import type {PoolClient} from 'pg';
 import {ApiError,fail,hashToken,id,secret} from './security';
-import {storageGatewayOrigin} from './project-storage-config';
+import {resolveProjectGateway,authorizeProjectGatewayGrant} from './project-gateway-bindings';
+import type {GatewayIdentity} from './project-gateway-identity';
 import type {StudioGeneratedClientAccess} from './studio-client-delivery-protocol';
 import {assertGeneratedDeliveryCurrent} from './studio-generated-rounds';
 
@@ -74,27 +75,28 @@ async function deadline(db:PoolClient,shareId:string,expiresAt?:string|Date){
 }
 
 export async function issueStudioClientStorageAccess(db:PoolClient,input:{shareId:string;recipientUserId:string;versionId:string}):Promise<StudioGeneratedClientAccess>{
- const shareId=id(input.shareId),recipientUserId=id(input.recipientUserId),versionId=id(input.versionId),gatewayOrigin=storageGatewayOrigin();if(!gatewayOrigin)fail(503,'The private file transfer service is unavailable.','STORAGE_GATEWAY_UNAVAILABLE');
- const current=await currentFile(db,shareId,recipientUserId,versionId),token=secret('sct_');
+ const shareId=id(input.shareId),recipientUserId=id(input.recipientUserId),versionId=id(input.versionId);
+ const current=await currentFile(db,shareId,recipientUserId,versionId),token=secret('sct_'),gateway=await resolveProjectGateway(db,current.companyId,current.projectId);if(!gateway)fail(503,'The private file transfer service is unavailable.','STORAGE_GATEWAY_UNAVAILABLE');const gatewayOrigin=gateway.origin;
  // The invitation advisory lock also serializes this cap, including API receipt
  // replays that intentionally issue a fresh token rather than storing secrets.
  const live=(await db.query('SELECT count(*)::int AS count FROM studio_client_storage_grants WHERE company_id=$1 AND share_id=$2 AND recipient_user_id=$3 AND expires_at>clock_timestamp()',[current.companyId,shareId,recipientUserId])).rows[0].count;
  if(live>=256)fail(429,'Wait for existing client file access windows to expire.','CLIENT_STORAGE_GRANT_LIMIT');
  const grant=(await db.query(`WITH instant AS MATERIALIZED (SELECT clock_timestamp() AS at)
-  INSERT INTO studio_client_storage_grants(company_id,project_id,share_id,recipient_user_id,storage_version_id,connection_id,connection_revision,package_hash,token_hash,created_at,expires_at)
-  SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,instant.at,least($10::timestamptz,instant.at+interval '60 seconds') FROM instant WHERE $10::timestamptz>instant.at RETURNING expires_at`,[current.companyId,current.projectId,shareId,recipientUserId,versionId,current.connectionId,current.connectionRevision,current.share.package_hash,hashToken(token),current.share.expires_at])).rows[0];if(!grant)return unavailable();
+  INSERT INTO studio_client_storage_grants(company_id,project_id,share_id,recipient_user_id,storage_version_id,connection_id,connection_revision,package_hash,token_hash,created_at,expires_at,service_binding_id,service_provision_id)
+  SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,instant.at,least($10::timestamptz,instant.at+interval '60 seconds',coalesce($11::timestamptz,$10::timestamptz)),$12,$13 FROM instant WHERE $10::timestamptz>instant.at AND ($11::timestamptz IS NULL OR $11::timestamptz>instant.at) RETURNING expires_at`,[current.companyId,current.projectId,shareId,recipientUserId,versionId,current.connectionId,current.connectionRevision,current.share.package_hash,hashToken(token),current.share.expires_at,gateway.expiresAt,gateway.bindingId,gateway.provisionId])).rows[0];if(!grant)return unavailable();
  await deadline(db,shareId,grant.expires_at);
  return {transport:'project_storage',storageVersionId:versionId,gatewayOrigin,url:`${gatewayOrigin}/v1/client-files/${versionId}`,headers:{Authorization:'Bearer '+token},expiresAt:new Date(grant.expires_at).toISOString(),bytes:current.bytes,name:current.name,sha256:current.sha256,contentType:current.contentType,status:'download_access_issued',bytesReceivedByClient:'not_observed'};
 }
 
 /** Gateway-only opaque capability lookup. Raw tokens never enter SQL or logs. */
-export async function authorizeStudioClientStorageGrant(db:PoolClient,token:string,versionId:string){
+export async function authorizeStudioClientStorageGrant(db:PoolClient,token:string,versionId:string,identity?:GatewayIdentity){
  if(!/^sct_[A-Za-z0-9_-]{43}$/.test(token))return unavailable();
  // Cheap expired-token rejection first; the decisive clock sample still runs
  // after every authority lock below, including waits for a concurrent writer.
- const grant=(await db.query('SELECT company_id,project_id,share_id,recipient_user_id,storage_version_id,connection_id,connection_revision,package_hash,expires_at FROM studio_client_storage_grants WHERE token_hash=$1 AND expires_at>clock_timestamp()',[hashToken(token)])).rows[0];
+ const grant=(await db.query('SELECT company_id,project_id,share_id,recipient_user_id,storage_version_id,connection_id,connection_revision,package_hash,expires_at,service_binding_id,service_provision_id FROM studio_client_storage_grants WHERE token_hash=$1 AND expires_at>clock_timestamp()',[hashToken(token)])).rows[0];
  if(!grant||grant.storage_version_id!==versionId)return unavailable();
  const current=await currentFile(db,grant.share_id,grant.recipient_user_id,versionId);
  if(current.companyId!==grant.company_id||current.projectId!==grant.project_id||current.connectionId!==grant.connection_id||current.connectionRevision!==grant.connection_revision||current.share.package_hash!==grant.package_hash)return unavailable();
+ await authorizeProjectGatewayGrant(db,grant,identity);
  const remainingMs=await deadline(db,grant.share_id,grant.expires_at);return {...current,remainingMs};
 }

@@ -9,7 +9,8 @@ import {createHash} from 'node:crypto';
 import {readFile,lstat} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {assertRemoteArchiveImmutableFile,parseRemoteArchiveArguments} from '../src/lib/higgsfield-remote-archive-config';
-import {parseTrustedServiceGatewayConfiguration} from '../src/lib/trusted-service-config';
+import {parseTrustedServiceGatewayConfiguration,trustedServiceHash} from '../src/lib/trusted-service-config';
+import {gatewayIdentitySchema} from '../src/lib/project-gateway-identity';
 
 async function main(){
 const args=process.argv.slice(2);let preflight=args.length===1&&args[0]==='--preflight',configuration:ReturnType<typeof parseTrustedServiceGatewayConfiguration>|undefined;
@@ -24,6 +25,7 @@ const port=configuration?.port??Number(process.env.PORT||4190),host=configuratio
 if(!Number.isInteger(port)||port<1||port>65535)throw new Error('Invalid gateway port.');
 const appOrigin=new URL(configuration?.appOrigin??process.env.APP_URL??'https://coatria.com').origin;
 if(process.env.NODE_ENV==='production'&&!appOrigin.startsWith('https://'))throw new Error('Production requires an HTTPS application origin.');
+const identity=configuration?gatewayIdentitySchema.parse({version:1,companyId:configuration.companyId,projectIds:configuration.projectIds,provisionId:process.env.COATRIA_SERVICE_PROVISION_ID,configurationHash:trustedServiceHash(configuration),sourceCommit:configuration.sourceCommit,expiresAt:configuration.expiresAt}):undefined;
 const pool=database();let serving=false;
 try{
  // Inspect the actual authenticated session before opening HTTP or polling the
@@ -32,7 +34,7 @@ try{
  try{dbCheck=await assertProjectStorageGatewayDatabase(client);}finally{client.release();}
  if(preflight){console.log(JSON.stringify({event:'storage-gateway-preflight-passed',database:dbCheck,listening:false,workClaimed:false}));return;}
 if(configuration&&Date.now()>=Date.parse(configuration.expiresAt))throw new Error('Gateway deadline ended during preflight.');
-const gateway=createProjectStorageGateway({allowedOrigins:[appOrigin],...configuration?{scope:{companyId:configuration.companyId,projectIds:configuration.projectIds}}:{}});
+const gateway=createProjectStorageGateway({allowedOrigins:[appOrigin],...configuration?{scope:{companyId:configuration.companyId,projectIds:configuration.projectIds},identity}:{}});
 let active=0,verifying=false,closing=false;
 const server=createServer(async(req,res)=>{
  if(closing||active>=8){res.writeHead(503,{'Content-Type':'application/json','Retry-After':'5'});res.end(JSON.stringify({error:'The transfer service is busy. Check upload status before retrying.',code:'STORAGE_TRANSFER_LIMIT'}));return;}

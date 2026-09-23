@@ -36,7 +36,7 @@ export function trustedServiceChildEnvironment(manifest,settings=process.env){
  let ring;try{ring=JSON.parse(settings.COATRIA_HOSTING_KEYRING??'');}catch{fail();}if(!ring?.keys?.[ring.activeKeyId])fail();
  const env=/** @type {Record<string,string>} */({PATH:'/usr/local/bin:/usr/bin:/bin',HOME:'/home/node',LANG:'C.UTF-8',NODE_ENV:'production',DATABASE_URL:settings.DATABASE_URL,COATRIA_HOSTING_KEYRING:settings.COATRIA_HOSTING_KEYRING});
  if(manifest.service==='archive'){const token=settings.COATRIA_VERCEL_MEDIA_TOKEN;if(typeof token!=='string'||token.length<8||token.length>4096||/[\r\n]/.test(token)||settings.COATRIA_HIGGSFIELD_ARCHIVE_ENABLED!=='true')fail();env.COATRIA_VERCEL_MEDIA_TOKEN=token;env.COATRIA_HIGGSFIELD_ARCHIVE_ENABLED='true';}
- else{env.APP_URL='https://coatria.com';env.HOST='0.0.0.0';env.PORT='4190';}
+ else{const provisionId=settings.COATRIA_SERVICE_PROVISION_ID;if(typeof provisionId!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(provisionId))fail();env.COATRIA_SERVICE_PROVISION_ID=provisionId;env.APP_URL='https://coatria.com';env.HOST='0.0.0.0';env.PORT='4190';}
  return {env,configuration,configurationBytes:Buffer.from(canonical(configuration)),release};
 }
 async function rootDirectory(path){await mkdir(path,{recursive:true,mode:0o755});let current=path;for(;;){const info=await lstat(current);if(!info.isDirectory()||info.isSymbolicLink()||info.uid!==0||(info.mode&0o022)||await realpath(current)!==current)fail();const parent=dirname(current);if(parent===current)break;current=parent;}}

@@ -22,7 +22,11 @@ GRANT SELECT(company_id,project_id,delivery_id,round_id) ON studio_generated_del
 GRANT SELECT(company_id,project_id,round_id,work_item_id) ON studio_generated_revision_work TO coatria_storage_gateway_v1;
 GRANT SELECT(company_id,project_id,round_id,unit_id,generation_work_item_id,qc_work_item_id,action,artifact_id,review_id,storage_version_id,manifest_sha256,file_sha256) ON studio_generated_revision_items TO coatria_storage_gateway_v1;
 GRANT SELECT(company_id,project_id,share_id,file_id,artifact_id,review_id,storage_version_id,storage_name,storage_sha256,storage_bytes,storage_content_type) ON studio_client_delivery_files TO coatria_storage_gateway_v1;
-GRANT SELECT(company_id,project_id,share_id,recipient_user_id,storage_version_id,connection_id,connection_revision,package_hash,token_hash,expires_at) ON studio_client_storage_grants TO coatria_storage_gateway_v1;
+GRANT SELECT(company_id,project_id,share_id,recipient_user_id,storage_version_id,connection_id,connection_revision,package_hash,token_hash,expires_at,service_binding_id,service_provision_id) ON studio_client_storage_grants TO coatria_storage_gateway_v1;
+GRANT SELECT(id,company_id,project_id,provision_id,configuration_hash,origin,verified_by,verified_at,expires_at,revoked_at) ON project_gateway_bindings TO coatria_storage_gateway_v1;
+GRANT SELECT(id,company_id,service,phase,provider_status,stop_requested_at,pod_id,expires_at,last_reconciled_at,preset,plan,plan_hash,created_by) ON trusted_service_provisions TO coatria_storage_gateway_v1;
+GRANT SELECT(company_id,kind,configuration_id,revision,state) ON company_runtime_selections TO coatria_storage_gateway_v1;
+GRANT SELECT(id,company_id,kind,configuration_hash,expires_at) ON company_runtime_configurations TO coatria_storage_gateway_v1;
 GRANT SELECT(company_id,project_id,artifact_id,archive_id,request_id,job_id,output_id,storage_version_id,archive_approved_by,file_facts) ON studio_generated_artifact_sources TO coatria_storage_gateway_v1;
 GRANT SELECT(id,company_id,project_id,request_id,job_id,output_id,version_id,upload_id,locator_identity,approved_by,provider_connection_id,storage_binding_id,storage_connection_id,storage_connection_snapshot,status,revoked_at) ON higgsfield_output_archives TO coatria_storage_gateway_v1;
 GRANT SELECT(company_id,project_id,id,request_id,connection_id,status) ON higgsfield_jobs TO coatria_storage_gateway_v1;
