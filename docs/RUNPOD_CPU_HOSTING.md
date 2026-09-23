@@ -27,9 +27,13 @@ Vercel invokes `/api/internal/managed-pilot/reap` every minute. Only the product
 | --- | --- |
 | `CRON_SECRET` | Independently generated random secret, at least 32 characters |
 | `MANAGED_RUNPOD_API_KEY` | Operator credential for lifecycle control |
-| `MANAGED_PILOT_CONFIG` | JSON containing exact `podId`, `podName`, `endpointId`, `endpointName`, and fixed UTC `expiresAt` |
+| `MANAGED_PILOT_CONFIG` | JSON containing exact `podId`, `podName`, `endpointId`, `endpointName`, fixed UTC CPU `expiresAt`, and optional separately reviewed `inferenceExpiresAt` |
 
 The IDs come only from operator configuration. The caller cannot choose a resource. The reaper verifies provider IDs, names and CPU/GPU families, disables the selected GPU endpoint and stops the selected CPU Pod. It attempts both actions even when one fails. Later cron calls reconcile asynchronous stops and transient failures. It never deletes the state volume or an unrelated resource.
+
+Without `inferenceExpiresAt`, the original `expiresAt` continues to govern both resources. An operator may explicitly hand the same endpoint to a bounded successor pilot by setting a separate fixed inference deadline at or after the original cutoff and no more than 24 hours into the future. The original CPU deadline and identity remain unchanged: cron still stops that exact old Pod while reporting inference as `waiting` until its separate deadline. At the inference deadline it sets the exact endpoint's minimum and maximum workers to zero. This path never enables workers, increases capacity, creates a host or authorizes inference. A malformed, earlier or unbounded override returns `REAPER_INVALID_INFERENCE_EXPIRY` and retains both original cleanup deadlines, so a rejected handoff cannot suppress CPU or GPU cleanup.
+
+This is an operator-configured pilot handoff, not a general company or tenant endpoint lease. Retain the predecessor closure evidence, review the successor budget and fixed deadline, then verify the environment on the actual production deployment. Before starting a successor host, check readiness across more than one cron interval. Revoking the successor before its inference deadline still requires explicit endpoint cleanup; this reaper does not infer registry ownership or revoke model credentials. Do not extend the old CPU cutoff, delete the cron, or repeatedly re-enable capacity against an expired endpoint cutoff.
 
 The runner's absolute deadline stops accepting work and allows bounded cancellation; restarting does not extend it. A process exiting does not stop provider billing. Vercel's separate cutoff remains necessary when the CPU runner fails. Scheduler or provider outages can delay cutoff, so this is a time boundary with reconciliation, not a guaranteed dollar limit. Operator alerts and a company spending ledger remain production work.
 
