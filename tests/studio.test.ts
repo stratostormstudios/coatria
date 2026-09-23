@@ -1,3 +1,4 @@
+import {currentTaskPatchForFixture} from './task-fixture-revision';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -159,6 +160,7 @@ test('studio production uses real company tasks, tenant authority, versioned evi
   let oldPrepArtifact = '', latestPrepArtifact = '';
 
   async function call(path: string, method = 'GET', payload?: unknown, actor: Actor = 'owner', expected: number | number[] = 200) {
+    payload=await currentTaskPatchForFixture(path,method,payload);
     const headers: Record<string, string> = {};
     if (actor === 'agent') headers.Authorization = `Bearer ${token}`;
     else if (actor !== 'anonymous') { headers.Cookie = `coatria_session=${sessions[actor]}`; headers.Origin = origin; }

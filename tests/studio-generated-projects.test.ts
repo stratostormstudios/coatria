@@ -1,3 +1,4 @@
+import {currentTaskPatchForFixture} from './task-fixture-revision';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash,randomUUID} from 'node:crypto';
@@ -37,7 +38,8 @@ test('generated project API stores real typed units, preserves v1 receipts and n
  const sessions={owner:randomUUID(),member:randomUUID(),outsider:randomUUID(),reviewer:randomUUID()},origin='http://localhost:4180',prefix=`companies/${company}/studio`;
  type Actor=keyof typeof sessions|'anonymous';
  async function call(path:string,method='GET',payload?:unknown,expected=200,actor:Actor='owner'){
-  const headers:Record<string,string>={Origin:origin};if(actor!=='anonymous')headers.Cookie=`coatria_session=${sessions[actor]}`;if(payload!==undefined)headers['Content-Type']='application/json';
+  payload=await currentTaskPatchForFixture(path,method,payload);
+    const headers:Record<string,string>={Origin:origin};if(actor!=='anonymous')headers.Cookie=`coatria_session=${sessions[actor]}`;if(payload!==undefined)headers['Content-Type']='application/json';
   const response=await handleApi(new Request(`${origin}/api/${path}`,{method,headers,...payload===undefined?{}:{body:JSON.stringify(payload)}}),path.split('?')[0].split('/'));
   const result=await response.json();assert.equal(response.status,expected,`${method} ${path}: ${JSON.stringify(result)}`);return result;
  }

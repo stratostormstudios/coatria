@@ -1,3 +1,4 @@
+import {currentTaskPatchForFixture} from './task-fixture-revision';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash,randomUUID} from 'node:crypto';
@@ -52,7 +53,7 @@ test('actual creative project APIs enforce the graph, finite dispatch, real arti
  const company=randomUUID(),foreign=randomUUID(),owner=randomUUID(),reviewer=randomUUID(),outsider=randomUUID(),sessions={owner:randomUUID(),reviewer:randomUUID(),outsider:randomUUID()},origin='http://localhost:4180',base=`companies/${company}/studio`;
  const agents:Record<string,{id:string;token:string;installationId:string}>={};let projectId='',parent:any,child:any,artifactId='';
  const oldFetch=globalThis.fetch;let outbound=0;globalThis.fetch=async()=>{outbound++;throw Error('Creative pipeline fixture must not contact a provider or storage server.');};
- async function call(path:string,method='GET',payload?:unknown,actor='owner',expected=200){const headers:Record<string,string>={Origin:origin};if(agents[actor])headers.Authorization='Bearer '+agents[actor].token;else if(actor in sessions)headers.Cookie='coatria_session='+sessions[actor as keyof typeof sessions];if(payload!==undefined)headers['Content-Type']='application/json';const response=await handleApi(new Request(origin+'/api/'+path,{method,headers,...payload===undefined?{}:{body:JSON.stringify(payload)}}),path.split('?')[0].split('/'));const value=await response.json();assert.equal(response.status,expected,`${method} ${path}: ${JSON.stringify(value)}`);return value;}
+ async function call(path:string,method='GET',payload?:unknown,actor='owner',expected=200){payload=await currentTaskPatchForFixture(path,method,payload);const headers:Record<string,string>={Origin:origin};if(agents[actor])headers.Authorization='Bearer '+agents[actor].token;else if(actor in sessions)headers.Cookie='coatria_session='+sessions[actor as keyof typeof sessions];if(payload!==undefined)headers['Content-Type']='application/json';const response=await handleApi(new Request(origin+'/api/'+path,{method,headers,...payload===undefined?{}:{body:JSON.stringify(payload)}}),path.split('?')[0].split('/'));const value=await response.json();assert.equal(response.status,expected,`${method} ${path}: ${JSON.stringify(value)}`);return value;}
  const detail=async():Promise<StudioProjectDetail>=>call(`${base}/projects/${projectId}`);
  const work=async(stage:string)=>(await detail()).workItems.find(item=>item.stage===stage)!;
  const taskPath=(item:StudioWorkItem)=>`companies/${company}/tasks/${item.taskId}`;

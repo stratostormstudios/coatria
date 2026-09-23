@@ -6,7 +6,7 @@ import {database,query,transaction} from '../src/lib/db';
 import {memberMutation} from '../src/lib/company';
 import type {Membership} from '../src/lib/auth';
 import {hashToken} from '../src/lib/security';
-import {createStudioHostProvisionPlan,startStudioHostProvision,stopStudioHostProvision,getStudioHostProvision,listStudioHostProvisions,reconcileStudioHostProvision,studioCpuPreset,studioCpuReadiness} from '../src/lib/studio-host-provisioning';
+import {createStudioHostProvisionPlan,startStudioHostProvision,stopStudioHostProvision,getStudioHostProvision,listStudioHostProvisions,reconcileStudioHostProvision,reconcileStudioHostProvisions,studioCpuPreset,studioCpuReadiness} from '../src/lib/studio-host-provisioning';
 import {studioHostProvisionPlanInput,studioHostProvisionStartInput} from '../src/lib/studio-host-provisioning-protocol';
 import {buildStudioBootstrap} from '../scripts/hosting/build-studio-bootstrap.mjs';
 
@@ -53,6 +53,39 @@ test('managed CPU saga uses actual transactions and fake Runpod transport withou
  }
  const reconcile=(provisionId:string,provider:ReturnType<typeof transportFixture>)=>reconcileStudioHostProvision(provisionId,{fetch:provider.transport});
  try{
+  await t.test('fleet batches prioritize shutdowns and rotate deterministically within each priority class',async()=>{
+   const provider=transportFixture(),ids:string[]=[];provider.setStopConfirmed(false);
+   const batch=async()=>{const result=await reconcileStudioHostProvisions(2,{fetch:provider.transport});return result.results.map(item=>{assert('provision'in item&&item.provision&&typeof item.provision==='object');assert('id'in item.provision&&typeof item.provision.id==='string');return item.provision.id;});};
+   try{
+    for(let i=0;i<9;i++){const a=await fixture(),p=(await a.plan()).provision;await a.start(p);await reconcile(p.id,provider);ids.push(p.id);provider.pods.at(-1).status='RUNNING';}
+    const [healthyA,healthyB,healthyOld,expiredUnseen,expiredOld,requestedA,requestedB,leased,terminal]=ids;
+    // Ordinary polling has older work than the shutdowns, including two never
+    // polled rows. A timestamp tie deliberately exercises the UUID tie-breaker.
+    await query("UPDATE studio_host_provisions SET phase='running',last_reconciled_at='2000-01-01T00:00:00Z' WHERE id=ANY($1::uuid[])",[ids]);
+    await query('UPDATE studio_host_provisions SET last_reconciled_at=NULL WHERE id=ANY($1::uuid[])',[[healthyA,healthyB,expiredUnseen]]);
+    await query("UPDATE studio_host_provisions SET expires_at=clock_timestamp()-interval '1 minute' WHERE id=ANY($1::uuid[])",[[expiredUnseen,expiredOld]]);
+    await query("UPDATE studio_host_provisions SET last_reconciled_at='2020-01-01T00:00:00Z' WHERE id=$1",[expiredOld]);
+    await query("UPDATE studio_host_provisions SET stop_requested_at=clock_timestamp(),last_reconciled_at='2021-01-01T00:00:00Z' WHERE id=ANY($1::uuid[])",[[requestedA,requestedB]]);
+    await query("UPDATE studio_host_provisions SET stop_requested_at=clock_timestamp(),lease_id=$2,lease_expires_at=clock_timestamp()+interval '1 hour' WHERE id=$1",[leased,randomUUID()]);
+    await query("UPDATE studio_host_provisions SET phase='stopped',stop_requested_at=clock_timestamp() WHERE id=$1",[terminal]);
+    provider.calls.length=0;
+    assert.deepEqual(await batch(),[expiredUnseen,expiredOld]);
+    assert.deepEqual(await batch(),[requestedA,requestedB].sort());
+    // Unconfirmed stops remain eligible, but one failing stop cannot monopolize
+    // the batch ahead of other pending shutdowns with an older reconciliation.
+    assert.deepEqual(await batch(),[expiredUnseen,expiredOld]);
+    assert.equal(provider.stops(),6);
+    assert(provider.calls.every(call=>!call.path.includes(provider.pods[7].id)&&!call.path.includes(provider.pods[8].id)));
+    const urgent=[expiredUnseen,expiredOld,requestedA,requestedB];
+    for(const pod of provider.pods)if(urgent.some(id=>pod.name==='coatria-cpu-'+id))pod.status='EXITED';
+    assert.deepEqual(await batch(),[requestedA,requestedB].sort());
+    assert.deepEqual(await batch(),[expiredUnseen,expiredOld]);
+    assert.deepEqual(await batch(),[healthyA,healthyB].sort());
+    assert.equal((await batch())[0],healthyOld);
+    assert.equal(provider.creates(),0,'Batch polling never submits another paid create');
+    assert.equal(provider.stops(),6,'Terminal readback and healthy polls issue no stop');
+   }finally{await query("UPDATE studio_host_provisions SET phase='stopped',lease_id=NULL,lease_expires_at=NULL WHERE id=ANY($1::uuid[])",[ids]);}
+  });
   await t.test('review is tenant scoped, idempotent, non-billing and explicit about configuration readiness',async()=>{
    const a=await fixture(),b=await fixture(),p=await a.plan();assert.equal(p.provision.phase,'planned');assert.equal(p.provision.readiness.ready,true);assert.equal((await a.plan()).provision.id,p.provision.id);assert.equal((await a.plan()).replayed,true);await assert.rejects(a.plan({...a.planInput,durationMinutes:30}),/already used/);await assert.rejects(transaction(c=>getStudioHostProvision(c,b.companyId,p.provision.id)),/not found/);
    await query("UPDATE memberships SET role='member' WHERE company_id=$1 AND user_id=$2",[a.companyId,a.userId]);await assert.rejects(a.plan(),/administrator|permission|access/i);await query("UPDATE memberships SET role='owner' WHERE company_id=$1 AND user_id=$2",[a.companyId,a.userId]);

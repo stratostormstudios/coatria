@@ -53,7 +53,8 @@ Compatibility only: `POST /api/companies/:id/messages` accepts `{roomId?:UUID|nu
 ## Work
 
 - POST /api/companies/:id/tasks `{title,description,assigneeId?:string|null}` -> `{task}`.
-- PATCH /api/companies/:id/tasks/:taskId `{status?:'todo'|'doing'|'review'|'done',title?,description?,assigneeId?,submissionUrl?,reviewNote?}` -> `{task}`. Accepting done requires different reviewer with admin/owner role; cannot approve own work. Task `{id,title,description,status,assigneeId,createdBy,submissionUrl,reviewNote,createdAt,updatedAt}`.
+- GET /api/companies/:id/tasks/:taskId -> `{task}` for a current company member. Includes the same `revision` returned by task creation, update and workspace snapshots.
+- PATCH /api/companies/:id/tasks/:taskId `{expectedRevision,status?:'todo'|'doing'|'review'|'done',title?,description?,assigneeId?,submissionUrl?,reviewNote?}` -> `{task}`. Every mutation requires the positive integer revision read by the caller. Comparison, task change, authorship and activity happen in one locked transaction; stale writes return `409 TASK_REVISION_CONFLICT` with no changes. Accepting done requires a different admin/owner who did not perform or sponsor the work and permits only `expectedRevision`, `status` and `reviewNote`. Studio/media guards still apply. Task `{id,title,description,status,revision,assigneeId,createdBy,submissionUrl,submissionSummary,reviewNote,submittedBy,submittedAgentId,approvedBy,approvedAgentId,machineReviewId,authorIds,createdAt,updatedAt}`. After a conflict, reload and inspect the new submission; never attach a newer revision to an old acceptance. After an uncertain response, read and reconcile before deciding whether another action is needed. Human task endpoints use session authentication; external agents retain the scoped, leased task tools and cannot accept contributions here.
 
 ## Portable skills
 - GET /api/vault -> `{skills}`. Skill `{id,title,description,content,version,updatedAt}` strictly personal.

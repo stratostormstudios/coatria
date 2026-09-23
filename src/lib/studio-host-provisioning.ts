@@ -147,4 +147,11 @@ export async function reconcileStudioHostProvision(provisionId:string,dependenci
   return await save({phase:pod.status==='RUNNING'?'running':pod.status==='ERROR'?'needs_attention':'provisioning',podId:pod.id,providerStatus:pod.status,errorCode:pod.status==='ERROR'?'CPU_PROVIDER_ERROR':null});
  }catch(error){const code=typeof(error as any)?.code==='string'&&(error as any).code.startsWith('CPU_')?(error as any).code:'CPU_PROVIDER_UNCONFIRMED';return await save({phase:submitted?['CPU_IDENTITY_MISMATCH','CPU_DUPLICATE_IDENTITY'].includes(code)?'needs_attention':row.stop_requested_at?'stopping':'uncertain':'failed',errorCode:code});}
 }
-export async function reconcileStudioHostProvisions(limit=5,dependencies:StudioCpuDependencies={}){const tx=dependencies.transaction??transaction;const ids=await tx(async client=>(await client.query("SELECT id FROM studio_host_provisions WHERE phase IN ('approved','submitting','uncertain','provisioning','running','stopping','needs_attention') AND (lease_expires_at IS NULL OR lease_expires_at<=clock_timestamp()) ORDER BY last_reconciled_at NULLS FIRST,id LIMIT $1",[Math.min(10,Math.max(1,limit))])).rows.map(row=>row.id));const results=[];for(const provisionId of ids)results.push(await reconcileStudioHostProvision(provisionId,dependencies));return{results};}
+export async function reconcileStudioHostProvisions(limit=5,dependencies:StudioCpuDependencies={}){
+ const tx=dependencies.transaction??transaction;
+ // Shutdowns must not wait behind a fleet of ordinary polls. Within each class,
+ // least-recently reconciled rows rotate first; UUID resolves timestamp ties.
+ // A statement-stable clock gives every row the same expiry cutoff.
+ const ids=await tx(async client=>(await client.query("SELECT id FROM studio_host_provisions WHERE phase IN ('approved','submitting','uncertain','provisioning','running','stopping','needs_attention') AND (lease_expires_at IS NULL OR lease_expires_at<=clock_timestamp()) ORDER BY CASE WHEN stop_requested_at IS NOT NULL OR expires_at<=statement_timestamp() THEN 0 ELSE 1 END,last_reconciled_at NULLS FIRST,id LIMIT $1",[Math.min(10,Math.max(1,limit))])).rows.map(row=>row.id));
+ const results=[];for(const provisionId of ids)results.push(await reconcileStudioHostProvision(provisionId,dependencies));return{results};
+}
