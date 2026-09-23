@@ -81,8 +81,39 @@ export async function recordStudioInferenceToolReceipt(client:PoolClient,identit
 
 function untilAborted<T>(call:()=>Promise<T>,signal:AbortSignal):Promise<T>{signal.throwIfAborted();return new Promise((resolve,reject)=>{const abort=()=>reject(signal.reason??new Error('Inference request expired'));signal.addEventListener('abort',abort,{once:true});Promise.resolve().then(call).then(resolve,reject).finally(()=>signal.removeEventListener('abort',abort));});}
 async function provider(path:string,method:string,payload:unknown,transport:typeof fetch,signal:AbortSignal,timeoutMs=10000){signal=AbortSignal.any([signal,AbortSignal.timeout(timeoutMs)]);if(!studioInferenceConfigured())fail(503,'Server inference is unavailable.','INFERENCE_UNAVAILABLE');const response=await untilAborted(()=>transport('https://api.runpod.ai/v2/'+path,{method,headers:{Authorization:'Bearer '+process.env.MANAGED_RUNPOD_API_KEY,...payload===undefined?{}:{'Content-Type':'application/json'}},...payload===undefined?{}:{body:bounded(payload)},redirect:'error',cache:'no-store',signal}),signal);if(!response.ok){void response.body?.cancel().catch(()=>{});fail(503,'Provider inference state was not confirmed.','INFERENCE_PROVIDER_UNCONFIRMED');}const reader=response.body?.getReader();if(!reader)fail(503,'Empty provider result.','INFERENCE_PROVIDER_UNCONFIRMED');const chunks:Uint8Array[]=[];let size=0;for(;;){let part:ReadableStreamReadResult<Uint8Array>;try{part=await untilAborted(()=>reader.read(),signal);}catch(error){void reader.cancel().catch(()=>{});throw error;}if(part.done)break;size+=part.value.length;if(size>1048576){void reader.cancel().catch(()=>{});fail(503,'Provider result is too large.','INFERENCE_PROVIDER_UNCONFIRMED');}chunks.push(part.value);}try{return JSON.parse(Buffer.concat(chunks).toString());}catch{fail(503,'Invalid provider result.','INFERENCE_PROVIDER_UNCONFIRMED');}}
-function completion(row:Row,job:Row){if(!job||typeof job.id!=='string'||!providerId.test(job.id)||row.provider_job_id&&row.provider_job_id!==job.id)fail(503,'Provider job identity changed.','INFERENCE_PROVIDER_IDENTITY');if(job.status==='COMPLETED'){if(job.error)fail(503,'Provider completion contains an error.','INFERENCE_OUTPUT_INVALID');const output=Array.isArray(job.output)?job.output.length===1?job.output[0]:null:job.output;bounded(output);if(!output||output.error)fail(503,'Provider output contains an error.','INFERENCE_OUTPUT_INVALID');const normalized=normalize(output,'chat'),used=usageTokens(output,'chat'),allowed=new Set((row.request_body.tools??[]).map((tool:any)=>tool.function.name)),calls:any[]=[];
-  if(output.usage.completion_tokens>row.limits.maxOutputTokens||used>row.reserved_tokens||normalized.calls.length>8||!normalized.calls.length&&(!normalized.text||normalized.text.length>12000))fail(503,'Provider result exceeds the approved output limits.','INFERENCE_OUTPUT_INVALID');const priorCalls=row.request_body.messages.flatMap((message:Row)=>message.role==='assistant'&&Array.isArray(message.tool_calls)?message.tool_calls:[]);if(priorCalls.length+normalized.calls.length>64)fail(503,'The run tool-call allowance was exceeded.','INFERENCE_OUTPUT_INVALID');const seen=new Set(priorCalls.map((call:Row)=>call.id));for(const raw of normalized.calls){if(typeof raw.id!=='string'||!/^[-a-zA-Z0-9_]{1,120}$/.test(raw.id)||seen.has(raw.id)||!allowed.has(raw.name)||!AGENT_TOOLS[raw.name])fail(503,'Provider requested an unsupported tool.','INFERENCE_OUTPUT_INVALID');seen.add(raw.id);let args=raw.args;if(typeof args==='string'){try{args=JSON.parse(args);}catch{fail(503,'Provider tool arguments are invalid.','INFERENCE_OUTPUT_INVALID');}}if(!AGENT_TOOLS[raw.name].schema.safeParse(args).success)fail(503,'Provider tool arguments are outside the approved schema.','INFERENCE_OUTPUT_INVALID');calls.push({id:raw.id,name:raw.name,args});}return{status:'succeeded',output,calls,used};}
+type CompletionFailureReason='provider_error'|'response_shape'|'response_size'|'normalization'|'usage'|'output_limits'|'tool_count'|'tool_identity'|'tool_name'|'tool_arguments_json'|'tool_arguments_schema';
+function completion(row:Row,job:Row){
+ if(!job||typeof job.id!=='string'||!providerId.test(job.id)||row.provider_job_id&&row.provider_job_id!==job.id)fail(503,'Provider job identity changed.','INFERENCE_PROVIDER_IDENTITY');
+ if(job.status==='COMPLETED'){
+  let reason:CompletionFailureReason='provider_error';
+  try{
+   if(job.error)fail(503,'Provider completion contains an error.','INFERENCE_OUTPUT_INVALID');
+   reason='response_shape';const output=Array.isArray(job.output)?job.output.length===1?job.output[0]:null:job.output;
+   if(!output||typeof output!=='object'||Array.isArray(output))fail(503,'Provider output is not an object.','INFERENCE_OUTPUT_INVALID');
+   reason='provider_error';if(output.error)fail(503,'Provider output contains an error.','INFERENCE_OUTPUT_INVALID');
+   reason='response_size';bounded(output);
+   reason='normalization';const normalized=normalize(output,'chat');
+   reason='usage';const used=usageTokens(output,'chat');
+   reason='output_limits';if(output.usage.completion_tokens>row.limits.maxOutputTokens||used>row.reserved_tokens||!normalized.calls.length&&(!normalized.text||normalized.text.length>12000))fail(503,'Provider result exceeds the approved output limits.','INFERENCE_OUTPUT_INVALID');
+   reason='tool_count';const priorCalls=row.request_body.messages.flatMap((message:Row)=>message.role==='assistant'&&Array.isArray(message.tool_calls)?message.tool_calls:[]);if(normalized.calls.length>8||priorCalls.length+normalized.calls.length>64)fail(503,'The run tool-call allowance was exceeded.','INFERENCE_OUTPUT_INVALID');
+   const allowed=new Set((row.request_body.tools??[]).map((tool:any)=>tool.function.name)),seen=new Set(priorCalls.map((call:Row)=>call.id)),calls:any[]=[];
+   for(const raw of normalized.calls){
+    reason='tool_identity';if(typeof raw.id!=='string'||!/^[-a-zA-Z0-9_]{1,120}$/.test(raw.id)||seen.has(raw.id))fail(503,'Provider requested an invalid or duplicate tool identity.','INFERENCE_OUTPUT_INVALID');seen.add(raw.id);
+    reason='tool_name';if(!allowed.has(raw.name)||!AGENT_TOOLS[raw.name])fail(503,'Provider requested an unsupported tool.','INFERENCE_OUTPUT_INVALID');
+    reason='tool_arguments_json';let args=raw.args;if(typeof args==='string')args=JSON.parse(args);
+    reason='tool_arguments_schema';if(!AGENT_TOOLS[raw.name].schema.safeParse(args).success)fail(503,'Provider tool arguments are outside the approved schema.','INFERENCE_OUTPUT_INVALID');
+    calls.push({id:raw.id,name:raw.name,args});
+   }
+   return{status:'succeeded',output,calls,used};
+  }catch{
+   // Only fixed categories and database identities enter server diagnostics.
+   // Never retain output, tool names/arguments, provider errors or parser text.
+   console.warn(JSON.stringify({event:'studio_inference_output_invalid',inferenceId:row.id,runId:row.run_id,step:row.step,reason}));
+   // A matching provider job is terminal. Keep its reservation, but do not
+   // poll it as an ambiguous transport failure or submit another paid request.
+   return{status:'failed',output:null,calls:[],used:null,error:'INFERENCE_OUTPUT_INVALID'};
+  }
+ }
  if(['IN_QUEUE','IN_PROGRESS','FAILED','CANCELLED','TIMED_OUT'].includes(job.status))return{status:({IN_QUEUE:'queued',IN_PROGRESS:'running',FAILED:'failed',CANCELLED:'cancelled',TIMED_OUT:'expired'} as Record<string,string>)[job.status],output:null,calls:[],used:null};fail(503,'Provider returned an unsupported job state.','INFERENCE_PROVIDER_UNCONFIRMED');}
 export async function reconcileStudioInferenceJob(inferenceId:string,dependencies:StudioInferenceDependencies={}){
  id(inferenceId);const tx=dependencies.transaction??transaction,transport=dependencies.fetch??fetch,leaseId=randomUUID(),signal=AbortSignal.timeout(Math.max(1,Math.min(25000,dependencies.reconcileTimeoutMs??25000))),requestTimeout=Math.max(1,Math.min(10000,dependencies.requestTimeoutMs??10000));

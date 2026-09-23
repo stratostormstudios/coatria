@@ -94,8 +94,32 @@ test('broker runs real leased API and receipt transactions against isolated prov
     const context=JSON.parse(sent.input.openai_input.messages.at(-1).content);assert.equal(context.transportCredentialsOmitted,true);if(name==='storage_upload_reserve')assert.equal(context.upload.versionId,versionId);else assert.equal(context.access.sha256,'a'.repeat(64));assert.deepEqual(returned,raw);
    }
   });
-  await t.test('malformed or over-budget completions retain job identity and unsettled reservation for cleanup',async()=>{
-   const f=await fixture(),bad=final('No valid usage');delete (bad as any).usage;const p=providerFixture([bad]),job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;await reconcileStudioInferenceJob(job.id,{fetch:p.transport});const row=(await query('SELECT * FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0];assert.equal(row.status,'uncertain');assert.match(row.provider_job_id,/^fixture-/);assert.equal(row.used_tokens,null);assert.equal(row.output,null);await cancelStudioInference(f.identity,f.run.id,job.id,{leaseToken:f.lease.leaseToken,requestId:randomUUID()});await reconcileStudioInferenceJob(job.id,{fetch:p.transport});assert.equal((await query('SELECT status FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0].status,'cancelled');
+  await t.test('known completed invalid output fails once without duplicate submission, polling, tool execution or reservation release',async()=>{
+   const privateText='synthetic-provider-private-output-never-return';
+   const missingUsage=final(privateText);delete (missingUsage as any).usage;
+   const truncated=final(privateText);truncated.choices[0].finish_reason='length';
+   const badUsage=final(privateText);(badUsage.usage as any).completion_tokens='untrusted';
+   const overBudget=final(privateText);overBudget.usage.completion_tokens=2049;
+   const invalidArguments=tool('tasks_create',{title:privateText});invalidArguments.choices[0].message.tool_calls[0].function.arguments='{"title":';
+   const outsideSchema=tool('tasks_create',{title:42,privateText});
+   const providerError={...final(privateText),error:privateText},unknownTool=tool(privateText,{title:privateText}),badToolId=tool('tasks_create',{title:privateText},privateText+'/invalid');
+   const tooManyTools=tool('tasks_create',{title:privateText});tooManyTools.choices[0].message.tool_calls=Array.from({length:9},(_,index)=>({...tooManyTools.choices[0].message.tool_calls[0],id:'call-'+index}));
+   const cases:Array<[unknown,string]>=[[missingUsage,'usage'],[truncated,'normalization'],[badUsage,'usage'],[overBudget,'output_limits'],[invalidArguments,'tool_arguments_json'],[outsideSchema,'tool_arguments_schema'],[privateText,'response_shape'],[providerError,'provider_error'],[unknownTool,'tool_name'],[badToolId,'tool_identity'],[tooManyTools,'tool_count']];
+   const diagnostics:unknown[][]=[],originalWarn=console.warn;console.warn=(...values:unknown[])=>{diagnostics.push(values);};
+   try{for(const queuedFirst of [false,true])for(const [output,reason] of cases){
+    const diagnosticsBefore=diagnostics.length;
+    const f=await fixture(),p=providerFixture([output]),input=f.input(),job=(await submitStudioInference(f.identity,f.run.id,input)).inference;
+    const reserved=await transaction(client=>studioInferenceReserved(client,f.company));assert(reserved>0);
+    if(queuedFirst){p.setStatus('IN_QUEUE');await reconcileStudioInferenceJob(job.id,{fetch:p.transport});p.setStatus('COMPLETED');}
+    await reconcileStudioInferenceJob(job.id,{fetch:p.transport});
+    const row=(await query('SELECT * FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0];assert.equal(row.status,'failed');assert.equal(row.error_code,'INFERENCE_OUTPUT_INVALID');assert.match(row.provider_job_id,/^fixture-/);assert(row.submitted_at);assert.equal(row.used_tokens,null);assert(row.reserved_tokens>0);assert.equal(row.output,null);assert.deepEqual(row.model_calls,[]);
+    assert.equal(diagnostics.length,diagnosticsBefore+1);assert.equal(diagnostics.at(-1)!.length,1);assert.deepEqual(JSON.parse(String(diagnostics.at(-1)![0])),{event:'studio_inference_output_invalid',inferenceId:job.id,runId:f.run.id,step:0,reason});assert(!JSON.stringify(diagnostics.at(-1)).includes(privateText));
+    const read=await readStudioInference(f.identity,f.run.id,job.id,f.lease.leaseToken);assert.equal(read.inference.errorCode,'INFERENCE_OUTPUT_INVALID');assert(!JSON.stringify(read).includes(privateText));assert(!Object.hasOwn(read.inference,'output'));
+    const replay=await submitStudioInference(f.identity,f.run.id,input);assert.equal(replay.replayed,true);assert.equal(replay.inference.id,job.id);assert.equal(replay.inference.status,'failed');
+    await assert.rejects(submitStudioInference(f.identity,f.run.id,f.input(1)),/previous|prior|completed|succeeded/i);
+    const calls=p.calls.length;assert.equal((await reconcileStudioInferenceJob(job.id,{fetch:p.transport})).skipped,true);const cancelled=await cancelStudioInference(f.identity,f.run.id,job.id,{leaseToken:f.lease.leaseToken,requestId:randomUUID()});assert.equal(cancelled.replayed,true);assert.equal(cancelled.inference.status,'failed');assert.equal((await reconcileStudioInferenceJob(job.id,{fetch:p.transport})).skipped,true);
+    assert.equal(p.calls.length,calls);assert.equal(p.creates(),1);assert.equal(await transaction(client=>studioInferenceReserved(client,f.company)),reserved);assert.equal(diagnostics.length,diagnosticsBefore+1);
+   }}finally{console.warn=originalWarn;}
   });
   await t.test('downloadable worker adapter executes three real broker steps and leaves the task in independent human review',async()=>{
    const f=await fixture({tokens:20000}),sent:any[]=[];
@@ -142,7 +166,7 @@ test('broker runs real leased API and receipt transactions against isolated prov
    }
   });
   await t.test('strict provider identity and error fields are rejected; transient status reads preserve a known pending job',async()=>{
-   for(const bad of [{status:'COMPLETED',output:final('No ID')},{id:12,status:'COMPLETED',output:final('Numeric ID')},{id:'error-'+randomUUID(),status:'COMPLETED',output:{...final('Conflicting error'),error:'synthetic'}}]){const f=await fixture(),job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;await reconcileStudioInferenceJob(job.id,{fetch:async()=>Response.json(bad)});const row=(await query('SELECT status,output FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0];assert.equal(row.status,'uncertain');assert.equal(row.output,null);}
+   for(const bad of [{status:'COMPLETED',output:final('No ID')},{id:12,status:'COMPLETED',output:final('Numeric ID')},{id:'error-'+randomUUID(),status:'COMPLETED',output:{...final('Conflicting error'),error:'synthetic'}}]){const f=await fixture(),job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;await reconcileStudioInferenceJob(job.id,{fetch:async()=>Response.json(bad)});const row=(await query('SELECT status,output FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0];assert.equal(row.status,typeof bad.id==='string'?'failed':'uncertain');assert.equal(row.output,null);}
    const f=await fixture(),p=providerFixture();p.setStatus('IN_QUEUE');const job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;await reconcileStudioInferenceJob(job.id,{fetch:p.transport});await reconcileStudioInferenceJob(job.id,{fetch:async()=>Response.json({error:'Temporary read failure'},{status:503})});assert.equal((await readStudioInference(f.identity,f.run.id,job.id,f.lease.leaseToken)).inference.status,'queued');assert.equal(p.creates(),1);let statusTimeoutCalls=0;await reconcileStudioInferenceJob(job.id,{requestTimeoutMs:20,reconcileTimeoutMs:5000,fetch:async()=>{statusTimeoutCalls++;return new Promise<Response>(()=>{});}});assert.equal(statusTimeoutCalls,1);assert.equal((await readStudioInference(f.identity,f.run.id,job.id,f.lease.leaseToken)).inference.status,'queued');p.setStatus('COMPLETED');await reconcileStudioInferenceJob(job.id,{fetch:p.transport});assert.equal((await readStudioInference(f.identity,f.run.id,job.id,f.lease.leaseToken)).inference.status,'succeeded');
   });
  }finally{globalThis.fetch=realFetch;for(const company of companies)await query('DELETE FROM companies WHERE id=$1',[company]);for(const user of users)await query('DELETE FROM users WHERE id=$1',[user]);await database().end();delete (globalThis as any).coatriaPool;await stop?.();for(const[key,value]of Object.entries(before))if(value===undefined)delete process.env[key];else process.env[key]=value;}

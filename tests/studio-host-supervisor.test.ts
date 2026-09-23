@@ -77,6 +77,17 @@ test('explicit inference broker mode runs a hosted specialist without forwarding
  }finally{await f.remove();}
 });
 
+test('terminal broker failure stops one execution and retains only safe run diagnostics in host logs',async()=>{
+ const f=await fixture();let inferenceCalls=0,failed:any,runId:string|undefined;
+ try{
+  const clients=clientFactory(f.bundles,item=>{const base=jobClient(item,{fail:async(_id:string,payload:any)=>{failed=payload;f.control.abort();return{run:{status:'failed'}};}});return{...base,listTools:async()=>({tools:[]}),submitInference:async(id:string,payload:any)=>{runId=id;inferenceCalls++;return{inference:{id:randomUUID(),runId:id,step:payload.step,status:'failed',deadlineAt:new Date(Date.now()+60000).toISOString(),errorCode:'INFERENCE_OUTPUT_INVALID',error:secret}};}};});
+  const result=await runStudioHost({...f.options,settings:{...settings,COATRIA_INFERENCE_MODE:'coatria_broker_v1'},clientFactory:clients});
+  assert.equal(result.cleanupComplete,true);assert.equal(inferenceCalls,1);assert.equal(failed.retryable,false);assert.match(failed.error,/INFERENCE_OUTPUT_INVALID/);
+  assert.deepEqual(f.events.find(row=>row.event==='adapter-failed'),{at:f.events.find(row=>row.event==='adapter-failed').at,event:'adapter-failed',runId,code:'INFERENCE_OUTPUT_INVALID'});
+  assert.equal(f.events.find(row=>row.event==='failure-recorded').status,'failed');assert(!JSON.stringify(f.events).includes(secret));assert(f.events.every(row=>Object.keys(row).every(key=>['at','event','runId','code','status'].includes(key))));
+ }finally{await f.remove();}
+});
+
 test('failed broker renewal aborts inference and keeps the uncertain journal without duplicate execution',async()=>{
  const f=await fixture();let renewals=0,executions=0;const original=f.broker.credentials;
  f.broker.credentials=async(body:any)=>{if(++renewals>1&&executions>0)throw new RuntimeError(401,'HOST_UNAVAILABLE');return original(body);};

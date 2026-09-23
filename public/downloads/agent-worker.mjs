@@ -9,16 +9,30 @@ import {parseArgs} from 'node:util';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const terminalCodes=new Set(['RUN_LEASE_LOST','RUN_CANCELLED','COORDINATION_AUTHORITY_ENDED','STUDIO_REVIEW_AUTHORITY_ENDED']);
-// A trusted local Claude adapter can mark an unreplayable outcome terminal.
+// Failure of external execution is not evidence that replay is safe.
 // Never copy arbitrary Error.message, code, stack, cause or CLI diagnostics.
 const terminalClaudeFailures=new Set(['CLAUDE_REPLAY_UNSAFE','CLAUDE_CONFIGURATION','CLAUDE_CONTEXT_LIMIT','CLAUDE_TOOL_CATALOG','CLAUDE_START_FAILED','CLAUDE_CANCELLED','CLAUDE_TIMEOUT','CLAUDE_TOKEN_LIMIT','CLAUDE_OUTPUT_LIMIT','CLAUDE_PROTOCOL_INVALID','CLAUDE_MCP_UNAVAILABLE','CLAUDE_TOOL_SCOPE','CLAUDE_RESULT_INVALID','CLAUDE_TURN_LIMIT','CLAUDE_COST_LIMIT','CLAUDE_EXIT_FAILED']);
+const inferenceFailureCodes=new Set(['INFERENCE_FAILED','INFERENCE_CANCELLED','INFERENCE_EXPIRED','INFERENCE_UNCERTAIN','INFERENCE_OUTPUT_INVALID','INFERENCE_CONTEXT_LIMIT','INFERENCE_DEADLINE','INFERENCE_HOST_UNAVAILABLE','INFERENCE_JOB_BUDGET','INFERENCE_LIMITS_INVALID','INFERENCE_MONEY_BUDGET','INFERENCE_PROVIDER_IDENTITY','INFERENCE_PROVIDER_UNCONFIRMED','INFERENCE_SEQUENCE','INFERENCE_SUBMISSION_UNCERTAIN','INFERENCE_TOKEN_BUDGET','INFERENCE_TOOL_MISMATCH','INFERENCE_TOOLS_PENDING','INFERENCE_UNAVAILABLE','INVALID_INFERENCE_RESPONSE','INVALID_INFERENCE_OUTPUT','NETWORK_ERROR']);
+const diagnosticCodes=new Set(['ADAPTER_FAILED',...terminalClaudeFailures,...inferenceFailureCodes]);
 function adapterFailure(error){
  let code;
  if(error&&typeof error==='object'){
   const own=key=>Object.getOwnPropertyDescriptor(error,key)?.value;
   if(own('name')==='ClaudeAdapterError'&&own('retryable')===false&&terminalClaudeFailures.has(own('code')))code=own('code');
+  else if(error instanceof RuntimeError&&inferenceFailureCodes.has(own('code')))code=own('code');
  }
- return code?{code,retryable:false,error:code==='CLAUDE_TOKEN_LIMIT'?'Claude Code reached the configured cumulative token limit, including cached context. Review the run limits and any committed actions before creating a new request.':`Claude Code stopped (${code}). Review the configuration and any committed actions before creating a new request; automatic replay was disabled.`}:{code:'ADAPTER_FAILED',error:'The external adapter failed. Inspect its private local diagnostics; external effects may require reconciliation.'};
+ return code?{code,retryable:false,error:code==='CLAUDE_TOKEN_LIMIT'?'Claude Code reached the configured cumulative token limit, including cached context. Review the run limits and any committed actions before creating a new request.':terminalClaudeFailures.has(code)?`Claude Code stopped (${code}). Review the configuration and any committed actions before creating a new request; automatic replay was disabled.`:`The agent stopped (${code}). Review the inference status and committed actions before creating a new request; automatic replay was disabled.`}:{code:'ADAPTER_FAILED',retryable:false,error:'The external adapter failed (ADAPTER_FAILED). Review the run actions and provider status before creating a new request; external effects may require reconciliation and automatic replay was disabled.'};
+}
+/** Only fixed codes, run identity and disposition may enter host diagnostics. */
+export function workerDiagnostic(entry){
+ if(!entry||typeof entry!=='object')return null;
+ const own=key=>Object.getOwnPropertyDescriptor(entry,key)?.value,event=own('event');
+ if(!['adapter-failed','failure-recorded','result-recorded','heartbeat-delayed'].includes(event))return null;
+ const result={event},runId=own('runId'),code=own('code'),status=own('status');
+ if(typeof runId==='string'&&UUID.test(runId))result.runId=runId;
+ if(event==='adapter-failed')result.code=diagnosticCodes.has(code)?code:'ADAPTER_FAILED';
+ if(['failure-recorded','result-recorded'].includes(event)&&['queued','running','succeeded','failed','cancelled'].includes(status))result.status=status;
+ return result;
 }
 const fingerprint=value=>createHash('sha256').update(value).digest('hex');
 export function stableRequestId(runId,key){
@@ -107,7 +121,7 @@ export function createRunInferenceClient({client,runId,leaseToken,signal,pollMs=
    if(!item||!UUID.test(item.id)||item.runId!==runId||item.step!==step||inferenceId&&item.id!==inferenceId||!Number.isFinite(Date.parse(item.deadlineAt)))throw new RuntimeError(502,'INVALID_INFERENCE_RESPONSE');
    inferenceId=item.id;
    if(item.status==='succeeded'){terminal=true;if(!item.output||typeof item.output!=='object'||Array.isArray(item.output))throw new RuntimeError(502,'INVALID_INFERENCE_OUTPUT');return item.output;}
-   if(['failed','cancelled','expired'].includes(item.status)){terminal=true;throw new RuntimeError(409,'INFERENCE_'+item.status.toUpperCase());}
+   if(['failed','cancelled','expired'].includes(item.status)){terminal=true;const code=item.status==='failed'&&inferenceFailureCodes.has(item.errorCode)?item.errorCode:'INFERENCE_'+item.status.toUpperCase();throw new RuntimeError(409,code);}
    if(item.status==='uncertain')throw new RuntimeError(409,'INFERENCE_UNCERTAIN');
    if(!['submitting','queued','running','cancel_requested'].includes(item.status)||Object.hasOwn(item,'output'))throw new RuntimeError(502,'INVALID_INFERENCE_RESPONSE');
    if(Date.parse(item.deadlineAt)<=Date.now())throw new RuntimeError(409,'INFERENCE_EXPIRED');
@@ -153,7 +167,8 @@ export function createAutonomyTicker(client,{now=()=>performance.now(),intervalM
   try{await client.autonomyTick(signal);return true;}catch(error){if(error instanceof RuntimeError&&error.status===404)return false;throw error;}finally{inFlight=false;}
  };
 }
-/** Execute one durable claim. Adapter work is cooperative and may be retried by the server.
+/** Execute one durable claim. External execution failures are terminal;
+ * only the same durable claim or outcome receipt may be reconciled on restart.
  * @param {{client:any,state:any,execute:(options:any)=>any,signal?:AbortSignal,heartbeatMs?:number,log?:(entry:Record<string,unknown>)=>void}} options
  */
 export async function workOnce({client,state,execute,signal,heartbeatMs=15000,log=()=>{}}){

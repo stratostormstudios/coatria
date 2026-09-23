@@ -59,6 +59,18 @@ test('terminal and foreign broker records cannot produce a result or start anoth
  await assert.rejects(()=>createRunInferenceClient({client,runId,leaseToken:lease,pollMs:0}).complete({step:0,requestId:stepKey(),timeoutMs:1000}),{code:'INVALID_INFERENCE_RESPONSE'});assert.equal(cancels,1);
 });
 
+test('failed broker output retains only allowlisted diagnostic codes and never retries the agent run',async()=>{
+ const secret='private-provider-error-never-copy';
+ for(const errorCode of ['INFERENCE_OUTPUT_INVALID','INFERENCE_PROVIDER_UNCONFIRMED',secret]){
+  const state={data:{workerId:'fixture-worker',claimId:null,job:null},save:async()=>{}},logs:any[]=[];let submits=0,reads=0,cancels=0,failed:any,terminal=false;
+  const runtime=context(),client={origin:'https://coatria.com',claim:async()=>terminal?{run:null}:{run:runtime.run,leaseToken:lease,leaseExpiresAt:new Date(Date.now()+60000).toISOString()},context:async()=>runtime,
+   submitInference:async()=>{submits++;return record('failed',{errorCode,error:secret,output:null});},readInference:async()=>{reads++;return record('succeeded');},cancelInference:async()=>{cancels++;},
+   fail:async(_id:string,payload:any)=>{failed=payload;assert.equal(payload.retryable,false);terminal=true;return{run:{status:'failed'}};},listTools:async()=>({tools:[tool]})};
+  const execute=createProviderExecutor({settings});await workOnce({client,state,execute,log:(entry:any)=>logs.push(entry)});assert.equal(await workOnce({client,state,execute}),false);
+  assert.equal(submits,1);assert.equal(reads,0);assert.equal(cancels,0);assert.equal(state.data.job,null);assert.equal(logs.find(row=>row.event==='adapter-failed').code,errorCode===secret?'INFERENCE_FAILED':errorCode);assert(!JSON.stringify(logs).includes(secret));assert(!failed.error.includes(secret));
+ }
+});
+
 test('lease cancellation uses its own short signal and stable cancel receipt without resubmission',async()=>{
  const control=new AbortController();let reads=0,cancels=0,submits=0;const client={submitInference:async()=>{submits++;return record();},readInference:async()=>{reads++;control.abort(new RuntimeError(409,'RUN_LEASE_LOST'));return new Promise(()=>{});},cancelInference:async(id:string,target:string,payload:any,signal:AbortSignal)=>{assert.equal(id,runId);assert.equal(target,inferenceId);assert.deepEqual(payload,{leaseToken:lease,requestId:stableRequestId(runId,'inference-cancel:0')});assert.equal(signal.aborted,false);cancels++;}};
  await assert.rejects(()=>createRunInferenceClient({client,runId,leaseToken:lease,signal:control.signal,pollMs:0}).complete({step:0,requestId:stepKey(),timeoutMs:1000}),{code:'RUN_LEASE_LOST'});assert.equal(submits,1);assert.equal(reads,1);assert.equal(cancels,1);
