@@ -40,10 +40,36 @@ async function assertDrained(config:Config,observations:Map<string,Observation>)
  assert.equal((await readdir(config.cgroupRoot)).filter(name=>name.startsWith('decoder-')).length,0);
 }
 function checkControls(observations:Map<string,Observation>,limits:MediaSandboxLimits){assert.ok(observations.size>0,'A real decoder must be observed inside its assigned cgroup.');for(const item of observations.values())assert.deepEqual(item.controls,{'memory.max':String(limits.memoryBytes),'memory.swap.max':'0','memory.oom.group':'1','pids.max':String(limits.pids),'cpu.max':`${limits.cpuQuotaMicros} ${limits.cpuPeriodMicros}`});}
-async function runObserved(config:Config,sandbox:QualifiedLinuxMediaSandbox,args:string[],options:{timeoutMs?:number;signal?:AbortSignal}={}){
+const boundaryFacts=['hostFileHidden','hostProcHidden','environmentClean','extraHandlesClosed','inputReadonly','rootReadonly','capabilitiesZero','noNewPrivileges','nestedUsernsDenied','localNetworkDenied','externalNetworkDenied','ipv6Denied'] as const;
+const boundaryNetwork=['interfacesLoopbackOnly','routableDefaultAbsent','apparmorChildStacked'] as const;
+const boundaryErrorCodes=new Set(['SANDBOX_UNAVAILABLE','INVALID_PROFILE','INPUT_INVALID','ABORTED','TIMEOUT','OUTPUT_LIMIT','PROCESS_FAILED','CLEANUP_FAILED']);
+const booleanFields=(value:unknown,keys:readonly string[])=>Object.fromEntries(keys.map(key=>[key,value&&typeof value==='object'&&typeof (value as Record<string,unknown>)[key]==='boolean'?(value as Record<string,unknown>)[key]:null]));
+/** A diagnostic projection only: never raw process output, paths, PIDs or errors. */
+export function mediaSandboxBoundaryObservation(observations:Map<string,Observation>,limits:MediaSandboxLimits,error:unknown=undefined){
+ const expected={'memory.max':String(limits.memoryBytes),'memory.swap.max':'0','memory.oom.group':'1','pids.max':String(limits.pids),'cpu.max':`${limits.cpuQuotaMicros} ${limits.cpuPeriodMicros}`};
+ return {diagnosticOnly:true,qualified:false,execution:error===undefined?'not_observed':error===null?'succeeded':'failed',executionCode:error===undefined||error===null?null:error instanceof MediaSandboxError&&boundaryErrorCodes.has(error.code)?error.code:'CANARY_ASSERTION_FAILED',observedGroups:Math.min(observations.size,256),observationsTruncated:observations.size>16,controls:[...observations.values()].slice(0,16).map(item=>({keysMatch:Object.keys(item.controls).length===Object.keys(expected).length&&Object.keys(item.controls).every(key=>Object.hasOwn(expected,key)),...Object.fromEntries(Object.entries(expected).map(([key,value])=>[key,item.controls[key]===value]))}))};
+}
+/** Original boundary assertions, with a fixed ID written before each check. */
+export function assertMediaSandboxBoundary(boundary:{stdout:string;error:unknown;observations:Map<string,Observation>},hostNamespaces:Record<string,string>,limits:MediaSandboxLimits,diagnostic:Record<string,unknown>){
+ Object.assign(diagnostic,mediaSandboxBoundaryObservation(boundary.observations,limits,boundary.error));
+ diagnostic.check='execution';assert.equal(boundary.error,null);
+ diagnostic.check='output_json';const lines=boundary.stdout.trim().split('\n').map(value=>JSON.parse(value));
+ diagnostic.outputLines=Math.min(lines.length,256);diagnostic.check='output_lines';assert.equal(lines.length,2);
+ const network=lines[0],facts=lines[1];diagnostic.network=booleanFields(network,boundaryNetwork);diagnostic.facts=booleanFields(facts,boundaryFacts);
+ diagnostic.namespaces=Object.fromEntries(namespaceNames.map(name=>{const value=facts?.namespaces?.[name];return[name,{valid:typeof value==='string'&&new RegExp('^'+name+':\\[\\d+\\]$').test(value),different:typeof value==='string'?value!==hostNamespaces[name]:null}];}));
+ for(const key of boundaryNetwork){diagnostic.check='network_'+key;assert.equal(network[key],true);}
+ for(const key of boundaryFacts){diagnostic.check='fact_'+key;assert.equal(facts[key],true,key);}
+ for(const name of namespaceNames){diagnostic.check='namespace_format_'+name;assert.match(facts.namespaces[name],new RegExp('^'+name+':\\[\\d+\\]$'));diagnostic.check='namespace_isolated_'+name;assert.notEqual(facts.namespaces[name],hostNamespaces[name],name);}
+ diagnostic.check='cgroup_presence';assert.ok(boundary.observations.size>0,'A real decoder must be observed inside its assigned cgroup.');
+ diagnostic.check='cgroup_controls';checkControls(boundary.observations,limits);
+ return {network,facts};
+}
+async function runObserved(config:Config,sandbox:QualifiedLinuxMediaSandbox,args:string[],options:{timeoutMs?:number;signal?:AbortSignal;diagnostic?:(check:'input_open'|'process_start'|'cgroup_observation'|'process_drain',observations:Map<string,Observation>,error?:unknown)=>void}={}){
+ const mark=(check:'input_open'|'process_start'|'cgroup_observation'|'process_drain',observations:Map<string,Observation>,error?:unknown)=>options.diagnostic?.(check,observations,error);
+ mark('input_open',new Map());
  const file=await open(fixture(config,'synthetic.png'),constants.O_RDONLY),observations=new Map<string,Observation>();let finished=false;
- try{const promise=sandbox.run({tool:'ffprobe',args,inputFd:file.fd,timeoutMs:options.timeoutMs??9000,signal:options.signal,maxOutputBytes:65536,maxStderrBytes:65536}).then(stdout=>({stdout,error:null}),error=>({stdout:'',error})).finally(()=>{finished=true;});
-  while(!finished){await observe(config,observations);await delay(10);}const outcome=await promise;await assertDrained(config,observations);return {...outcome,observations};
+ try{mark('process_start',observations);const promise=sandbox.run({tool:'ffprobe',args,inputFd:file.fd,timeoutMs:options.timeoutMs??9000,signal:options.signal,maxOutputBytes:65536,maxStderrBytes:65536}).then(stdout=>({stdout,error:null}),error=>({stdout:'',error})).finally(()=>{finished=true;});
+  while(!finished){mark('cgroup_observation',observations);await observe(config,observations);await delay(10);}const outcome=await promise;mark('process_drain',observations,outcome.error);await assertDrained(config,observations);return {...outcome,observations};
  }finally{await file.close();}
 }
 
@@ -68,15 +94,15 @@ export async function runMediaSandboxCanary(config:Config){
   checkpoint('conformance_profile');const events:MediaSandboxExitEvidence[]=[];report.adversarialEvents=events;const sandbox=await createLinuxMediaSandbox({...config.profiles.conformance,cgroupRoot:config.cgroupRoot,onExitEvidence:event=>events.push(event)});assert.equal(events.length,2);assert.ok(events.every(event=>event.drained));startingProfile=null;
   const limits=events[0].limits;
   checkpoint('label_parser');const labelCheck=await runObserved(config,sandbox,['label-check']);assert.equal(labelCheck.error,null);assert.equal(labelCheck.stdout.trim(),'label parser ok');
-  checkpoint('boundary');let connections=0;listener=createServer(socket=>{connections++;socket.end();});await new Promise<void>((resolve,reject)=>{listener!.once('error',reject);listener!.listen(0,'127.0.0.1',resolve);});const address=listener.address();assert.ok(address&&typeof address==='object');
-  await new Promise<void>((resolve,reject)=>{const socket=connect(address.port,'127.0.0.1');socket.once('error',reject);socket.once('end',resolve);});assert.equal(connections,1);connections=0;
+  checkpoint('boundary');const boundaryDiagnostic:Record<string,unknown>={diagnosticOnly:true,qualified:false,check:'host_listener_start'};report.boundaryDiagnostic=boundaryDiagnostic;
+  let connections=0;listener=createServer(socket=>{connections++;socket.end();});await new Promise<void>((resolve,reject)=>{listener!.once('error',reject);listener!.listen(0,'127.0.0.1',resolve);});const address=listener.address();boundaryDiagnostic.check='host_listener_address';assert.ok(address&&typeof address==='object');
+  boundaryDiagnostic.check='host_listener_positive_control';await new Promise<void>((resolve,reject)=>{const socket=connect(address.port,'127.0.0.1');socket.once('error',reject);socket.once('end',resolve);});boundaryDiagnostic.hostListenerPositiveControl=connections===1;assert.equal(connections,1);connections=0;
   const environmentBefore={...process.env};for(const key of ['COATRIA_SANDBOX_CANARY','DATABASE_URL','COATRIA_HOSTING_KEYRING','NODE_OPTIONS'])process.env[key]='synthetic-'+randomBytes(12).toString('hex');
   let boundary:Awaited<ReturnType<typeof runObserved>>;
-  try{boundary=await runObserved(config,sandbox,['boundary',config.hostCanaryPath,String(process.pid),String(address.port)]);}finally{for(const key of ['COATRIA_SANDBOX_CANARY','DATABASE_URL','COATRIA_HOSTING_KEYRING','NODE_OPTIONS']){if(environmentBefore[key]===undefined)delete process.env[key];else process.env[key]=environmentBefore[key];}}
-  assert.equal(boundary.error,null);const lines=boundary.stdout.trim().split('\n').map(value=>JSON.parse(value));assert.equal(lines.length,2);const network=lines[0],facts=lines[1];assert.equal(network.interfacesLoopbackOnly,true);assert.equal(network.routableDefaultAbsent,true);assert.equal(network.apparmorChildStacked,true);
-  for(const key of ['hostFileHidden','hostProcHidden','environmentClean','extraHandlesClosed','inputReadonly','rootReadonly','capabilitiesZero','noNewPrivileges','nestedUsernsDenied','localNetworkDenied','externalNetworkDenied','ipv6Denied'])assert.equal(facts[key],true,key);
-  for(const name of namespaceNames){assert.match(facts.namespaces[name],new RegExp('^'+name+':\\[\\d+\\]$'));assert.notEqual(facts.namespaces[name],hostNamespaces[name],name);}
-  checkControls(boundary.observations,limits);assert.equal(connections,0);assert.equal(digest(await readFile(fixture(config,'synthetic.png'))),digest(inputBefore));
+  try{boundary=await runObserved(config,sandbox,['boundary',config.hostCanaryPath,String(process.pid),String(address.port)],{diagnostic:(check,observations,error)=>Object.assign(boundaryDiagnostic,mediaSandboxBoundaryObservation(observations,limits,error),{check})});}finally{for(const key of ['COATRIA_SANDBOX_CANARY','DATABASE_URL','COATRIA_HOSTING_KEYRING','NODE_OPTIONS']){if(environmentBefore[key]===undefined)delete process.env[key];else process.env[key]=environmentBefore[key];}}
+  const {network,facts}=assertMediaSandboxBoundary(boundary,hostNamespaces,limits,boundaryDiagnostic);
+  boundaryDiagnostic.check='host_listener_isolated';boundaryDiagnostic.hostListenerIsolated=connections===0;assert.equal(connections,0);
+  boundaryDiagnostic.check='input_unchanged';const inputDigest=digest(await readFile(fixture(config,'synthetic.png')));boundaryDiagnostic.inputUnchanged=inputDigest===digest(inputBefore);assert.equal(inputDigest,digest(inputBefore));boundaryDiagnostic.check='complete';
   results.push({name:'boundary',passed:true,hostFilePositiveControl:true,hostListenerPositiveControl:true,network,isolatedNamespaces:facts.namespaces,facts,liveGroups:boundary.observations.size});await closed(listener);listener=undefined;
   checkpoint('file_descriptor_cap');const files=await runObserved(config,sandbox,['files']);assert.equal(files.error,null);const fdFacts=JSON.parse(files.stdout);assert.equal(fdFacts.limited,true);assert.ok(fdFacts.openFiles<limits.openFiles);results.push({name:'file-descriptor-cap',passed:true,...fdFacts});
   for(const name of ['pids','memory'] as const){checkpoint(name+'_aggregate_cap');const start=events.length,result=await runObserved(config,sandbox,[name]);assert.equal(code(result.error),'PROCESS_FAILED');const latest=events.slice(start);assert.equal(latest.length,1);assert.ok(latest[0].drained);if(name==='pids')assert.ok(latest[0].pidsEvents.max>0);else assert.ok((latest[0].memoryEvents.oom_kill??0)+(latest[0].memoryEvents.oom_group_kill??0)>0);checkControls(result.observations,limits);results.push({name:name+'-aggregate-cap',passed:true,evidence:latest[0],observedProcesses:[...result.observations.values()].reduce((n,v)=>n+v.processes.size,0)});}
