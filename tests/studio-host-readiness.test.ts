@@ -66,7 +66,10 @@ test('readiness uses actual scoped stored provision and current admin authority 
    const start=calls;await assert.rejects(readStudioHostProviderReadiness({...member,companyId:randomUUID()},provisionId,{fetch:ok,settings}));await query("UPDATE memberships SET role='member' WHERE company_id=$1 AND user_id=$2",[companyId,userId]);await assert.rejects(invoke(ok),{status:403});await query("UPDATE memberships SET role='owner' WHERE company_id=$1 AND user_id=$2",[companyId,userId]);await query("UPDATE studio_host_provisions SET plan_hash=$2 WHERE id=$1",[provisionId,'c'.repeat(64)]);await assert.rejects(invoke(ok),{code:'CPU_READINESS_SCOPE_INVALID'});await query('UPDATE studio_host_provisions SET plan_hash=$2 WHERE id=$1',[provisionId,planHash]);assert.equal(calls,start);
   });
   await t.test('membership access revoked during provider read suppresses the complete result',async()=>{
-   let changed=false;const revoke:typeof fetch=async(url,init)=>{if(!changed){changed=true;await query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[companyId,userId]);}return ok(url,init);};await assert.rejects(invoke(revoke),{code:'CPU_READINESS_ADMIN_REQUIRED'});await query('UPDATE memberships SET access_revoked_at=NULL WHERE company_id=$1 AND user_id=$2',[companyId,userId]);
+   let changed=false;const revoke:typeof fetch=async(url,init)=>{if(!changed){changed=true;await query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[companyId,userId]);}return ok(url,init);};
+   // The shared membership lock now rejects revoked access before the diagnostic-specific guard.
+   try{await assert.rejects(invoke(revoke),{status:403,message:'Your company access has ended.'});}
+   finally{await query('UPDATE memberships SET access_revoked_at=NULL WHERE company_id=$1 AND user_id=$2',[companyId,userId]);}
   });
   await t.test('real authenticated GET rejects query overrides, returns no-store metadata and rate-limits repeated checks',async()=>{
    const path=`companies/${companyId}/studio/host-provisions/${provisionId}/readiness`,request=(suffix='')=>new Request('http://localhost:4180/api/'+path+suffix,{headers:{Cookie:'coatria_session='+session}});const mock=t.mock.method(globalThis,'fetch',ok);
