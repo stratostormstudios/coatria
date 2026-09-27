@@ -4,7 +4,8 @@ import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import {access,lstat,readFile,readdir,realpath,stat,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
-export const MEDIA_APPARMOR=Object.freeze({version:'4.0.1really4.0.1-0ubuntu0.24.04.9',packageSha256:'90b02aa006eea7702cd4e851343e469e41365dda42145a3cb035de1d6c773b8c',packageBytes:39592,profileSha256:'11d39094f044f0cda0febb3ad517b830301da6b2ce929664af09ee9e4dd264f9',profileBytes:1936,source:'https://archive.ubuntu.com/ubuntu/pool/main/a/apparmor/apparmor-profiles_4.0.1really4.0.1-0ubuntu0.24.04.9_all.deb'});
+// Verify availability in noble-updates; a pool entry may exist only in proposed.
+export const MEDIA_APPARMOR=Object.freeze({version:'4.0.1really4.0.1-0ubuntu0.24.04.8',packageSha256:'4e7d728322f899a7a06e71bedd4f4bd1f20c21f0b3361120f34cf5c0feec849e',packageBytes:39618,profileSha256:'11d39094f044f0cda0febb3ad517b830301da6b2ce929664af09ee9e4dd264f9',profileBytes:1936,source:'https://archive.ubuntu.com/ubuntu/pool/main/a/apparmor/apparmor-profiles_4.0.1really4.0.1-0ubuntu0.24.04.8_all.deb'});
 const env={PATH:'/usr/sbin:/usr/bin:/sbin:/bin',LANG:'C',LC_ALL:'C',DEBIAN_FRONTEND:'noninteractive'};
 const hash=data=>createHash('sha256').update(data).digest('hex');
 const text=async path=>(await readFile(path,'utf8')).trim();

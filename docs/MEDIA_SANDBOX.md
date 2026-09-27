@@ -66,9 +66,9 @@ does not weaken runtime trust or change shared host-directory permissions.
   Exact compiler/libc package versions and every resulting file hash are saved.
 
 There is no runtime download. Root CI setup downloads only the exact official
-Noble `apparmor-profiles=4.0.1really4.0.1-0ubuntu0.24.04.9` package from signed APT
+Noble `apparmor-profiles=4.0.1really4.0.1-0ubuntu0.24.04.8` package from signed APT
 indexes and checks its SHA-256
-`90b02aa006eea7702cd4e851343e469e41365dda42145a3cb035de1d6c773b8c`.
+`4e7d728322f899a7a06e71bedd4f4bd1f20c21f0b3361120f34cf5c0feec849e`.
 It extracts only the reviewed ABI4 `bwrap-userns-restrict` profile (1,936 bytes,
 SHA-256 `11d39094f044f0cda0febb3ad517b830301da6b2ce929664af09ee9e4dd264f9`).
 Other package profiles are not installed. This follows Ubuntu's
