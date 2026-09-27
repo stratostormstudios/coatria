@@ -64,6 +64,17 @@ export function assertMediaSandboxBoundary(boundary:{stdout:string;error:unknown
  diagnostic.check='cgroup_controls';checkControls(boundary.observations,limits);
  return {network,facts};
 }
+/** Preserve the FD canary assertions; retain only bounded facts if they fail. */
+export function assertMediaSandboxFileDescriptorCap(files:{stdout:string;error:unknown},limits:Pick<MediaSandboxLimits,'openFiles'>,diagnostic:Record<string,unknown>){
+ const boundedCount=(value:unknown)=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0&&value<=1024?value:null;
+ Object.assign(diagnostic,{diagnosticOnly:true,qualified:false,executionCode:files.error===null?null:files.error instanceof MediaSandboxError&&boundaryErrorCodes.has(files.error.code)?files.error.code:'CANARY_ASSERTION_FAILED',stdoutBytes:Math.min(Buffer.byteLength(files.stdout),65536),stdoutTruncated:Buffer.byteLength(files.stdout)>65536,approvedOpenFiles:boundedCount(limits.openFiles)});
+ diagnostic.check='execution';assert.equal(files.error,null);
+ diagnostic.check='output_json';const facts=JSON.parse(files.stdout);
+ diagnostic.limited=typeof facts?.limited==='boolean'?facts.limited:null;diagnostic.openFiles=boundedCount(facts?.openFiles);
+ diagnostic.check='limited';assert.equal(facts.limited,true);
+ diagnostic.check='open_files';assert.ok(facts.openFiles<limits.openFiles);
+ return facts;
+}
 async function runObserved(config:Config,sandbox:QualifiedLinuxMediaSandbox,args:string[],options:{timeoutMs?:number;signal?:AbortSignal;diagnostic?:(check:'input_open'|'process_start'|'cgroup_observation'|'process_drain',observations:Map<string,Observation>,error?:unknown)=>void}={}){
  const mark=(check:'input_open'|'process_start'|'cgroup_observation'|'process_drain',observations:Map<string,Observation>,error?:unknown)=>options.diagnostic?.(check,observations,error);
  mark('input_open',new Map());
@@ -104,7 +115,9 @@ export async function runMediaSandboxCanary(config:Config){
   boundaryDiagnostic.check='host_listener_isolated';boundaryDiagnostic.hostListenerIsolated=connections===0;assert.equal(connections,0);
   boundaryDiagnostic.check='input_unchanged';const inputDigest=digest(await readFile(fixture(config,'synthetic.png')));boundaryDiagnostic.inputUnchanged=inputDigest===digest(inputBefore);assert.equal(inputDigest,digest(inputBefore));boundaryDiagnostic.check='complete';
   results.push({name:'boundary',passed:true,hostFilePositiveControl:true,hostListenerPositiveControl:true,network,isolatedNamespaces:facts.namespaces,facts,liveGroups:boundary.observations.size});await closed(listener);listener=undefined;
-  checkpoint('file_descriptor_cap');const files=await runObserved(config,sandbox,['files']);assert.equal(files.error,null);const fdFacts=JSON.parse(files.stdout);assert.equal(fdFacts.limited,true);assert.ok(fdFacts.openFiles<limits.openFiles);results.push({name:'file-descriptor-cap',passed:true,...fdFacts});
+  checkpoint('file_descriptor_cap');const fileDescriptorDiagnostic:Record<string,unknown>={diagnosticOnly:true,qualified:false,check:'input_open'};
+  try{const files=await runObserved(config,sandbox,['files'],{diagnostic:check=>{fileDescriptorDiagnostic.check=check;}});const fdFacts=assertMediaSandboxFileDescriptorCap(files,limits,fileDescriptorDiagnostic);results.push({name:'file-descriptor-cap',passed:true,...fdFacts});}
+  catch(error){report.fileDescriptorDiagnostic=fileDescriptorDiagnostic;throw error;}
   for(const name of ['pids','memory'] as const){checkpoint(name+'_aggregate_cap');const start=events.length,result=await runObserved(config,sandbox,[name]);assert.equal(code(result.error),'PROCESS_FAILED');const latest=events.slice(start);assert.equal(latest.length,1);assert.ok(latest[0].drained);if(name==='pids')assert.ok(latest[0].pidsEvents.max>0);else assert.ok((latest[0].memoryEvents.oom_kill??0)+(latest[0].memoryEvents.oom_group_kill??0)>0);checkControls(result.observations,limits);results.push({name:name+'-aggregate-cap',passed:true,evidence:latest[0],observedProcesses:[...result.observations.values()].reduce((n,v)=>n+v.processes.size,0)});}
   checkpoint('cpu_execution');const cpuStart=performance.now(),cpu=await runObserved(config,sandbox,['cpu']);report.cpuObservation=archiveHostCpuSummary({elapsedMs:Math.round(performance.now()-cpuStart),cgroupUsageUsec:events.at(-1)?.cpuUsageUsec,cgroupsObserved:cpu.observations.size,executionCode:cpu.error===null?null:code(cpu.error)});assert.equal(cpu.error,null);
   checkpoint('cpu_output');const usage=JSON.parse(cpu.stdout);report.cpuObservation=archiveHostCpuSummary({...report.cpuObservation as object,cpuNs:usage.cpuNs,wallNs:usage.wallNs,children:usage.children});

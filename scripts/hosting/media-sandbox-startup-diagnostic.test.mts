@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {classifySyntheticStartupStderr,diagnoseMediaSandboxStartup,diagnoseArchiveHostSandboxStartup,archiveStartupIdentity} from './media-sandbox-startup-diagnostic.mts';
-import {assertMediaSandboxBoundary,mediaSandboxBoundaryObservation} from './media-sandbox-linux-canary.mts';
+import {assertMediaSandboxBoundary,mediaSandboxBoundaryObservation,assertMediaSandboxFileDescriptorCap} from './media-sandbox-linux-canary.mts';
 import {MediaSandboxError} from '../../src/lib/higgsfield-media-sandbox';
 
 test('synthetic startup diagnostics classify setup errors without returning their text',()=>{
@@ -66,4 +66,21 @@ test('boundary projections exclude raw errors, process identifiers, paths and un
  const forged=mediaSandboxBoundaryObservation(f.observations,f.limits,new MediaSandboxError(privateText as never));assert.equal(forged.executionCode,'CANARY_ASSERTION_FAILED');assert(!JSON.stringify(forged).includes(privateText));
  const before=mediaSandboxBoundaryObservation(f.observations,f.limits);assert.equal(before.execution,'not_observed');assert.equal(before.executionCode,null);
  const many=new Map(Array.from({length:300},(_,index)=>[String(index),f.observations.values().next().value!])),bounded=mediaSandboxBoundaryObservation(many,f.limits,null);assert.equal(bounded.observedGroups,256);assert.equal(bounded.controls.length,16);assert.equal(bounded.observationsTruncated,true);assert.equal(bounded.execution,'succeeded');assert.equal(bounded.qualified,false);
+});
+
+test('file descriptor diagnostics preserve execution, parsing and both exact limit assertions',()=>{
+ const good={stdout:JSON.stringify({openFiles:61,limited:true}),error:null},limits={openFiles:64},record:Record<string,unknown>={};
+ assert.deepEqual(assertMediaSandboxFileDescriptorCap(good,limits,record),{openFiles:61,limited:true});assert.equal(record.check,'open_files');assert.equal(record.qualified,false);assert.equal(record.diagnosticOnly,true);assert.equal(record.approvedOpenFiles,64);
+ for(const [patch,check]of [[{error:new MediaSandboxError('PROCESS_FAILED')},'execution'],[{stdout:'private-not-json'},'output_json'],[{stdout:JSON.stringify({openFiles:61,limited:false})},'limited'],[{stdout:JSON.stringify({openFiles:64,limited:true})},'open_files'],[{stdout:JSON.stringify({openFiles:65,limited:true})},'open_files']] as const){
+  const diagnostic:Record<string,unknown>={};assert.throws(()=>assertMediaSandboxFileDescriptorCap({...good,...patch},limits,diagnostic));assert.equal(diagnostic.check,check);assert.equal(diagnostic.qualified,false);assert(!JSON.stringify(diagnostic).includes('private-not-json'));
+ }
+});
+
+test('file descriptor failure diagnostics exclude raw output, error text and unexpected fields',()=>{
+ const secret='private-path-env-credential';
+ for(const error of [Error(secret),new MediaSandboxError(secret as never)]){const diagnostic:Record<string,unknown>={};assert.throws(()=>assertMediaSandboxFileDescriptorCap({stdout:secret,error},{openFiles:64},diagnostic));assert.equal(diagnostic.executionCode,'CANARY_ASSERTION_FAILED');assert(!JSON.stringify(diagnostic).includes(secret));}
+ for(const facts of [{limited:true,openFiles:secret,privateField:secret},{limited:secret,openFiles:61,privateField:secret},{limited:true,openFiles:2048,privateField:secret},{limited:true,openFiles:1e100,privateField:secret}]){
+  const diagnostic:Record<string,unknown>={};assert.throws(()=>assertMediaSandboxFileDescriptorCap({stdout:JSON.stringify(facts),error:null},{openFiles:64},diagnostic));assert.equal(diagnostic.openFiles,typeof facts.openFiles==='number'&&facts.openFiles<=1024?facts.openFiles:null);assert(!JSON.stringify(diagnostic).includes(secret));assert(!JSON.stringify(diagnostic).includes('privateField'));
+ }
+ const diagnostic:Record<string,unknown>={};assert.throws(()=>assertMediaSandboxFileDescriptorCap({stdout:'x'.repeat(65537),error:null},{openFiles:64},diagnostic));assert.equal(diagnostic.stdoutBytes,65536);assert.equal(diagnostic.stdoutTruncated,true);assert.equal(diagnostic.check,'output_json');
 });
