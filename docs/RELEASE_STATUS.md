@@ -1,6 +1,16 @@
 # Coatria release status
 
-Verified operational snapshot: 2026-09-22. Coatria.com now runs source `7162fb1`, whose runtime is unchanged from `120c6a8`. A fresh production-bound deployment passed exact source and main-database checks, 12 staged checks and 12 live checks before and after promotion. It contains the storage transport fixes that passed actual Runpod multipart testing. Earlier isolated-preview onboarding and paused staffing remain historical evidence. The complete agent-operated media and client-acceptance workflow remains unproved; these results do not redefine that acceptance requirement.
+Snapshot checked 2026-09-28 (Europe/Berlin): Vercel inspection still identifies production deployment `dpl_BA73pXZBoxrPDm6CQTMNAFNfRuoj`, released on September 23 from source `5e4d136`. Its finite pilot completed one real Qwen run: two inference requests succeeded and the agent created a persisted production-checklist task. It did not create a staffed project or complete generation, archive, QC, package or client delivery. The complete agent-operated production workflow remains unproved.
+
+Fresh Runpod and production-database observations confirm the pilot CPU host is stopped and the Coatria inference endpoint has zero active/max workers and no queued or running jobs. Expired synthetic actors have no active company memberships, sessions or operator grants. The existing Runpod volumes and unrelated resources are retained. Rounded account-category billing is not an exact pilot invoice; conservative uncertainty holds remain in the private spending ledger.
+
+The current source change fixes Studio handoffs to tasks outside the 500-task workspace snapshot. Exact task links retain their company scope through login and an explicit company switch. Ordinary task submission and independent review retain revision checks, and background changes preserve dirty drafts. Shared membership checks now reject `access_revoked_at` independently of the retained role, including a membership cached before a write. These changes have local browser, database-backed authorization, typecheck and production-build coverage; deployment evidence must be recorded separately. The board still lists only its 500 most recently updated tasks and discloses that bound.
+
+Neon Launch was approved and activated through Vercel on September 28 after the Free plan approached its network allowance. A USD 10 database usage reservation remains inside the existing USD 100 pilot cap; this is not a provider-enforced billing cap. Fresh finite runtime selections, current archive qualification/executor authority and actual gateway/archive activation remain required before resuming the full live media path. Use the normal [runtime registry](company-runtime-registry.md), [hosted-service activation](hosted-runtime-activation.md) and [operator workflow](STUDIO_OPERATOR_GUIDE.md), rather than reviving the expired pilot controller.
+
+## Historical September 22 evidence
+
+At this snapshot, production ran source `7162fb1`, whose runtime was unchanged from `120c6a8`. A fresh production-bound deployment passed exact source and main-database checks, 12 staged checks and 12 live checks before and after promotion. It contained storage transport fixes that passed actual Runpod multipart testing. The records below are historical evidence and do not identify the current deployment.
 
 | Evidence level | Current record |
 | --- | --- |

@@ -19,20 +19,20 @@ export async function requireUser(request: Request): Promise<User> {
 }
 export async function requireMembership(request: Request, companyId: string, admin = false): Promise<Membership> {
   id(companyId); const user = await requireUser(request);
-  const row = (await query<{ role: Membership['role'] }>('SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2 AND role<>\'removed\'', [companyId, user.id])).rows[0];
+  const row = (await query<{ role: Membership['role'] }>('SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2 AND role<>\'removed\' AND access_revoked_at IS NULL', [companyId, user.id])).rows[0];
   if (!row) fail(404, 'Workspace not found.');
   if (admin && row.role !== 'owner' && row.role !== 'admin') fail(403, 'A company owner or administrator is required.');
   return { companyId, userId: user.id, role: row.role, user };
 }
 export async function lockMembership(client: PoolClient, membership: Membership, admin = false) {
   // Membership changes obtain this same lock, so a removed member cannot race a write.
-  const row = (await client.query('SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2 FOR SHARE', [membership.companyId, membership.userId])).rows[0];
-  if (!row || row.role === 'removed') fail(403, 'Your company access has ended.');
+  const row = (await client.query('SELECT role,access_revoked_at FROM memberships WHERE company_id=$1 AND user_id=$2 FOR SHARE', [membership.companyId, membership.userId])).rows[0];
+  if (!row || row.role === 'removed' || row.access_revoked_at !== null) fail(403, 'Your company access has ended.');
   if (admin && !['owner', 'admin'].includes(row.role)) fail(403, 'Administrator access is required.');
   return row.role as Membership['role'];
 }
 export async function sessionData(user: User | null) {
-  const companies = user ? (await query(`SELECT c.id,c.name,c.slug,c.template,m.role FROM companies c JOIN memberships m ON m.company_id=c.id WHERE m.user_id=$1 AND m.role<>'removed' ORDER BY m.joined_at`, [user.id])).rows : [];
+  const companies = user ? (await query(`SELECT c.id,c.name,c.slug,c.template,m.role FROM companies c JOIN memberships m ON m.company_id=c.id WHERE m.user_id=$1 AND m.role<>'removed' AND m.access_revoked_at IS NULL ORDER BY m.joined_at`, [user.id])).rows : [];
   return { user, companies, configured: true };
 }
 export async function createSession(client: PoolClient, userId: string) {
