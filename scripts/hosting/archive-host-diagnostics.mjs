@@ -9,6 +9,30 @@ const stderrClasses=new Set(['NAMESPACE_PERMISSION','NAMESPACE_CREATE','USER_ID_
 const stderrErrnos=new Set(['EPERM','EACCES','ENOENT','EROFS','ENOSPC','ENOMEM','EMFILE','EINVAL']);
 const numeric=(value,max)=>Number.isSafeInteger(value)&&value>=0&&value<=max?value:null;
 const canaryChecks=new Set(['host_input_pins','host_source_pins','parent_cgroup_controls','conformance_profile','label_parser','boundary','file_descriptor_cap','pids_aggregate_cap','memory_aggregate_cap','cpu_execution','cpu_output','cpu_usage','cpu_wall','cpu_controls','cpu_cgroup_usage','orphan_cleanup','deadline_cleanup','abort_cleanup','supervisor_crash_cleanup','invalid_pin_writable_input','real_profile','real_png','real_jpeg','real_webp','real_mp4','real_mov','real_wav','real_mp3','real_cleanup']);
+const boundaryFacts=['hostFileHidden','hostProcHidden','environmentClean','extraHandlesClosed','inputReadonly','rootReadonly','capabilitiesZero','noNewPrivileges','nestedUsernsDenied','localNetworkDenied','externalNetworkDenied','ipv6Denied'];
+const boundaryNetwork=['interfacesLoopbackOnly','routableDefaultAbsent','apparmorChildStacked'];
+const boundaryNamespaces=['mnt','pid','net','ipc','uts','user','cgroup'];
+const boundaryControls=['keysMatch','memory.max','memory.swap.max','memory.oom.group','pids.max','cpu.max'];
+const boundaryChecks=new Set(['host_listener_start','host_listener_address','host_listener_positive_control','input_open','process_start','cgroup_observation','process_drain','execution','output_json','output_lines','cgroup_presence','cgroup_controls','host_listener_isolated','input_unchanged','complete',...boundaryNetwork.map(key=>'network_'+key),...boundaryFacts.map(key=>'fact_'+key),...boundaryNamespaces.flatMap(key=>['namespace_format_'+key,'namespace_isolated_'+key])]);
+const descriptorChecks=new Set(['input_open','process_start','cgroup_observation','process_drain','execution','output_json','limited','open_files']);
+const boolean=value=>typeof value==='boolean'?value:null;
+const booleans=(value,keys)=>Object.fromEntries(keys.map(key=>[key,boolean(value?.[key])]));
+/** Idempotent fixed-size projections survive both host and journal boundaries.
+ * Raw control arrays become aggregate matches; no paths, PIDs or output survive. */
+export function archiveHostBoundarySummary(value){
+ if(!value||value.diagnosticOnly!==true||value.qualified!==false)return null;
+ const controls=Array.isArray(value.controls)&&value.controls.length<=16?value.controls:null;
+ const controlMatches=controls?Object.fromEntries(boundaryControls.map(key=>[key,controls.length&&controls.every(item=>typeof item?.[key]==='boolean')?controls.every(item=>item[key]===true):null])):booleans(value.controlMatches,boundaryControls);
+ return {diagnosticOnly:true,qualified:false,check:boundaryChecks.has(value.check)?value.check:null,execution:['not_observed','succeeded','failed'].includes(value.execution)?value.execution:null,executionCode:value.executionCode===null?null:fixedCode(value.executionCode),observedGroups:numeric(value.observedGroups,256),observationsTruncated:boolean(value.observationsTruncated),controlsObserved:controls?controls.length:numeric(value.controlsObserved,16),controlMatches,outputLines:numeric(value.outputLines,256),network:booleans(value.network,boundaryNetwork),facts:booleans(value.facts,boundaryFacts),namespaces:Object.fromEntries(boundaryNamespaces.map(key=>[key,booleans(value.namespaces?.[key],['valid','different'])])),hostListenerPositiveControl:boolean(value.hostListenerPositiveControl),hostListenerIsolated:boolean(value.hostListenerIsolated),inputUnchanged:boolean(value.inputUnchanged)};
+}
+export function archiveHostFileDescriptorSummary(value){
+ if(!value||value.diagnosticOnly!==true||value.qualified!==false)return null;
+ return {diagnosticOnly:true,qualified:false,check:descriptorChecks.has(value.check)?value.check:null,executionCode:value.executionCode===null?null:fixedCode(value.executionCode),stdoutBytes:numeric(value.stdoutBytes,65536),stdoutTruncated:boolean(value.stdoutTruncated),approvedOpenFiles:numeric(value.approvedOpenFiles,1024),limited:boolean(value.limited),openFiles:numeric(value.openFiles,1024)};
+}
+function canaryCheckDetails(check,boundary,fileDescriptor){
+ const selectedBoundary=check==='boundary'?archiveHostBoundarySummary(boundary):null,selectedDescriptor=check==='file_descriptor_cap'?archiveHostFileDescriptorSummary(fileDescriptor):null;
+ return {...selectedBoundary?{boundary:selectedBoundary}:{},...selectedDescriptor?{fileDescriptor:selectedDescriptor}:{}};
+}
 export function archiveHostCpuSummary(value){
  if(!value||typeof value!=='object')return null;
  return {cpuNs:numeric(value.cpuNs,60_000_000_000),wallNs:numeric(value.wallNs,60_000_000_000),children:numeric(value.children,256),cgroupUsageUsec:numeric(value.cgroupUsageUsec,60_000_000),cgroupsObserved:numeric(value.cgroupsObserved,256),elapsedMs:numeric(value.elapsedMs,60_000),executionCode:value.executionCode===null?null:fixedCode(value.executionCode)};
@@ -20,13 +44,13 @@ export function archiveHostStartupSummary(value){
 }
 export function archiveHostCanarySummary(value){
  if(!value||value.qualified!==false||!Array.isArray(value.tests)||value.tests.length>10||!Array.isArray(value.realFormats)||value.realFormats.length>7)return null;
- return {failureCode:fixedCode(value.failureCode),failingCheck:canaryChecks.has(value.failingCheck)?value.failingCheck:null,cpu:archiveHostCpuSummary(value.cpuObservation),testsPassed:value.tests.filter(t=>t?.passed===true).length,formatsPassed:value.realFormats.length,startup:archiveHostStartupSummary(value.startupDiagnostic)};
+ return {failureCode:fixedCode(value.failureCode),failingCheck:canaryChecks.has(value.failingCheck)?value.failingCheck:null,cpu:archiveHostCpuSummary(value.cpuObservation),testsPassed:value.tests.filter(t=>t?.passed===true).length,formatsPassed:value.realFormats.length,startup:archiveHostStartupSummary(value.startupDiagnostic),...canaryCheckDetails(value.failingCheck,value.boundaryDiagnostic,value.fileDescriptorDiagnostic)};
 }
 export class ArchiveHostRunError extends Error{
- /** @param {string} stage @param {unknown} error @param {{failureCode:string,testsPassed:number,formatsPassed:number,failingCheck?:string|null,cpu?:unknown,startup?:unknown}|null} [canary] */
+ /** @param {string} stage @param {unknown} error @param {{failureCode:string,testsPassed:number,formatsPassed:number,failingCheck?:string|null,cpu?:unknown,startup?:unknown,boundary?:unknown,fileDescriptor?:unknown}|null} [canary] */
  constructor(stage,error,canary=null){
   super('ARCHIVE_HOST_PRECONDITION_OR_QUALIFICATION_FAILED');this.name='ArchiveHostRunError';
-  this.diagnostic=Object.freeze({event:'archive-host-failed',code:'ARCHIVE_HOST_PRECONDITION_OR_QUALIFICATION_FAILED',stage:stages.has(stage)?stage:'unknown_stage',errorCode:error?.message==='ARCHIVE_HOST_PACKAGE_REJECTED'?'CHECK_FAILED':fixedCode(error?.code),canary:canary&&Number.isInteger(canary.testsPassed)&&canary.testsPassed>=0&&canary.testsPassed<=10&&Number.isInteger(canary.formatsPassed)&&canary.formatsPassed>=0&&canary.formatsPassed<=7?{failureCode:fixedCode(canary.failureCode),failingCheck:canaryChecks.has(canary.failingCheck)?canary.failingCheck:null,cpu:archiveHostCpuSummary(canary.cpu),testsPassed:canary.testsPassed,formatsPassed:canary.formatsPassed,startup:archiveHostStartupSummary(canary.startup)}:null});
+  this.diagnostic=Object.freeze({event:'archive-host-failed',code:'ARCHIVE_HOST_PRECONDITION_OR_QUALIFICATION_FAILED',stage:stages.has(stage)?stage:'unknown_stage',errorCode:error?.message==='ARCHIVE_HOST_PACKAGE_REJECTED'?'CHECK_FAILED':fixedCode(error?.code),canary:canary&&Number.isInteger(canary.testsPassed)&&canary.testsPassed>=0&&canary.testsPassed<=10&&Number.isInteger(canary.formatsPassed)&&canary.formatsPassed>=0&&canary.formatsPassed<=7?{failureCode:fixedCode(canary.failureCode),failingCheck:canaryChecks.has(canary.failingCheck)?canary.failingCheck:null,cpu:archiveHostCpuSummary(canary.cpu),testsPassed:canary.testsPassed,formatsPassed:canary.formatsPassed,startup:archiveHostStartupSummary(canary.startup),...canaryCheckDetails(canary.failingCheck,canary.boundary,canary.fileDescriptor)}:null});
  }
 }
 /** Only the current service invocation's fixed JSON is eligible. Raw journal
