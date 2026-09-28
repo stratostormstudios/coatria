@@ -8,7 +8,7 @@ import type {Membership} from '../src/lib/auth';
 import {query,transaction} from '../src/lib/db';
 import {setupStudio,createStudioProject} from '../src/lib/studio';
 import {saveStudioCoordination} from '../src/lib/studio-coordination';
-import {executeAgentTool} from '../src/lib/agent-tools';
+import {executeAgentTool,AGENT_TOOLS,agentToolInputSchema} from '../src/lib/agent-tools';
 import {createAgentRunInTransaction,claimAgentRun,heartbeatAgentRun,agentRunContext,finishAgentRun,authorizeStoredAgentRun,authorizeStoredStorageAgentRun} from '../src/lib/agent-runs';
 import {authorizeStorageGrantAgent} from '../src/lib/project-storage-authority';
 import {installedRuntimeContext} from '../src/lib/plugin-marketplace';
@@ -18,6 +18,8 @@ import {studioGeneratedFollowupAdvanceInput,studioGeneratedFollowupDispatchInput
 import {studioCoordinationInput} from '../src/lib/studio-coordination-protocol';
 import {handleApi} from '../src/lib/api';
 import {studioCoordinatorObjective} from '../src/lib/studio-coordinator-objective';
+import {createProviderExecutor} from '../public/downloads/provider-adapter.mjs';
+import {stableRequestId,createRunInferenceClient} from '../public/downloads/agent-worker.mjs';
 
 const emulate=process.env.COATRIA_TEST_EMULATOR==='1',integration=process.env.COATRIA_INTEGRATION_DATABASE_URL;
 const localPostgres=(()=>{try{return !emulate&&!!integration&&['127.0.0.1','localhost'].includes(new URL(integration).hostname);}catch{return false;}})();
@@ -92,7 +94,11 @@ test('generated continuation executes exact leased tools against immutable synth
    const initial=(await tool(coordinator,firstParent,'studio_work_dispatch',{projectId:p.id,workItemId:work.id,projectRevision:await projectRevision(),policyRevision:(await policy()).revision})).result as Row;
     if(options.singleAgent){assert.equal((await claim(specialist)).run,null,'The same identity must not execute its queued child while the coordinator runs');await finishAgentRun(coordinator as any,firstParent.run.id,'complete',{clientId:randomUUID(),leaseToken:firstParent.leaseToken,result:'Queued one separate generation request; stop this coordinator cycle.'});}
     const source=await claim(specialist);assert.equal(source.run.id,initial.childRunId);
-    if(options.singleAgent){assert.deepEqual([...source.run.capabilities].sort(),[...caps].sort());assert.notEqual(source.run.id,firstParent.run.id);await assert.rejects(()=>tool(specialist,source,'studio_coordination_get',{projectId:p.id}),(error:any)=>error.code==='COORDINATOR_GENERATION_SCOPE');const dispatchInput={projectId:p.id,workItemId:work.id,projectRevision:await projectRevision(),policyRevision:(await policy()).revision};await assert.rejects(()=>tool(specialist,source,'studio_work_dispatch',dispatchInput),denied);}
+    if(options.singleAgent){assert.deepEqual([...source.run.capabilities].sort(),[...caps].sort());assert.notEqual(source.run.id,firstParent.run.id);await assert.rejects(()=>tool(specialist,source,'studio_coordination_get',{projectId:p.id}),(error:any)=>error.code==='COORDINATOR_GENERATION_SCOPE');const dispatchInput={projectId:p.id,workItemId:work.id,projectRevision:await projectRevision(),policyRevision:(await policy()).revision};await assert.rejects(()=>tool(specialist,source,'studio_work_dispatch',dispatchInput),denied);
+     const request=await transaction(async client=>{const access=await authorizeStoredAgentRun(client,specialist as any,source.run.id,sha(source.leaseToken)),installation=await installedRuntimeContext(client,company,specialist.id);return buildStudioInferenceRequest(client,{...access,installation});});
+     assert.deepEqual(request.tools?.map(tool=>tool.function.name).sort(),['studio_get','higgsfield_connection_get','higgsfield_requests_list','higgsfield_jobs_list','storage_get','storage_files_list','tasks_claim','higgsfield_generation_propose'].sort());
+     assert(Buffer.byteLength(JSON.stringify(request.tools))<5500);assert(source.run.capabilities.includes('studio.write'),'Narrowing does not remove the required run grant.');
+    }
    await tool(specialist,source,'tasks_claim',{taskId:work.task_id,revision:(await task()).revision});
    const sourceTask=await task();let proposed:Row|undefined;const sourceConnectionId=randomUUID();
     if(options.singleAgent){
@@ -247,9 +253,27 @@ test('generated continuation executes exact leased tools against immutable synth
     });
     assert(assemblyQueries.some(sql=>sql.includes('studio_generated_followups')),'Assembly must read the actual durable continuation');assert.equal(request.model,'synthetic-only');assert.equal(request.stream,false);assert.equal(request.messages.length,2);assert.equal(request.messages[1].role,'user');
     const context=JSON.parse(request.messages[1].content);assert.deepEqual(Object.keys(context).sort(),['generatedFollowup','untrustedConversationContext','verifiedRequest']);assert.deepEqual(context.generatedFollowup,expected);assert.deepEqual(context.untrustedConversationContext,{messages:[]});assert.deepEqual(context.verifiedRequest,{id:lease.run.id,prompt:lease.run.prompt});assert(Buffer.byteLength(JSON.stringify(context.generatedFollowup))<=4096);assert(!JSON.stringify(request).includes(marker));assert(!/secret_envelope|object_key|locator_identity|claim_request_id|leaseToken/.test(request.messages[1].content));
-    assert(request.tools?.some(tool=>tool.function.name==='studio_generated_followup_advance'));assert.deepEqual(await state(),before);assert.equal(networkCalls,0);
+    assert.deepEqual(request.tools?.map(tool=>tool.function.name).sort(),['studio_get','studio_generated_followup_advance','higgsfield_requests_list','higgsfield_archive_get','studio_generated_followups_get'].sort());assert(Buffer.byteLength(JSON.stringify(request.tools))<4000);assert.deepEqual(await state(),before);assert.equal(networkCalls,0);
     if(step!=='submitted')await f.advance(lease,step);
    }
+  });
+  await t.test('unchanged broker adapter accepts a narrowed server catalog and completes the real guarded continuation',async()=>{
+   const f=await fixture('image',{staffed:true});await f.dispatch();const lease=await f.claim(f.specialist),context=await agentRunContext(f.specialist as any,lease.run.id,lease.leaseToken);
+   const fullCatalog=Object.entries(AGENT_TOOLS).filter(([,definition])=>[definition.capability,...definition.additionalCapabilities??[]].every(cap=>context.capabilities.includes(cap))).map(([name,definition])=>({name,description:definition.description,capability:definition.capability,mutating:definition.mutating,inputSchema:agentToolInputSchema(definition)}));
+   assert(fullCatalog.length>20);assert(fullCatalog.some(tool=>tool.name==='higgsfield_generation_propose'));assert(fullCatalog.some(tool=>tool.name==='tasks_submit'));
+   let step=0;const executed:string[]=[],observed:string[][]=[];
+   const execute=createProviderExecutor({settings:{NODE_ENV:'test',COATRIA_INFERENCE_MODE:'coatria_broker_v1'},fetch:async()=>{throw Error('The managed adapter must not invoke a provider directly.');}});
+   const inference=createRunInferenceClient({runId:lease.run.id,leaseToken:lease.leaseToken,pollMs:0,client:{submitInference:async()=>{
+    const request=await transaction(async client=>{const access=await authorizeStoredAgentRun(client,f.specialist as any,lease.run.id,sha(lease.leaseToken)),installation=await installedRuntimeContext(client,f.company,f.specialist.id);return buildStudioInferenceRequest(client,{...access,installation});});
+    observed.push(request.tools!.map(tool=>tool.function.name));assert(observed.at(-1)!.length===5);assert(!observed.at(-1)!.includes('higgsfield_generation_propose'));
+    const index=step++,name=index===0?'studio_get':'studio_generated_followup_advance',args=index===0?{contractVersion:2,projectId:f.p.id,workItemId:f.work.id}:{projectId:f.p.id,workItemId:f.work.id,step:['claim','register','submit'][index-1]};
+    const output=index===4?{choices:[{finish_reason:'stop',message:{role:'assistant',content:'Verified source registered and submitted. Independent review remains pending.'}}],usage:{prompt_tokens:1800,completion_tokens:100}}:{choices:[{finish_reason:'tool_calls',message:{role:'assistant',content:null,tool_calls:[{id:'scoped-'+index,type:'function',function:{name,arguments:JSON.stringify(args)}}]}}],usage:{prompt_tokens:1800,completion_tokens:100}};
+    return {inference:{id:randomUUID(),status:'succeeded',deadlineAt:new Date(Date.now()+60000).toISOString(),protocolVersion:2,runId:lease.run.id,step:index,disposition:'execute',output,usage:{promptTokens:1800,completionTokens:100,totalTokens:1900}}};
+   }}});
+   const result=await execute({run:context.run,context,tools:{storageTransportVersion:'1',key:(key:string)=>stableRequestId(lease.run.id,key),list:async()=>({tools:fullCatalog}),call:async(name:string,args:Row,{requestId}:{requestId:string})=>{executed.push(name+':'+(args.step??'read'));return (await f.tool(f.specialist,lease,name,args,requestId)).result;}},inference});
+   assert.equal(step,5);assert.deepEqual(executed,['studio_get:read','studio_generated_followup_advance:claim','studio_generated_followup_advance:register','studio_generated_followup_advance:submit']);
+   await finishAgentRun(f.specialist as any,lease.run.id,'complete',{clientId:randomUUID(),leaseToken:lease.leaseToken,result:result.result});
+   const effects=await f.effects();assert.equal(effects.task.status,'review');assert.equal(effects.artifacts.length,1);assert.equal(effects.contributions.length,1);assert.equal(effects.policy.runs_started,2);assert.equal((await query('SELECT status FROM agent_runs WHERE id=$1',[lease.run.id])).rows[0].status,'succeeded');assert.equal((await query('SELECT count(*)::int n FROM studio_reviews WHERE company_id=$1',[f.company])).rows[0].n,0);assert.equal(networkCalls,0);
   });
   await t.test('explicit opt-in and remaining lifetime budget are required before queueing',async()=>{
    for(const options of[{optIn:false},{budget:1}]){const f=await fixture('image',options),before=await f.effects();await assert.rejects(()=>f.dispatch(),denied);assert.deepEqual(await f.effects(),before);}

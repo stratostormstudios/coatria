@@ -89,15 +89,21 @@ export async function generatedFollowupRunContext(db:PoolClient,companyId:string
  const current=await evidence(db,companyId,receipt.project_id,receipt.work_item_id,receipt.archive_id,receipt);
  return {projectId:receipt.project_id,workItemId:receipt.work_item_id,taskId:receipt.task_id,archiveId:receipt.archive_id,requestId:receipt.request_id,storageVersionId:receipt.storage_version_id,fileSha256:receipt.file_sha256,specSha256:receipt.spec_sha256,artifactId:current.artifact?.artifact.id??null,nextStep:current.state,advanceTool:'studio_generated_followup_advance',serverOwnsOperationIds:true,contentInspected:false,canGenerate:false,canTransfer:false,canApprove:false};
 }
+// The model catalog and the enforced route boundary derive from these same
+// rules. Catalog selection is a presentation reduction, never authorization.
+const generatedFollowupToolRules:Record<string,(args:Row,receipt:Row,current:Row)=>unknown>={
+ studio_generated_followup_advance:(args,receipt)=>args.projectId===receipt.project_id&&args.workItemId===receipt.work_item_id,
+ studio_get:(args,receipt,current)=>args.contractVersion===2&&args.projectId===receipt.project_id&&((args.workItemId===receipt.work_item_id&&!args.artifactId)||(current.artifact&&args.artifactId===current.artifact.artifact.id&&!args.workItemId)),
+ higgsfield_requests_list:(args,receipt)=>args.projectId===receipt.project_id&&args.requestId===receipt.request_id,
+ higgsfield_archive_get:(args,receipt)=>args.archiveId===receipt.archive_id,
+ studio_generated_followups_get:(args,receipt)=>args.projectId===receipt.project_id&&args.archiveId===receipt.archive_id&&!args.after&&!args.historyAfter,
+};
+export const generatedFollowupToolNames:readonly string[]=Object.freeze(Object.keys(generatedFollowupToolRules));
 export async function assertGeneratedFollowupTool(db:PoolClient,agent:Row,run:Row,name:string,args:Row){
  const receipt=await ownRow(db,agent.company_id,run.id);if(!receipt)return;
  const p=await policyAuthority(db,agent.company_id,receipt);await db.query('SELECT id FROM studio_projects WHERE company_id=$1 AND id=$2 FOR UPDATE',[agent.company_id,receipt.project_id]);
  const current=await evidence(db,agent.company_id,receipt.project_id,receipt.work_item_id,receipt.archive_id,receipt);
- const allowed=(name==='studio_generated_followup_advance'&&args.projectId===receipt.project_id&&args.workItemId===receipt.work_item_id)
-  ||(name==='studio_get'&&args.contractVersion===2&&args.projectId===receipt.project_id&&((args.workItemId===receipt.work_item_id&&!args.artifactId)||(current.artifact&&args.artifactId===current.artifact.artifact.id&&!args.workItemId)))
-  ||(name==='higgsfield_requests_list'&&args.projectId===receipt.project_id&&args.requestId===receipt.request_id)
-  ||(name==='higgsfield_archive_get'&&args.archiveId===receipt.archive_id)
-  ||(name==='studio_generated_followups_get'&&args.projectId===receipt.project_id&&args.archiveId===receipt.archive_id&&!args.after&&!args.historyAfter);
+ const allowed=Object.hasOwn(generatedFollowupToolRules,name)&&generatedFollowupToolRules[name](args,receipt,current);
  if(!allowed)fail(403,'This continuation may only read its pinned evidence or advance its server-owned claim, registration and submission steps.','GENERATED_FOLLOWUP_SCOPE');
  await deadline(db,agent.company_id,run,p.expiresAt);
 }

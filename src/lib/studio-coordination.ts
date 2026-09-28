@@ -157,15 +157,25 @@ async function acceptedPlanningAncestor(client:PoolClient,companyId:string,proje
 }
 /** The aggregate company character does not confer coordinator powers on its
  * separate generation child. Called before even replaying a cached tool receipt. */
+export async function coordinatorGenerationRunScope(client:PoolClient,companyId:string,runId:string){
+ return (await client.query('SELECT d.project_id,d.work_item_id,w.task_id FROM studio_coordination_dispatches d JOIN studio_work_items w ON w.company_id=d.company_id AND w.project_id=d.project_id AND w.id=d.work_item_id WHERE d.company_id=$1 AND d.child_run_id=$2 AND d.coordinator_agent_id=d.specialist_agent_id',[companyId,runId])).rows[0] as Row|undefined;
+}
+// Keep model-visible names tied to the exact predicates enforced below.
+const coordinatorGenerationToolRules:Record<string,(args:Row,receipt:Row,client:PoolClient,companyId:string)=>unknown>={
+ studio_get:async(args,receipt,client,companyId)=>args.projectId===receipt.project_id&&args.contractVersion===2&&args.workItemId&&!args.artifactId&&!args.after&&(args.workItemId===receipt.work_item_id||await acceptedPlanningAncestor(client,companyId,receipt.project_id,receipt.work_item_id,args.workItemId)),
+ higgsfield_connection_get:()=>true,
+ higgsfield_requests_list:(args,receipt)=>args.projectId===receipt.project_id,
+ higgsfield_jobs_list:(args,receipt)=>args.projectId===receipt.project_id,
+ storage_get:(args,receipt)=>args.projectId===receipt.project_id,
+ storage_files_list:(args,receipt)=>args.projectId===receipt.project_id,
+ tasks_claim:(args,receipt)=>args.taskId===receipt.task_id,
+ higgsfield_generation_propose:(args,receipt)=>args.projectId===receipt.project_id&&args.workItemId===receipt.work_item_id,
+};
+export const coordinatorGenerationToolNames:readonly string[]=Object.freeze(Object.keys(coordinatorGenerationToolRules));
 export async function assertCoordinatorGenerationTool(client:PoolClient,agent:Row,run:Row,name:string,args:Row){
- const receipt=(await client.query('SELECT d.project_id,d.work_item_id,w.task_id FROM studio_coordination_dispatches d JOIN studio_work_items w ON w.company_id=d.company_id AND w.project_id=d.project_id AND w.id=d.work_item_id WHERE d.company_id=$1 AND d.child_run_id=$2 AND d.coordinator_agent_id=d.specialist_agent_id',[agent.company_id,run.id])).rows[0];
+ const receipt=await coordinatorGenerationRunScope(client,agent.company_id,run.id);
  if(!receipt)return;
- const sameProject=args.projectId===receipt.project_id;
- const allowed=(name==='studio_get'&&sameProject&&args.contractVersion===2&&args.workItemId&&!args.artifactId&&!args.after&&(args.workItemId===receipt.work_item_id||await acceptedPlanningAncestor(client,agent.company_id,receipt.project_id,receipt.work_item_id,args.workItemId)))
-  ||name==='higgsfield_connection_get'
-  ||(['higgsfield_requests_list','higgsfield_jobs_list','storage_get','storage_files_list'].includes(name)&&sameProject)
-  ||(name==='tasks_claim'&&args.taskId===receipt.task_id)
-  ||(name==='higgsfield_generation_propose'&&sameProject&&args.workItemId===receipt.work_item_id);
+ const allowed=Object.hasOwn(coordinatorGenerationToolRules,name)&&await coordinatorGenerationToolRules[name](args,receipt,client,agent.company_id);
  if(!allowed)fail(403,'This separate generation request may only read its assigned production context, claim its task and propose generation for human approval. It cannot act as coordinator or transfer, register, submit or approve media.','COORDINATOR_GENERATION_SCOPE');
 }
 /** Agent/run -> policy. Never hold a project lock across conversation completion. */

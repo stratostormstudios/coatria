@@ -6,7 +6,8 @@ import {authenticateAgent} from './integrations';
 import {authorizeRunTool,authorizeStoredAgentRun,type AgentRunIdentity} from './agent-runs';
 import {installedRuntimeContext} from './plugin-marketplace';
 import {AGENT_TOOLS} from './agent-tools';
-import {generatedFollowupRunContext} from './studio-generated-followups';
+import {generatedFollowupRunContext,generatedFollowupToolNames} from './studio-generated-followups';
+import {coordinatorGenerationRunScope,coordinatorGenerationToolNames} from './studio-coordination';
 import {body,fail,hashToken,id,json,rateLimit,ApiError} from './security';
 import {stableRequestId} from '../../public/downloads/agent-worker.mjs';
 import {bridgePolicy,characterInstructions,normalize,usageTokens,modelContextResult,modelRequestContext,modelToolSchema} from '../../public/downloads/provider-adapter.mjs';
@@ -43,7 +44,11 @@ export async function buildStudioInferenceRequest(client:PoolClient,access:Row){
  const run=access.run,generatedFollowup=await generatedFollowupRunContext(client,run.company_id,run.id);
  if(!generatedFollowup)await client.query('SELECT id FROM conversations WHERE company_id=$1 AND id=$2 FOR SHARE',[run.company_id,run.conversation_id]);
  const messages=generatedFollowup||run.purpose==='connection_test'?[]:(await client.query(`SELECT m.id,m.body,m.parent_id AS "parentId",m.sequence::text AS sequence,m.deleted_at AS "deletedAt",m.actor_kind AS "actorKind",COALESCE(m.user_id,m.agent_id) AS "actorId",COALESCE(u.name,a.name,'Former teammate') AS "authorName" FROM messages m LEFT JOIN users u ON u.id=m.user_id LEFT JOIN agents a ON a.company_id=m.company_id AND a.id=m.agent_id WHERE m.company_id=$1 AND m.conversation_id=$2 AND (($3::uuid IS NULL AND m.parent_id IS NULL) OR m.id=$3 OR m.parent_id=$3) ORDER BY (m.id=$3) DESC NULLS LAST,m.sequence DESC LIMIT 30`,[run.company_id,run.conversation_id,run.parent_id])).rows.sort((a,b)=>BigInt(a.sequence)<BigInt(b.sequence)?-1:1);
- const tools=Object.entries(AGENT_TOOLS).filter(([,tool])=>access.capabilities.includes(tool.capability)).map(([name,tool])=>({type:'function',function:{name,description:tool.description,parameters:modelToolSchema(z.toJSONSchema(tool.schema,{io:'input',unrepresentable:'any'}))}}));
+ // These classifications come from immutable server-created dispatch records,
+ // never the prompt. Existing route predicates still enforce exact arguments.
+ // Frozen workers accept this subset of their ordinary validated tool catalog.
+ const scopedNames=generatedFollowup?generatedFollowupToolNames:await coordinatorGenerationRunScope(client,run.company_id,run.id)?coordinatorGenerationToolNames:null;
+ const tools=Object.entries(AGENT_TOOLS).filter(([name,tool])=>(scopedNames===null||scopedNames.includes(name))&&[tool.capability,...tool.additionalCapabilities??[]].every(cap=>access.capabilities.includes(cap))).map(([name,tool])=>({type:'function',function:{name,description:tool.description,parameters:modelToolSchema(z.toJSONSchema(tool.schema,{io:'input',unrepresentable:'any'}))}}));
  return{model:access.installation.runtimeConfig.modelId,messages:[{role:'system',content:bridgePolicy+characterInstructions(access.installation)},{role:'user',content:bounded(modelRequestContext(run,{messages,...generatedFollowup?{generatedFollowup}:{}}),300000)}],...(tools.length?{tools}:{}),max_tokens:0,stream:false};
 }
 function effectiveLimits(access:Row){const p=access.host.preset,r=access.installation.runtimeConfig;const limits={maxSteps:Math.min(r.maxSteps??8,p.maxSteps,20),maxOutputTokens:Math.min(r.maxOutputTokens??2048,p.maxOutputTokens,8192),maxTotalTokens:Math.min(r.maxTotalTokens??24000,p.maxTotalTokens,100000),timeoutSeconds:Math.min(r.timeoutSeconds??180,p.timeoutSeconds,600)};if(Object.values(limits).some(v=>!Number.isSafeInteger(v)||v<1))fail(409,'The approved inference limits are invalid.','INFERENCE_LIMITS_INVALID');return limits;}

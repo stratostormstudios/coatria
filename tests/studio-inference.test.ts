@@ -46,6 +46,15 @@ test('broker runs real leased API and receipt transactions against isolated prov
  const v2=(f:Awaited<ReturnType<typeof fixture>>,step=0)=>({...f.input(step),protocolVersion:2});
  function batch(...outputs:ReturnType<typeof tool>[]){const output=outputs[0];output.choices[0].message.tool_calls=outputs.flatMap(item=>item.choices[0].message.tool_calls);return output;}
  try{
+  await t.test('broker advertises exactly the grant-complete public catalog for an ordinary run',async()=>{
+   const capabilities=['studio.read','studio.write','tasks.write'],f=await fixture({capabilities});
+   const context=await f.call(`agent/runs/${f.run.id}/context`,'GET',undefined,'agent',200,{'X-Coatria-Run-Lease':f.lease.leaseToken}),catalog=await f.call('agent/tools','GET',undefined,'agent');
+   const request=await transaction(async client=>{const run=(await client.query('SELECT * FROM agent_runs WHERE id=$1',[f.run.id])).rows[0];return buildStudioInferenceRequest(client,{run,capabilities,installation:context.installation});});
+   assert.deepEqual(request.tools?.map(tool=>tool.function.name),catalog.tools.map((tool:any)=>tool.name));
+   assert(request.tools?.some(tool=>tool.function.name==='studio_plan'));
+   for(const name of ['studio_generated_followup_advance','studio_generated_artifact_register'])assert(!request.tools?.some(tool=>tool.function.name===name),'Primary studio.write does not grant additional creative/storage permissions.');
+   assert.deepEqual((await query('SELECT capabilities FROM agents WHERE id=$1',[f.identity.id])).rows[0].capabilities,capabilities);
+  });
   await t.test('protocol 2 atomically rejects every sibling, pins raw malformed arguments, blocks alternate keys and advances only with exact server receipts',async()=>{
    const f=await fixture(),bad=tool('tasks_create',{},'invalid-json');bad.choices[0].message.tool_calls[0].function.arguments='{invalid private content';
    const p=providerFixture([batch(bad,tool('tasks_create',{title:'Do not execute sibling'},'valid-sibling')),tool('tasks_create',{title:'Corrected draft'},'corrected'),final('Draft ready')]);globalThis.fetch=p.transport;
