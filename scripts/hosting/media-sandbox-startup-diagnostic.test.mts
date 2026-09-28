@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {classifySyntheticStartupStderr,diagnoseMediaSandboxStartup,diagnoseArchiveHostSandboxStartup,archiveStartupIdentity} from './media-sandbox-startup-diagnostic.mts';
-import {assertMediaSandboxBoundary,mediaSandboxBoundaryObservation,assertMediaSandboxFileDescriptorCap,assertMediaSandboxOrphanCleanup,mediaSandboxOrphanObservation,assertMediaSandboxLabelParser,mediaSandboxLabelObservation,mediaSandboxLabelFailure,withMediaSandboxInputLifetime} from './media-sandbox-linux-canary.mts';
+import {assertMediaSandboxBoundary,mediaSandboxBoundaryObservation,assertMediaSandboxFileDescriptorCap,assertMediaSandboxOrphanCleanup,mediaSandboxOrphanObservation,assertMediaSandboxLabelParser,mediaSandboxLabelObservation,mediaSandboxLabelFailure,withMediaSandboxInputLifetime,observeMediaSandboxCgroups,mediaSandboxObserverFailure} from './media-sandbox-linux-canary.mts';
+import {ArchiveHostRunError,archiveHostCanarySummary,archiveHostJournalFailure} from './archive-host-diagnostics.mjs';
 import {MediaSandboxError} from '../../src/lib/higgsfield-media-sandbox';
 
 test('synthetic startup diagnostics classify setup errors without returning their text',()=>{
@@ -148,4 +149,43 @@ test('lifetime helper closes input after synchronous start failure and preserves
  const startError=Error('Synthetic startup failure');let closes=0;
  await assert.rejects(withMediaSandboxInputLifetime(()=>{throw startError;},async()=>assert.fail('Observer must not run'),async()=>{closes++;}),error=>error===startError);assert.equal(closes,1);
  const closeError=Error('Synthetic close failure');await assert.rejects(withMediaSandboxInputLifetime(async()=>({stdout:'ok',error:null}),async outcome=>await outcome,async()=>{throw closeError;}),error=>error===closeError);
+});
+
+test('actual observer read failures retain identity and exact bounded operation through host and journal',async()=>{
+ const root='/private-observer-root',name='decoder-aaaaaaaa',secret='private-path-credential pid=4321 stdout=secret';
+ const operations=['cgroup_root_listing','cgroup.procs','memory.max','memory.swap.max','memory.oom.group','pids.max','cpu.max'];
+ for(const operation of operations)for(const errorCode of ['ENODEV','EIO','EACCES']){
+  const original=Object.assign(Error(secret),{code:errorCode,path:secret,syscall:secret}),record:Record<string,unknown>=mediaSandboxLabelObservation('cgroup_observation'),observations=new Map();let failures=0;
+  await assert.rejects(observeMediaSandboxCgroups({cgroupRoot:root},observations,(error,failedOperation)=>{failures++;Object.assign(record,mediaSandboxLabelObservation('cgroup_observation',error),mediaSandboxObserverFailure(error,failedOperation));},{
+   list:async()=>{if(operation==='cgroup_root_listing')throw original;return [name];},
+   read:async path=>{const key=path.split(/[\\/]/).at(-1);if(key===operation)throw original;return key==='cgroup.procs'?'4321':'1';},
+  }),error=>error===original);
+  assert.equal(failures,1);assert.equal(observations.size,0);assert.equal(record.errorCategory,'filesystem');assert.equal(record.errorCode,errorCode);assert.equal(record.observerOperation,operation);
+  for(const [failingCheck,field,inputField]of [['file_descriptor_cap','fileDescriptor','fileDescriptorDiagnostic'],['label_parser','label','labelDiagnostic'],['boundary','boundary','boundaryDiagnostic'],['orphan_cleanup','orphan','orphanDiagnostic']] as const){
+   const summary=archiveHostCanarySummary({qualified:false,failureCode:'CANARY_ASSERTION_FAILED',failingCheck,tests:[],realFormats:[],[inputField]:record}),diagnostic=new ArchiveHostRunError('qualification_canary',original,summary).diagnostic,id='a'.repeat(32),message=JSON.stringify(diagnostic);
+   const retained=archiveHostJournalFailure(JSON.stringify({_SYSTEMD_INVOCATION_ID:id,MESSAGE:message}),id);
+   assert.deepEqual(retained,diagnostic);assert.equal(retained?.canary?.[field]?.errorCode,errorCode);assert.equal(retained?.canary?.[field]?.errorCategory,'filesystem');assert.equal(retained?.canary?.[field]?.observerOperation,operation);assert.equal(retained?.canary?.[field]?.check,'cgroup_observation');assert(Buffer.byteLength(message)<=4096);assert.doesNotMatch(message,/private-|credential|4321|stdout=|secret/);
+  }
+ }
+});
+
+test('observer keeps its existing root failure and disappeared-child ENOENT behavior',async()=>{
+ const original=Object.assign(Error('private-observer-input'),{code:'ENOENT'}),config={cgroupRoot:'/private-observer-root'},record:Record<string,unknown>={},observations=new Map();let failures=0;
+ await assert.rejects(observeMediaSandboxCgroups(config,observations,(error,operation)=>{failures++;Object.assign(record,mediaSandboxObserverFailure(error,operation));},{list:async()=>{throw original;},read:async()=>assert.fail('No child read after root failure')}),error=>error===original);
+ assert.equal(failures,1);assert.equal(record.observerOperation,'cgroup_root_listing');assert.equal(record.errorCode,'ENOENT');
+ for(const failAt of ['cgroup.procs','memory.max','memory.swap.max','memory.oom.group','pids.max','cpu.max']){
+  failures=0;const seen=new Map();await observeMediaSandboxCgroups(config,seen,()=>{failures++;},{list:async()=>['decoder-aaaaaaaa'],read:async path=>{const key=path.split(/[\\/]/).at(-1);if(key===failAt)throw original;return key==='cgroup.procs'?'4321':'1';}});assert.equal(failures,0);assert.equal(seen.size,0);
+ }
+ const fixture=boundaryFixture(),expected=fixture.observations.values().next().value!.controls,seen=new Map();await observeMediaSandboxCgroups(config,seen,()=>assert.fail('Successful observation must not report a failure'),{list:async()=>['decoder-aaaaaaaa','unrelated'],read:async path=>{const key=path.split(/[\\/]/).at(-1)!;return key==='cgroup.procs'?'4321\n4322':expected[key as keyof typeof expected];}});assert.equal(seen.size,1);assert.deepEqual([...seen.values()][0].controls,expected);assert.deepEqual([...seen.values()][0].processes,new Set([4321,4322]));
+});
+
+test('a thrown observer read remains fatal and retains its input until sandbox settlement',async()=>{
+ const pending=deferred<{stdout:string;error:null}>(),original=Object.assign(Error('private-observer-error'),{code:'ENODEV'}),record:Record<string,unknown>={};let closed=0,returned=false;
+ const result=withMediaSandboxInputLifetime(()=>pending.promise,async()=>observeMediaSandboxCgroups({cgroupRoot:'/private-root'},new Map(),(error,operation)=>Object.assign(record,mediaSandboxObserverFailure(error,operation)),{list:async()=>['decoder-aaaaaaaa'],read:async()=>{throw original;}}),async()=>{closed++;});
+ const checked=assert.rejects(result,error=>{returned=true;return error===original;});await turn();assert.equal(closed,0);assert.equal(returned,false);assert.equal(record.errorCode,'ENODEV');assert.equal(record.observerOperation,'cgroup.procs');pending.resolve({stdout:'',error:null});await checked;assert.equal(closed,1);
+});
+
+test('diagnostic callback failure never replaces the original observer read error',async()=>{
+ const original=Object.assign(Error('private-original-observer-failure'),{code:'EIO'}),secondary=Error('private-diagnostic-failure');
+ for(const rootFailure of [true,false])await assert.rejects(observeMediaSandboxCgroups({cgroupRoot:'/private-root'},new Map(),()=>{throw secondary;},{list:async()=>{if(rootFailure)throw original;return ['decoder-aaaaaaaa'];},read:async()=>{throw original;}}),error=>error===original);
 });

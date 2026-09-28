@@ -13,7 +13,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {createLinuxMediaSandbox,MediaSandboxError,type MediaSandboxExitEvidence,type QualifiedLinuxMediaSandbox,type MediaSandboxLimits} from '../../src/lib/higgsfield-media-sandbox';
 import {inspectHiggsfieldArchiveMedia,type HiggsfieldMediaDescriptor} from '../../src/lib/higgsfield-media-inspection';
 import {diagnoseMediaSandboxStartup,diagnoseArchiveHostSandboxStartup} from './media-sandbox-startup-diagnostic.mts';
-import {archiveHostCpuSummary} from './archive-host-diagnostics.mjs';
+import {archiveHostCpuSummary,archiveHostObservationFailure} from './archive-host-diagnostics.mjs';
 
 type ProfilePin={profilePath:string;expectedProfileSha256:string};
 export type MediaSandboxCanaryConfig={fixtureRoot?:string;sourceRoot?:string;diagnostics?:boolean;diagnosticScope?:'archive-host-qualification';version:number;profiles:{real:ProfilePin;conformance:ProfilePin};serviceRoot:string;supervisorGroup:string;cgroupRoot:string;uid:number;gid:number;hostCanaryPath:string;hostCanarySha256:string;evidence:string};
@@ -28,13 +28,17 @@ const text=async(path:string)=>(await readFile(path,'utf8')).trim();
 const code=(error:unknown)=>error instanceof MediaSandboxError?error.code:'CANARY_ASSERTION_FAILED';
 const closed=async(server:Server)=>new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));
 const alive=async(pid:number)=>{try{const value=await text('/proc/'+pid+'/stat');return value.slice(value.lastIndexOf(')')+2).split(' ')[0]!=='Z';}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return false;throw error;}};
-const processIds=async(path:string)=>(await text(join(path,'cgroup.procs'))).split(/\s+/).filter(Boolean).map(Number);
 async function waitFor(condition:()=>Promise<boolean>,milliseconds=5000){const end=Date.now()+milliseconds;while(Date.now()<end){if(await condition())return;await delay(20);}assert.fail('Bounded host observation timed out.');}
-async function observe(config:Config,observations:Map<string,Observation>){
- for(const name of await readdir(config.cgroupRoot))if(/^decoder-[a-f0-9-]+$/.test(name)){
-  const path=join(config.cgroupRoot,name);try{const ids=await processIds(path);if(!ids.length)continue;let observation=observations.get(path);if(!observation){const controls:Record<string,string>={};for(const key of ['memory.max','memory.swap.max','memory.oom.group','pids.max','cpu.max'])controls[key]=await text(join(path,key));observation={group:path,processes:new Set(),controls};observations.set(path,observation);}ids.forEach(pid=>observation!.processes.add(pid));}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+/** Read-only observer. A failed read retains its original exception; only the
+ * pre-existing disappearing-entry ENOENT case is ignored. */
+export async function observeMediaSandboxCgroups(config:Pick<Config,'cgroupRoot'>,observations:Map<string,Observation>,onFailure?:(error:unknown,operation:string)=>void,io:{list:(path:string)=>Promise<string[]>;read:(path:string)=>Promise<string>}={list:readdir,read:text}){
+ const failed=(error:unknown,operation:string)=>{try{onFailure?.(error,operation);}catch{/* Diagnostics cannot replace the original failed read. */}};
+ let names:string[];try{names=await io.list(config.cgroupRoot);}catch(error){failed(error,'cgroup_root_listing');throw error;}
+ for(const name of names)if(/^decoder-[a-f0-9-]+$/.test(name)){
+  const path=join(config.cgroupRoot,name);let operation='cgroup.procs';try{const ids=(await io.read(join(path,'cgroup.procs'))).split(/\s+/).filter(Boolean).map(Number);if(!ids.length)continue;let observation=observations.get(path);if(!observation){const controls:Record<string,string>={};for(const key of ['memory.max','memory.swap.max','memory.oom.group','pids.max','cpu.max']){operation=key;controls[key]=await io.read(join(path,key));}observation={group:path,processes:new Set(),controls};observations.set(path,observation);}ids.forEach(pid=>observation!.processes.add(pid));}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT'){failed(error,operation);throw error;}}
  }
 }
+const observe=observeMediaSandboxCgroups;
 async function assertDrained(config:Config,observations:Map<string,Observation>){
  await waitFor(async()=>{for(const item of observations.values())for(const pid of item.processes)if(await alive(pid))return false;return true;});
  assert.equal((await readdir(config.cgroupRoot)).filter(name=>name.startsWith('decoder-')).length,0);
@@ -99,6 +103,7 @@ export function mediaSandboxLabelFailure(error:unknown){
   return typeof value==='string'&&labelFilesystemCodes.has(value)?{errorCategory:'filesystem',errorCode:value}:{errorCategory:'unknown',errorCode:'UNKNOWN'};
  }catch{return {errorCategory:'unknown',errorCode:'UNKNOWN'};}
 }
+export function mediaSandboxObserverFailure(error:unknown,operation:string){return archiveHostObservationFailure({...mediaSandboxLabelFailure(error),observerOperation:operation});}
 export function mediaSandboxLabelObservation(check:string,error:unknown=undefined){
  return {diagnosticOnly:true,qualified:false,check:labelObservedChecks.has(check)?check:null,execution:error===undefined?'not_observed':error===null?'succeeded':'failed',executionCode:error===undefined||error===null?null:mediaSandboxLabelFailure(error).errorCode};
 }
@@ -115,12 +120,12 @@ export async function withMediaSandboxInputLifetime<Outcome,Result>(start:()=>Pr
  try{outcome=start();return await observeRun(outcome);}
  finally{await outcome;await closeInput();}
 }
-async function runObserved(config:Config,sandbox:QualifiedLinuxMediaSandbox,args:string[],options:{timeoutMs?:number;signal?:AbortSignal;diagnostic?:(check:'input_open'|'process_start'|'cgroup_observation'|'process_drain',observations:Map<string,Observation>,error?:unknown)=>void}={}){
- const mark=(check:'input_open'|'process_start'|'cgroup_observation'|'process_drain',observations:Map<string,Observation>,error?:unknown)=>options.diagnostic?.(check,observations,error);
+async function runObserved(config:Config,sandbox:QualifiedLinuxMediaSandbox,args:string[],options:{timeoutMs?:number;signal?:AbortSignal;diagnostic?:(check:'input_open'|'process_start'|'cgroup_observation'|'process_drain',observations:Map<string,Observation>,error?:unknown,observerOperation?:string)=>void}={}){
+ const mark=(check:'input_open'|'process_start'|'cgroup_observation'|'process_drain',observations:Map<string,Observation>,error?:unknown,observerOperation?:string)=>options.diagnostic?.(check,observations,error,observerOperation);
  mark('input_open',new Map());
  const file=await open(fixture(config,'synthetic.png'),constants.O_RDONLY),observations=new Map<string,Observation>();let finished=false;
  return withMediaSandboxInputLifetime(()=>{mark('process_start',observations);return sandbox.run({tool:'ffprobe',args,inputFd:file.fd,timeoutMs:options.timeoutMs??9000,signal:options.signal,maxOutputBytes:65536,maxStderrBytes:65536}).then(stdout=>({stdout,error:null}),error=>({stdout:'',error})).finally(()=>{finished=true;});},async promise=>{
-  while(!finished){mark('cgroup_observation',observations);await observe(config,observations);await delay(10);}const outcome=await promise;mark('process_drain',observations,outcome.error);await assertDrained(config,observations);return {...outcome,observations};
+  while(!finished){mark('cgroup_observation',observations);await observe(config,observations,(error,operation)=>mark('cgroup_observation',observations,error,operation));await delay(10);}const outcome=await promise;mark('process_drain',observations,outcome.error);await assertDrained(config,observations);return {...outcome,observations};
  },()=>file.close());
 }
 
@@ -145,27 +150,27 @@ export async function runMediaSandboxCanary(config:Config){
   checkpoint('conformance_profile');const events:MediaSandboxExitEvidence[]=[];report.adversarialEvents=events;const sandbox=await createLinuxMediaSandbox({...config.profiles.conformance,cgroupRoot:config.cgroupRoot,onExitEvidence:event=>events.push(event)});assert.equal(events.length,2);assert.ok(events.every(event=>event.drained));startingProfile=null;
   const limits=events[0].limits;
   checkpoint('label_parser');const labelDiagnostic:Record<string,unknown>=mediaSandboxLabelObservation('input_open');report.labelDiagnostic=labelDiagnostic;
-  try{const labelCheck=await runObserved(config,sandbox,['label-check'],{diagnostic:(check,_observations,error)=>Object.assign(labelDiagnostic,mediaSandboxLabelObservation(check,error))});assertMediaSandboxLabelParser(labelCheck,labelDiagnostic);}
+  try{const labelCheck=await runObserved(config,sandbox,['label-check'],{diagnostic:(check,_observations,error,operation)=>Object.assign(labelDiagnostic,mediaSandboxLabelObservation(check,error),operation?mediaSandboxObserverFailure(error,operation):{})});assertMediaSandboxLabelParser(labelCheck,labelDiagnostic);}
   catch(error){Object.assign(labelDiagnostic,mediaSandboxLabelFailure(error));throw error;}
   checkpoint('boundary');const boundaryDiagnostic:Record<string,unknown>={diagnosticOnly:true,qualified:false,check:'host_listener_start'};report.boundaryDiagnostic=boundaryDiagnostic;
   let connections=0;listener=createServer(socket=>{connections++;socket.end();});await new Promise<void>((resolve,reject)=>{listener!.once('error',reject);listener!.listen(0,'127.0.0.1',resolve);});const address=listener.address();boundaryDiagnostic.check='host_listener_address';assert.ok(address&&typeof address==='object');
   boundaryDiagnostic.check='host_listener_positive_control';await new Promise<void>((resolve,reject)=>{const socket=connect(address.port,'127.0.0.1');socket.once('error',reject);socket.once('end',resolve);});boundaryDiagnostic.hostListenerPositiveControl=connections===1;assert.equal(connections,1);connections=0;
   const environmentBefore={...process.env};for(const key of ['COATRIA_SANDBOX_CANARY','DATABASE_URL','COATRIA_HOSTING_KEYRING','NODE_OPTIONS'])process.env[key]='synthetic-'+randomBytes(12).toString('hex');
   let boundary:Awaited<ReturnType<typeof runObserved>>;
-  try{boundary=await runObserved(config,sandbox,['boundary',config.hostCanaryPath,String(process.pid),String(address.port)],{diagnostic:(check,observations,error)=>Object.assign(boundaryDiagnostic,mediaSandboxBoundaryObservation(observations,limits,error),{check})});}finally{for(const key of ['COATRIA_SANDBOX_CANARY','DATABASE_URL','COATRIA_HOSTING_KEYRING','NODE_OPTIONS']){if(environmentBefore[key]===undefined)delete process.env[key];else process.env[key]=environmentBefore[key];}}
+  try{boundary=await runObserved(config,sandbox,['boundary',config.hostCanaryPath,String(process.pid),String(address.port)],{diagnostic:(check,observations,error,operation)=>Object.assign(boundaryDiagnostic,mediaSandboxBoundaryObservation(observations,limits,error),{check},operation?mediaSandboxObserverFailure(error,operation):{})});}finally{for(const key of ['COATRIA_SANDBOX_CANARY','DATABASE_URL','COATRIA_HOSTING_KEYRING','NODE_OPTIONS']){if(environmentBefore[key]===undefined)delete process.env[key];else process.env[key]=environmentBefore[key];}}
   const {network,facts}=assertMediaSandboxBoundary(boundary,hostNamespaces,limits,boundaryDiagnostic);
   boundaryDiagnostic.check='host_listener_isolated';boundaryDiagnostic.hostListenerIsolated=connections===0;assert.equal(connections,0);
   boundaryDiagnostic.check='input_unchanged';const inputDigest=digest(await readFile(fixture(config,'synthetic.png')));boundaryDiagnostic.inputUnchanged=inputDigest===digest(inputBefore);assert.equal(inputDigest,digest(inputBefore));boundaryDiagnostic.check='complete';
   results.push({name:'boundary',passed:true,hostFilePositiveControl:true,hostListenerPositiveControl:true,network,isolatedNamespaces:facts.namespaces,facts,liveGroups:boundary.observations.size});await closed(listener);listener=undefined;
   checkpoint('file_descriptor_cap');const fileDescriptorDiagnostic:Record<string,unknown>={diagnosticOnly:true,qualified:false,check:'input_open'};
-  try{const files=await runObserved(config,sandbox,['files'],{diagnostic:check=>{fileDescriptorDiagnostic.check=check;}});const fdFacts=assertMediaSandboxFileDescriptorCap(files,limits,fileDescriptorDiagnostic);results.push({name:'file-descriptor-cap',passed:true,...fdFacts});}
-  catch(error){report.fileDescriptorDiagnostic=fileDescriptorDiagnostic;throw error;}
+  try{const files=await runObserved(config,sandbox,['files'],{diagnostic:(check,_observations,error,operation)=>Object.assign(fileDescriptorDiagnostic,mediaSandboxLabelObservation(check,error),operation?mediaSandboxObserverFailure(error,operation):{})});const fdFacts=assertMediaSandboxFileDescriptorCap(files,limits,fileDescriptorDiagnostic);results.push({name:'file-descriptor-cap',passed:true,...fdFacts});}
+  catch(error){Object.assign(fileDescriptorDiagnostic,mediaSandboxLabelFailure(error));report.fileDescriptorDiagnostic=fileDescriptorDiagnostic;throw error;}
   for(const name of ['pids','memory'] as const){checkpoint(name+'_aggregate_cap');const start=events.length,result=await runObserved(config,sandbox,[name]);assert.equal(code(result.error),'PROCESS_FAILED');const latest=events.slice(start);assert.equal(latest.length,1);assert.ok(latest[0].drained);if(name==='pids')assert.ok(latest[0].pidsEvents.max>0);else assert.ok((latest[0].memoryEvents.oom_kill??0)+(latest[0].memoryEvents.oom_group_kill??0)>0);checkControls(result.observations,limits);results.push({name:name+'-aggregate-cap',passed:true,evidence:latest[0],observedProcesses:[...result.observations.values()].reduce((n,v)=>n+v.processes.size,0)});}
   checkpoint('cpu_execution');const cpuStart=performance.now(),cpu=await runObserved(config,sandbox,['cpu']);report.cpuObservation=archiveHostCpuSummary({elapsedMs:Math.round(performance.now()-cpuStart),cgroupUsageUsec:events.at(-1)?.cpuUsageUsec,cgroupsObserved:cpu.observations.size,executionCode:cpu.error===null?null:code(cpu.error)});assert.equal(cpu.error,null);
   checkpoint('cpu_output');const usage=JSON.parse(cpu.stdout);report.cpuObservation=archiveHostCpuSummary({...report.cpuObservation as object,cpuNs:usage.cpuNs,wallNs:usage.wallNs,children:usage.children});
   checkpoint('cpu_usage');assert.ok(usage.cpuNs>=500_000_000);checkpoint('cpu_wall');assert.ok(usage.wallNs>=1_500_000_000);checkpoint('cpu_controls');checkControls(cpu.observations,limits);checkpoint('cpu_cgroup_usage');assert.ok(events.at(-1)!.cpuUsageUsec>=500000);results.push({name:'aggregate-cpu-bandwidth',passed:true,usage,evidence:events.at(-1)});
   checkpoint('orphan_cleanup');const orphanDiagnostic:Record<string,unknown>={diagnosticOnly:true,qualified:false,check:'input_open'};report.orphanDiagnostic=orphanDiagnostic;
-  const orphan=await runObserved(config,sandbox,['orphan'],{diagnostic:(check,observations,error)=>Object.assign(orphanDiagnostic,mediaSandboxOrphanObservation(observations,limits,error),{check})});assertMediaSandboxOrphanCleanup(orphan,limits,orphanDiagnostic);results.push({name:'normal-exit-descendant-cleanup',passed:true,evidence:events.at(-1)});
+  const orphan=await runObserved(config,sandbox,['orphan'],{diagnostic:(check,observations,error,operation)=>Object.assign(orphanDiagnostic,mediaSandboxOrphanObservation(observations,limits,error),{check},operation?mediaSandboxObserverFailure(error,operation):{})});assertMediaSandboxOrphanCleanup(orphan,limits,orphanDiagnostic);results.push({name:'normal-exit-descendant-cleanup',passed:true,evidence:events.at(-1)});
   checkpoint('deadline_cleanup');const timeout=await runObserved(config,sandbox,['timeout'],{timeoutMs:900});assert.equal(code(timeout.error),'TIMEOUT');checkControls(timeout.observations,limits);results.push({name:'deadline-kills-descendants',passed:true,evidence:events.at(-1)});
   checkpoint('abort_cleanup');const controller=new AbortController(),abortTimer=setTimeout(()=>controller.abort(),600);const aborted=await runObserved(config,sandbox,['timeout'],{signal:controller.signal});clearTimeout(abortTimer);assert.equal(code(aborted.error),'ABORTED');checkControls(aborted.observations,limits);results.push({name:'abort-kills-descendants',passed:true,evidence:events.at(-1)});
 

@@ -9,7 +9,7 @@ import {ARCHIVE_HOST_SOURCE_FILES,buildArchiveHostBundle} from '../scripts/hosti
 import {archiveHostUnit,inspectArchiveHostBundle,archiveHostQualificationInvocation} from '../scripts/hosting/install-archive-host.mjs';
 import {createArchiveHostCiCommand,ArchiveHostCiCommandError} from '../scripts/hosting/archive-host-ci-command.mjs';
 import {createArchiveNpmEnvironment,ArchiveRuntimeExportError} from '../scripts/hosting/export-archive-host-runtime.mjs';
-import {ArchiveHostRunError,archiveHostCanarySummary,archiveHostJournalFailure,archiveHostStartupSummary,archiveHostCpuSummary,archiveHostBoundarySummary,archiveHostFileDescriptorSummary,archiveHostOrphanSummary} from '../scripts/hosting/archive-host-diagnostics.mjs';
+import {ArchiveHostRunError,archiveHostCanarySummary,archiveHostJournalFailure,archiveHostStartupSummary,archiveHostCpuSummary,archiveHostBoundarySummary,archiveHostFileDescriptorSummary,archiveHostOrphanSummary,archiveHostLabelSummary,archiveHostObservationFailure} from '../scripts/hosting/archive-host-diagnostics.mjs';
 
 const git=(cwd:string,args:string[])=>{const result=spawnSync('git',['-c','core.autocrlf=false','-c','user.name=Archive Fixture','-c','user.email=archive-fixture@example.invalid','-C',cwd,...args],{encoding:'utf8',timeout:10000,maxBuffer:1024*1024});assert.equal(result.status,0,result.stderr);return result.stdout.trim();};
 async function fixture(){
@@ -177,4 +177,24 @@ test('orphan fixed subchecks survive host and current-invocation projections wit
  }
  const invalid={diagnosticOnly:true,qualified:false,check:secret,execution:secret,executionCode:secret,maximumObservedProcesses:257,observedGroups:-1,stdoutBytes:65537,stdoutTruncated:secret,forked:Infinity,controls:Array(17).fill({path:secret})},safe=archiveHostOrphanSummary(invalid);assert.equal(safe?.check,null);assert.equal(safe?.maximumObservedProcesses,null);assert.equal(safe?.stdoutBytes,null);assert.equal(safe?.forked,null);assert.equal(safe?.executionCode,'UNKNOWN');assert(!JSON.stringify(safe).includes(secret));assert.equal(archiveHostOrphanSummary({...invalid,qualified:true}),null);
  const irrelevant=archiveHostCanarySummary({qualified:false,failingCheck:'cpu_usage',tests:[],realFormats:[],orphanDiagnostic:invalid});assert.equal(irrelevant?.orphan,undefined);
+});
+
+test('observer failure projection is bounded, idempotent and excludes unknown operation or raw metadata',()=>{
+ const secret='private-path-env-output-pid-4321';
+ for(const project of [archiveHostLabelSummary,archiveHostBoundarySummary,archiveHostFileDescriptorSummary,archiveHostOrphanSummary]){
+  const input={diagnosticOnly:true,qualified:false,check:'cgroup_observation',execution:'failed',executionCode:'ENODEV',errorCategory:'filesystem',errorCode:'ENODEV',observerOperation:'memory.max',stdout:secret,error:secret,path:secret,pids:[4321]},safe=project(input);
+  assert.equal(safe?.errorCategory,'filesystem');assert.equal(safe?.errorCode,'ENODEV');assert.equal(safe?.observerOperation,'memory.max');assert.deepEqual(project(safe),safe);assert(!JSON.stringify(safe).includes(secret));
+  const invalid=project({...input,errorCategory:secret,errorCode:secret,observerOperation:secret});assert.equal(invalid?.errorCategory,null);assert.equal(invalid?.errorCode,'UNKNOWN');assert.equal(invalid?.observerOperation,null);assert(!JSON.stringify(invalid).includes(secret));assert.deepEqual(project(invalid),invalid);
+ }
+ assert.deepEqual(archiveHostObservationFailure({errorCategory:'unknown',errorCode:'UNKNOWN',observerOperation:secret}),{errorCategory:'unknown',errorCode:'UNKNOWN',observerOperation:null});
+});
+
+test('label exact-output and observer failures survive installed host and only the current journal invocation',()=>{
+ const id='c'.repeat(32),secret='private-label-content';
+ for(const [check,errorCategory,errorCode,operation]of [['output_match','assertion','ERR_ASSERTION',null],['cgroup_observation','filesystem','EIO','cgroup.procs']] as const){
+  const labelDiagnostic={diagnosticOnly:true,qualified:false,check,execution:check==='output_match'?'succeeded':'failed',executionCode:check==='output_match'?null:errorCode,errorCategory,errorCode,observerOperation:operation,stdoutBytes:16,stdoutTruncated:false,exactExpectedOutput:false,stdout:secret};
+  const summary=archiveHostCanarySummary({qualified:false,failureCode:'CANARY_ASSERTION_FAILED',failingCheck:'label_parser',tests:[],realFormats:[],labelDiagnostic}),diagnostic=new ArchiveHostRunError('qualification_canary',{code:errorCode},summary).diagnostic,message=JSON.stringify(diagnostic);
+  assert.equal(diagnostic.canary?.label?.check,check);assert.equal(diagnostic.canary?.label?.errorCode,errorCode);assert.equal(diagnostic.canary?.label?.observerOperation,operation);assert.equal(diagnostic.canary?.label?.exactExpectedOutput,false);assert(Buffer.byteLength(message)<=4096);assert(!message.includes(secret));assert.deepEqual(archiveHostJournalFailure(JSON.stringify({_SYSTEMD_INVOCATION_ID:id,MESSAGE:message}),id),diagnostic);assert.equal(archiveHostJournalFailure(JSON.stringify({_SYSTEMD_INVOCATION_ID:'d'.repeat(32),MESSAGE:message}),id),null);
+ }
+ const irrelevant=archiveHostCanarySummary({qualified:false,failingCheck:'file_descriptor_cap',tests:[],realFormats:[],labelDiagnostic:{diagnosticOnly:true,qualified:false}});assert.equal(irrelevant?.label,undefined);assert.equal(archiveHostLabelSummary({diagnosticOnly:true,qualified:true}),null);
 });
