@@ -2,11 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {readFile,readdir} from 'node:fs/promises';
-import {Pool} from 'pg';
+import {Pool,type PoolClient} from 'pg';
 import {database,query,transaction} from '../src/lib/db';
 import {ApiError,hashToken} from '../src/lib/security';
 import {createProjectStorageGateway} from '../src/lib/project-storage-gateway';
-import {bindProjectStorage,createProjectStorageConnection,getProjectStorage,reserveProjectStorageUpload,accessProjectStorageVersion,revokeProjectStorageConnection} from '../src/lib/project-storage';
+import {bindProjectStorage,createProjectStorageConnection,getProjectStorage,reserveProjectStorageUpload,accessProjectStorageVersion,revokeProjectStorageConnection,reauthorizeProjectStorageConnection,openProjectStorageCredentials} from '../src/lib/project-storage';
 import {projectStorageTransfer} from '../src/lib/project-storage-transfer';
 import {RunpodStorageError,type RunpodProjectStorage,type RunpodProjectStorageConfig,type RunpodMultipartUpload} from '../src/lib/project-storage-runpod';
 import type {ProjectStorageActor} from '../src/lib/project-storage-protocol';
@@ -30,7 +30,7 @@ test('storage gateway uses real scoped database grants and injected byte provide
  process.env.DATABASE_URL=integration;process.env.DATABASE_POOL_MAX=emulate?'1':'10';process.env.COATRIA_HOSTING_KEYRING=JSON.stringify({activeKeyId:'storage-gateway-fixture',keys:{'storage-gateway-fixture':Buffer.alloc(32,58).toString('base64')}});process.env.COATRIA_STORAGE_GATEWAY_ENABLED='true';process.env.COATRIA_STORAGE_GATEWAY_URL=gatewayOrigin;
  let stop:(()=>Promise<void>)|undefined;const previousFetch=globalThis.fetch;let outbound=0;globalThis.fetch=async()=>{outbound++;throw Error('Storage gateway tests must never contact a provider.');};
  const userId=randomUUID(),companies:string[]=[],projectIds:string[]=[];let userCreated=false;
- type Hooks={beforeCreate?:()=>Promise<void>;beforePart?:()=>Promise<void>;beforeComplete?:()=>Promise<void>;beforeRead?:()=>Promise<void>;read?:(versionId:string,body:Buffer)=>ReadableStream<Uint8Array>;corrupt?:boolean;failCreate?:boolean;failComplete?:boolean};
+ type Hooks={credentials?:typeof credentials;beforeCreate?:()=>Promise<void>;beforePart?:()=>Promise<void>;beforeComplete?:()=>Promise<void>;beforeRead?:()=>Promise<void>;read?:(versionId:string,body:Buffer)=>ReadableStream<Uint8Array>;corrupt?:boolean;failCreate?:boolean;failComplete?:boolean};
  async function fixture(hooks:Hooks={}){
   const companyId=randomUUID(),projectId=randomUUID();companies.push(companyId);projectIds.push(projectId);
   await query("INSERT INTO companies(id,name,slug,template) VALUES($1,'Storage gateway fixture',$2,'blank')",[companyId,companyId]);await query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'owner')",[companyId,userId]);await query("INSERT INTO studio_profiles(company_id,template_id,template_version,created_by) VALUES($1,'ai-production',1,$2)",[companyId,userId]);
@@ -39,7 +39,7 @@ test('storage gateway uses real scoped database grants and injected byte provide
   const bind=async(pid:string)=>transaction(client=>bindProjectStorage(client,actor,pid,{clientId:randomUUID(),revision:0,connectionId:connection.id}));await bind(projectId);
   const counts={create:0,part:0,complete:0,abort:0,read:0,close:0},objects=new Map<string,Buffer>(),parts=new Map<string,Map<number,Buffer>>(),configs:RunpodProjectStorageConfig[]=[];
   function providerFactory(config:RunpodProjectStorageConfig):RunpodProjectStorage{
-   configs.push(config);assert.equal(config.companyId,companyId);assert.equal(config.timeoutMs,7200000);assert.equal(config.partBytes,64*1024**2);assert.equal(config.maxObjectBytes,100*1024**3);assert.deepEqual(config.credentials,credentials);
+   configs.push(config);assert.equal(config.companyId,companyId);assert.equal(config.timeoutMs,7200000);assert.equal(config.partBytes,64*1024**2);assert.equal(config.maxObjectBytes,100*1024**3);assert.deepEqual(config.credentials,hooks.credentials??credentials);
    return {verifyBucketAccess:async()=>{throw Error('Operator preflight is not part of this gateway test');},list:async()=>({objects:[],cursor:null}),head:async()=>null,validateMultipart(value){const result=value as RunpodMultipartUpload;assert.equal(result.scope,companyId);return result;},
     async createMultipart(input){counts.create++;await hooks.beforeCreate?.();if(hooks.failCreate)throw new RunpodStorageError('STORAGE_PROVIDER_UNCERTAIN');const descriptor={scope:companyId,versionId:input.versionId,uploadId:randomUUID(),bytes:input.bytes,partBytes:config.partBytes!};parts.set(descriptor.uploadId,new Map());return descriptor;},
     async uploadPart(input){counts.part++;await hooks.beforePart?.();const body=input.body instanceof Uint8Array?Buffer.from(input.body):await consume(input.body as ReadableStream<Uint8Array>);parts.get(input.upload.uploadId)!.set(input.partNumber,body);return {partNumber:input.partNumber,bytes:body.length,etag:'"part-'+sha(body)+'"'};},
@@ -82,6 +82,27 @@ test('storage gateway uses real scoped database grants and injected byte provide
    const access=await f.readGrant(saved.upload.versionId),response=await f.gateway.handle(new Request(access.url,{headers:{...access.headers,Origin:origin,Range:'bytes=2-4'}}));assert.equal(response.status,206);assert.equal(response.headers.get('Content-Range'),'bytes 2-4/6');assert.equal(response.headers.get('Cache-Control'),'private, no-store');assert.equal(await response.text(),'cde');assert.equal(response.headers.get('X-Content-SHA256'),sha(saved.body));await f.json(await f.action(saved.upload,'cancel'),409);
   });
 
+  await t.test('reauthorization rejects old grants, upload replay and pending verification while preserving completed bytes',async()=>{
+   const f=await fixture(),completed=await f.uploaded();await f.gateway.verifyNext();const access=await f.readGrant(completed.upload.versionId),pending=await f.uploaded(),allocated=await f.reserve();
+   const before=(await query('SELECT * FROM project_storage_verifications WHERE company_id=$1',[f.companyId])).rows,providerState=await f.row(pending.upload.id),newKeys={accessKeyId:'user_changedfixture',secretAccessKey:'rps_changedfixture-key'};
+   await transaction(client=>reauthorizeProjectStorageConnection(client,f.actor,f.connection.id,{clientId:randomUUID(),revision:1,...newKeys}));f.hooks.credentials=newKeys;const reads=f.counts.read;
+   assert.equal((await f.gateway.handle(new Request(access.url,{headers:access.headers}))).status,403);await f.json(await f.action(allocated.upload,'start'),403);
+   for(const saved of [pending,allocated]){await assert.rejects(transaction(client=>reserveProjectStorageUpload(client,f.actor,f.projectId,saved.input,projectStorageTransfer)),(e:any)=>e.code==='STORAGE_UPLOAD_AUTHORITY_CHANGED');}
+   assert.equal(await f.gateway.verifyNext(),true);assert.equal(f.counts.read,reads);assert.deepEqual((await query('SELECT * FROM project_storage_verifications WHERE company_id=$1',[f.companyId])).rows,before);const after=await f.row(pending.upload.id);assert.equal(after.status,'failed');assert.deepEqual(after.provider_descriptor,providerState.provider_descriptor);assert.equal(after.provider_etag,providerState.provider_etag);assert.equal(f.counts.abort,0);
+   const fresh=await f.readGrant(completed.upload.versionId),response=await f.gateway.handle(new Request(fresh.url,{headers:fresh.headers}));assert.equal(response.status,200);assert.equal(await response.text(),completed.body.toString());assert.equal((await f.row(allocated.upload.id)).status,'allocated');
+  });
+  await t.test('upload replay fails closed for absent or mixed original credential epochs',async()=>{
+   for(const missing of [true,false]){const f=await fixture(),saved=await f.reserve();if(missing)await query('DELETE FROM project_storage_access_receipts WHERE company_id=$1',[f.companyId]);else await query(`INSERT INTO project_storage_access_receipts(company_id,project_id,version_id,actor_key,user_id,connection_id,connection_revision,upload_id,token_hash,operation,gateway_grant_id,expires_at) SELECT company_id,project_id,version_id,actor_key,user_id,connection_id,connection_revision+1,upload_id,$2,operation,$3,expires_at FROM project_storage_access_receipts WHERE company_id=$1 LIMIT 1`,[f.companyId,sha(randomUUID()),randomUUID()]);const count=Number((await query('SELECT count(*) FROM project_storage_access_receipts WHERE company_id=$1',[f.companyId])).rows[0].count);await assert.rejects(transaction(client=>reserveProjectStorageUpload(client,f.actor,f.projectId,saved.input,projectStorageTransfer)),(e:any)=>e.code==='STORAGE_UPLOAD_AUTHORITY_CHANGED');assert.equal(Number((await query('SELECT count(*) FROM project_storage_access_receipts WHERE company_id=$1',[f.companyId])).rows[0].count),count);assert.equal(f.counts.create,0);}
+  });
+  await t.test('credential opening rereads revision under the final lock after deterministic rotation between reads',async()=>{
+   const f=await fixture(),saved=await f.reserve(),newKeys={accessKeyId:'user_interleaved',secretAccessKey:'rps_interleaved-key'};let interleaved=false;
+   const opened=await transaction(async client=>{const wrapped={query:async(text:string,values:unknown[])=>{const result=await client.query(text,values);if(!interleaved&&text.includes('c.created_by AS sponsor')&&!text.includes('FOR SHARE')){interleaved=true;await reauthorizeProjectStorageConnection(client,f.actor,f.connection.id,{clientId:randomUUID(),revision:1,...newKeys});}return result;}} as unknown as PoolClient;return openProjectStorageCredentials(wrapped,f.companyId,f.connection.id);});
+   assert(interleaved);assert.equal(opened.connection.revision,2);assert.equal(opened.secretAccessKey,newKeys.secretAccessKey);f.hooks.credentials=newKeys;await f.json(await f.action(saved.upload,'start'),403);assert.equal(f.counts.create,0);
+  });
+  await t.test('PostgreSQL concurrent credential open cannot return pre-rotation revision with a new envelope',{skip:emulate},async()=>{
+   const f=await fixture(),newKeys={accessKeyId:'user_pginterleaved',secretAccessKey:'rps_pginterleaved-key'};let changed=false;
+   const opened=await transaction(async client=>{const wrapped={query:async(text:string,values:unknown[])=>{const result=await client.query(text,values);if(!changed&&text.includes('c.created_by AS sponsor')&&!text.includes('FOR SHARE')){changed=true;await transaction(other=>reauthorizeProjectStorageConnection(other,f.actor,f.connection.id,{clientId:randomUUID(),revision:1,...newKeys}));}return result;}} as unknown as PoolClient;return openProjectStorageCredentials(wrapped,f.companyId,f.connection.id);});assert(changed);assert.equal(opened.connection.revision,2);assert.equal(opened.secretAccessKey,newKeys.secretAccessKey);
+  });
   await t.test('grant credentials are resource/company/operation/expiry bound and reject hostile browser origins',async()=>{
    const f=await fixture(),g=await fixture(),one=await f.reserve(),two=await g.reserve();await f.json(await f.request('/v1/uploads/'+one.upload.id,two.upload.token),403);await f.json(await f.request('/v1/files/'+one.upload.versionId,one.upload.token),403);assert.equal((await f.gateway.handle(new Request(gatewayOrigin+'/v1/uploads/'+one.upload.id,{headers:{Authorization:'Bearer '+one.upload.token,Origin:'https://evil.example.invalid'}}))).status,403);assert.equal((await f.gateway.handle(new Request(gatewayOrigin+'/v1/uploads/'+one.upload.id+'?token='+one.upload.token,{headers:{Authorization:'Bearer '+one.upload.token}}))).status,400);
    await query("UPDATE project_storage_access_receipts SET expires_at=clock_timestamp()-interval '1 second' WHERE token_hash=$1",[hashToken(one.upload.token)]);await f.json(await f.action(one.upload,'start'),403);assert.equal(f.counts.create,0);

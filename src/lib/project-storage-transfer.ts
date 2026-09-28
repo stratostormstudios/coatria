@@ -30,6 +30,10 @@ export const projectStorageTransfer:ProjectStorageTransferIntegration={
   if(upload){
    if(upload.request_hash!==requestHash||upload.project_id!==projectId||upload.run_id!==(actor.runId??null))fail(409,'This upload request ID belongs to different file details.','IDEMPOTENCY_CONFLICT');
    if(new Date(upload.expires_at).getTime()<=Date.now())fail(409,'This upload session expired. Start a new version.','STORAGE_UPLOAD_EXPIRED');
+   // Every issued upload grant is insert-only. A key rotation must not mint a
+   // fresh grant that revives an upload created under an earlier credential epoch.
+   const epochs=(await client.query('SELECT DISTINCT project_id,version_id,operation,connection_id,connection_revision FROM project_storage_access_receipts WHERE company_id=$1 AND upload_id=$2',[actor.companyId,upload.id])).rows;
+   if(epochs.length!==1||epochs[0].project_id!==projectId||epochs[0].version_id!==upload.version_id||epochs[0].operation!=='upload'||epochs[0].connection_id!==binding.connectionId||epochs[0].connection_revision!==binding.connection.revision)fail(409,'This upload belongs to an earlier or unconfirmed storage credential revision. Preserve its status for reconciliation and start a new version.','STORAGE_UPLOAD_AUTHORITY_CHANGED');
   }else{
    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`storage-upload-cap:${actor.companyId}`]);
    // Expiry is not proof that a provider write/abort completed. In-flight

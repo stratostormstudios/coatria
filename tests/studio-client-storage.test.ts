@@ -41,7 +41,7 @@ test('external client gateway serves only approved exact versions through isolat
  process.env.DATABASE_POOL_MAX=emulate?'1':'6';process.env.COATRIA_HOSTING_KEYRING=JSON.stringify({activeKeyId:keyId,keys:{[keyId]:key.toString('base64')}});process.env.COATRIA_STORAGE_GATEWAY_ENABLED='true';
  const users={owner:randomUUID(),registrar:randomUUID(),reviewer:randomUUID(),client:randomUUID(),other:randomUUID()},sessions=Object.fromEntries(Object.keys(users).map(k=>[k,randomUUID()]));
  let gateway:ReturnType<typeof createProjectStorageGateway>,db:Pool,gatewayOrigin='';
- type Hooks={beforeRead?:()=>Promise<void>;read?:(body:Buffer)=>ReadableStream<Uint8Array>;metadata?:Row};
+ type Hooks={beforeRead?:()=>Promise<void>;read?:(body:Buffer)=>ReadableStream<Uint8Array>;metadata?:Row;expectedCredentials?:typeof credentials};
  async function call(path:string,method:string,payload:unknown,actor:keyof typeof users,expected=200){const request=new Request(origin+'/api/'+path,{method,headers:{Origin:origin,Cookie:'coatria_session='+sessions[actor],'Content-Type':'application/json'},body:payload===undefined?undefined:JSON.stringify(payload)});let response;try{response=await handleApi(request,path.split('?')[0].split('/'));}catch(e){response=errorResponse(e);}const value=await response.json();assert.equal(response.status,expected,JSON.stringify(value));return value;}
  async function fixture(kind:GeneratedFixtureKind='image',hooks:Hooks={}){
   const companyId=randomUUID();await db.query("INSERT INTO companies(id,name,slug,template) VALUES($1,'Isolated external storage fixture',$2,'blank')",[companyId,companyId]);
@@ -54,7 +54,7 @@ test('external client gateway serves only approved exact versions through isolat
   await db.query('UPDATE project_storage_connections SET secret_envelope=$2 WHERE id=$1',[f.storageId,JSON.stringify({keyId,nonce:nonce.toString('base64'),tag:cipher.getAuthTag().toString('base64'),ciphertext:ciphertext.toString('base64')})]);
   const shared=await call(`companies/${companyId}/studio/projects/${f.projectId}/client-deliveries`,'POST',{clientId:randomUUID(),revision:f.revision,deliveryId:f.delivery.id,recipientUserId:users.client,identityConfirmation:'confirmed_out_of_band',expiresAt:new Date(Date.now()+3600000).toISOString()},'owner',201),shareId=shared.share.id;
   const counts={get:0,close:0,cancel:0};let lastSignal:AbortSignal|undefined;
-  const providerFactory=(config:RunpodProjectStorageConfig):RunpodProjectStorage=>{assert.equal(config.companyId,companyId);assert.equal(config.projectId,f.projectId);assert.deepEqual(config.credentials,credentials);assert(config.timeoutMs!>0&&config.timeoutMs!<=60000);const forbidden=async()=>{throw Error('Client download cannot mutate provider storage');};return {verifyBucketAccess:forbidden,list:forbidden,head:forbidden,createMultipart:forbidden,uploadPart:forbidden,completeMultipart:forbidden,abortMultipart:forbidden,validateMultipart(){throw Error('No upload handle');},close(){counts.close++;},async get(input){counts.get++;lastSignal=input.signal;assert.equal(input.versionId,f.versionId);assert.equal(input.ifMatch,'"synthetic-etag"');await hooks.beforeRead?.();const part=input.range?f.body.subarray(input.range.start,input.range.end+1):f.body;return{stream:hooks.read?.(part)??stream(part),bytes:part.length,totalBytes:f.bytes,etag:'"synthetic-etag"',contentType:f.contentType,range:input.range??null,contentRange:input.range?`bytes ${input.range.start}-${input.range.end}/${f.bytes}`:null,...hooks.metadata};}};};
+  const providerFactory=(config:RunpodProjectStorageConfig):RunpodProjectStorage=>{assert.equal(config.companyId,companyId);assert.equal(config.projectId,f.projectId);assert.deepEqual(config.credentials,hooks.expectedCredentials??credentials);assert(config.timeoutMs!>0&&config.timeoutMs!<=60000);const forbidden=async()=>{throw Error('Client download cannot mutate provider storage');};return {verifyBucketAccess:forbidden,list:forbidden,head:forbidden,createMultipart:forbidden,uploadPart:forbidden,completeMultipart:forbidden,abortMultipart:forbidden,validateMultipart(){throw Error('No upload handle');},close(){counts.close++;},async get(input){counts.get++;lastSignal=input.signal;assert.equal(input.versionId,f.versionId);assert.equal(input.ifMatch,'"synthetic-etag"');await hooks.beforeRead?.();const part=input.range?f.body.subarray(input.range.start,input.range.end+1):f.body;return{stream:hooks.read?.(part)??stream(part),bytes:part.length,totalBytes:f.bytes,etag:'"synthetic-etag"',contentType:f.contentType,range:input.range??null,contentRange:input.range?`bytes ${input.range.start}-${input.range.end}/${f.bytes}`:null,...hooks.metadata};}};};
   const own=createProjectStorageGateway({providerFactory,allowedOrigins:[origin]});
   const access=()=>transaction(c=>issueStudioClientStorageAccess(c,{shareId,recipientUserId:users.client,versionId:f.versionId}));
   const request=async(a:Awaited<ReturnType<typeof access>>,range?:string,signal?:AbortSignal)=>{gateway=own;return fetch(a.url,{headers:{...a.headers,Origin:origin,...range?{Range:range}:{}},signal});};
@@ -118,6 +118,30 @@ test('external client gateway serves only approved exact versions through isolat
   });
   await t.test('invalid and multiple ranges never open the provider',async()=>{
    const f=await fixture(),a=await f.access();for(const range of['bytes=-1','bytes=0-1,4-5','bytes=8-2',`bytes=0-${f.bytes}`,'bytes=9007199254740993-']){const r=await f.request(a,range);assert.equal(r.status,416);await r.body?.cancel();}assert.equal(f.counts.get,0);
+  });
+  await t.test('credential replacement invalidates issued client tokens while fresh access retains the approved historical version',async()=>{
+   const f=await fixture(),accepted=await call(`client-deliveries/${f.shareId}/responses`,'POST',{clientId:randomUUID(),revision:1,decision:'acknowledged',note:'Synthetic client acceptance before credential replacement.'},'client',201);
+   assert.equal(accepted.project.status,'delivered');
+   const history=async()=>({
+    share:(await db.query('SELECT * FROM studio_client_deliveries WHERE id=$1',[f.shareId])).rows[0],
+    delivery:(await db.query('SELECT * FROM studio_deliveries WHERE id=$1',[f.delivery.id])).rows[0],
+    archive:(await db.query('SELECT * FROM higgsfield_output_archives WHERE id=$1',[f.archiveId])).rows[0],
+    source:(await db.query('SELECT * FROM studio_generated_artifact_sources WHERE artifact_id=$1',[f.artifactId])).rows[0],
+    version:(await db.query('SELECT * FROM project_storage_versions WHERE id=$1',[f.versionId])).rows[0],
+    verification:(await db.query('SELECT * FROM project_storage_verifications WHERE version_id=$1',[f.versionId])).rows[0],
+    acceptance:(await db.query("SELECT * FROM studio_client_delivery_receipts WHERE share_id=$1 AND kind='acknowledged'",[f.shareId])).rows,
+    project:(await db.query('SELECT status,revision,gates,updated_at FROM studio_projects WHERE id=$1',[f.projectId])).rows[0],
+   });
+   const before=await history(),old=await f.access(),connection=(await db.query('SELECT revision FROM project_storage_connections WHERE id=$1',[f.storageId])).rows[0];
+   assert.equal(before.archive.status,'verified');assert.equal(before.archive.storage_connection_revision,connection.revision);assert.equal(before.delivery.status,'acknowledged');assert.equal(before.acceptance.length,1);assert.equal(before.acceptance[0].id,accepted.receipt.id);
+   const replacement={accessKeyId:['user','client-replacement-fixture'].join('_'),secretAccessKey:['rps','client-replacement-fixture-key'].join('_')};assert.notDeepEqual(replacement,credentials);
+   const changed=await call(`companies/${f.companyId}/storage-connections/${f.storageId}/reauthorize`,'POST',{clientId:randomUUID(),revision:connection.revision,...replacement},'owner');assert.equal(changed.connection.id,f.storageId);assert.equal(changed.connection.revision,connection.revision+1);f.hooks.expectedCredentials=replacement;
+   const rejected=await f.request(old);assert.equal(rejected.status,403);assert.equal((await rejected.json()).code,'CLIENT_STORAGE_UNAVAILABLE');assert.equal(f.counts.get,0);assert.equal(f.counts.close,0);
+   const fresh=await f.access();assert.notEqual(fresh.headers.Authorization,old.headers.Authorization);assert.equal(fresh.storageVersionId,old.storageVersionId);assert.equal(fresh.sha256,old.sha256);
+   const grants=(await db.query('SELECT token_hash,connection_id,connection_revision,storage_version_id,package_hash FROM studio_client_storage_grants WHERE token_hash=ANY($1::text[])',[[hashToken(old.headers.Authorization.slice(7)),hashToken(fresh.headers.Authorization.slice(7))]])).rows;
+   assert.equal(grants.length,2);assert.equal(grants.find(g=>g.token_hash===hashToken(old.headers.Authorization.slice(7))).connection_revision,connection.revision);assert.equal(grants.find(g=>g.token_hash===hashToken(fresh.headers.Authorization.slice(7))).connection_revision,changed.connection.revision);assert(grants.every(g=>g.connection_id===f.storageId&&g.storage_version_id===f.versionId&&g.package_hash===before.share.package_hash));
+   const response=await f.request(fresh);assert.equal(response.status,200);assert.deepEqual(Buffer.from(await response.arrayBuffer()),f.body);assert.equal(f.counts.get,1);assert.equal(f.counts.close,1);
+   assert.deepEqual(await history(),before,'Credential authority can change without rewriting archive provenance, verification, the delivery or client acceptance.');
   });
   await t.test('fresh gateway reads reject revoked share, project policy, membership, source and storage authority',async()=>{
    for(const change of['share','membership','sponsor','connection','archive','job','policy'] as const){const f=await fixture(),a=await f.access();
