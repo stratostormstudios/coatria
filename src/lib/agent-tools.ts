@@ -11,7 +11,7 @@ import {authenticateAgent} from './integrations';
 import {authorizeRunTool,assertRunToolCommitAuthority,type AgentRunIdentity} from './agent-runs';
 import {executeAgentTaskAction,agentTaskProjection as taskProjection,recordAgentTaskAuthors as authors} from './agent-task-actions';
 import {requireMembership,lockMembership} from './auth';
-import {body,fail,id,json,rateLimit,uuid} from './security';
+import {body,fail,id,json,rateLimit,uuid,ApiError} from './security';
 import {layoutInput,roomInput,submissionUrl,text} from './model';
 import {readFloorPlan} from './floor-plan';
 import {releaseChangedSeats} from './company';
@@ -23,7 +23,7 @@ import {studioGeneratedRevisionSnapshot,draftStudioGeneratedRevision} from './st
 import type {StudioGeneratedRevisionSnapshot,StudioGeneratedRevisionPlan} from './studio-generated-revision-protocol';
 import {registerStudioGeneratedArtifact} from './studio-generated-artifacts';
 import {studioSnapshot,studioProjectDetail,createStudioProject,registerStudioArtifact} from './studio';
-import {studioStaffingPlanInput} from './studio-staffing-protocol';
+import {studioStaffingPlanInput,studioStaffingCapabilities} from './studio-staffing-protocol';
 import {proposeStudioStaffing,getStudioStaffingProposal,listStudioStaffingProposals} from './studio-staffing';
 import {executionPlanInput} from './studio-execution-protocol';
 import {studioExecutionSnapshot,studioExecutionJob,studioExecutionInput,submitStudioExecution} from './studio-execution';
@@ -217,7 +217,7 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
    return {result,replayed:true};
   }
   if(definition.mutating&&Number((await client.query('SELECT count(*) FROM agent_tool_receipts WHERE company_id=$1 AND run_id=$2',[agent.company_id,command.runId])).rows[0].count)>=200)fail(409,'This run reached its limit of 200 committed tool actions. Start a new reviewed request.','AGENT_TOOL_BUDGET');
-  const run=context.run,companyId=agent.company_id,limit=args.limit||50,values=[companyId,args.after||null,limit+1];let result:unknown;
+  const run=context.run,companyId=agent.company_id,limit=args.limit||50,values=[companyId,args.after||null,limit+1];let result:unknown,staffingRejected=false;
   switch(name){
    case 'storage_get':result=await getProjectStorage(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id},args.projectId,projectStorageTransfer);break;
    case 'storage_files_list':{const{projectId,...input}=args;result=await listProjectStorageFiles(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id},projectId,input,projectStorageTransfer);break;}
@@ -268,7 +268,24 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
    case 'studio_templates':result={templates:STUDIO_TEMPLATES};break;
    case 'studio_get':result=args.projectId?studioAgentProject(await studioProjectDetail(client,companyId,args.projectId,args.contractVersion??1),args):studioAgentSnapshot(await studioSnapshot(client,companyId,args.after,args.limit,args.contractVersion??1));break;
    case 'studio_company_plan':result=planStudioCompany(args);break;
-   case 'studio_staffing_propose':result=await proposeStudioStaffing(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id,agentSponsorId:agent.created_by},{...args,clientId:command.requestId});break;
+   case 'studio_staffing_propose':{
+    // Only this known role-binding conflict is correctable. Roll back the
+    // entire service call before recording non-execution; other permission,
+    // database and transport failures still abort the outer transaction.
+    await client.query('SAVEPOINT staffing_proposal_attempt');
+    try{result=await proposeStudioStaffing(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id,agentSponsorId:agent.created_by},{...args,clientId:command.requestId});}
+    catch(error){
+     await client.query('ROLLBACK TO SAVEPOINT staffing_proposal_attempt');
+     if(!(error instanceof ApiError)||error.status!==409||error.code!=='STAFFING_AGENT_GRANTS_REQUIRED')throw error;
+     const corrections=Number((await client.query("SELECT count(*) FROM agent_tool_receipts WHERE company_id=$1 AND agent_id=$2 AND run_id=$3 AND tool='studio_staffing_propose' AND response->>'code'='STAFFING_AGENT_GRANTS_REQUIRED' AND response->>'executed'='false'",[companyId,agent.id,run.id])).rows[0].count);
+     if(corrections>=2)fail(409,'This run exhausted its two staffing role-binding corrections. Review the existing grants before creating another request.','STAFFING_CORRECTION_LIMIT');
+     staffingRejected=true;
+     result={version:1,executed:false,code:'STAFFING_AGENT_GRANTS_REQUIRED',correction:corrections+1,maxCorrections:2,proposalCreated:false,grantsChanged:false,
+      guidance:'Regroup the roles so each bound existing agent already has every required capability, or propose a new paused specialist for the unsupported roles within the requested team size. Never expand existing grants. Use a new tool call for corrected arguments; replaying this request returns the same rejection. A human must separately review and apply a successful proposal.',
+      roleRequirements:STUDIO_TEMPLATES.find(template=>template.id===args.templateId)!.roles.filter(role=>role.key!=='qc').map(role=>({roleKey:role.key,capabilities:studioStaffingCapabilities(args.templateId, [role.key])}))};
+    }
+    await client.query('RELEASE SAVEPOINT staffing_proposal_attempt');break;
+   }
    case 'studio_staffing_get':{
     if(args.proposalId)result={proposal:await getStudioStaffingProposal(client,companyId,args.proposalId)};
     else{const page=await listStudioStaffingProposals(client,companyId,args.after,args.limit);result={...page,proposals:page.proposals.map(proposal=>({id:proposal.id,revision:proposal.revision,status:proposal.status,planHash:proposal.planHash,createdAt:proposal.createdAt,expiresAt:proposal.expiresAt,briefPreview:proposal.plan.brief.slice(0,320),requestedAgentCount:proposal.plan.requestedAgentCount,actualAgentCount:proposal.plan.actualAgentCount,newAgentCount:proposal.plan.newAgentCount,exactPlanAvailable:true})),proposalsAreSummaries:true};}
@@ -303,7 +320,7 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
   result=await recordStudioInferenceToolReceipt(client,context.agent,command.runId,command.requestId,name,command.arguments,result);
   if(definition.mutating){
    await client.query('INSERT INTO agent_tool_receipts(company_id,agent_id,run_id,request_id,tool,request_hash,response) VALUES($1,$2,$3,$4,$5,$6,$7)',[companyId,agent.id,run.id,command.requestId,name,hash,JSON.stringify(result)]);
-   await client.query("INSERT INTO activity(company_id,kind,description) VALUES($1,'agent.tool_used',$2)",[companyId,`${agent.name} used ${name} in run ${run.id}.`]);
+   await client.query('INSERT INTO activity(company_id,kind,description) VALUES($1,$2,$3)',[companyId,staffingRejected?'agent.tool_rejected':'agent.tool_used',staffingRejected?`${agent.name} could not propose staffing in run ${run.id}: existing role grants are insufficient; no staffing changes were made.`:`${agent.name} used ${name} in run ${run.id}.`]);
   }
   // A coordinator is not its child: the child lifecycle guard cannot establish
   // this dispatch's policy deadline after outer receipt writes or lock waits.
