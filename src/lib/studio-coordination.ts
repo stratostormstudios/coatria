@@ -166,15 +166,16 @@ const coordinatorGenerationToolRules:Record<string,(args:Row,receipt:Row,client:
  higgsfield_connection_get:()=>true,
  higgsfield_requests_list:(args,receipt)=>args.projectId===receipt.project_id,
  higgsfield_jobs_list:(args,receipt)=>args.projectId===receipt.project_id,
- storage_get:(args,receipt)=>args.projectId===receipt.project_id,
- storage_files_list:(args,receipt)=>args.projectId===receipt.project_id,
+ higgsfield_references_list:(args,receipt)=>args.projectId===receipt.project_id,
  tasks_claim:(args,receipt)=>args.taskId===receipt.task_id,
  higgsfield_generation_propose:(args,receipt)=>args.projectId===receipt.project_id&&args.workItemId===receipt.work_item_id,
 };
 export const coordinatorGenerationToolNames:readonly string[]=Object.freeze(Object.keys(coordinatorGenerationToolRules));
 const planningDispatchToolNames:readonly string[]=Object.freeze(['studio_get','tasks_claim','tasks_submit']);
 const referenceDispatchToolNames:readonly string[]=Object.freeze([...planningDispatchToolNames,'storage_get','storage_files_list','studio_storage_references_list','infrastructure_list','infrastructure_files','higgsfield_connection_get','higgsfield_requests_list','higgsfield_jobs_list']);
-const generationDispatchToolNames:readonly string[]=Object.freeze([...coordinatorGenerationToolNames,'higgsfield_archives_list','higgsfield_archive_get','higgsfield_archive_propose','studio_generated_artifact_register','tasks_submit']);
+// Ordinary specialists also archive outputs and still need destination storage
+// browsing. The separate coordinator-generation child only proposes generation.
+const generationDispatchToolNames:readonly string[]=Object.freeze([...coordinatorGenerationToolNames,'storage_get','storage_files_list','higgsfield_archives_list','higgsfield_archive_get','higgsfield_archive_propose','studio_generated_artifact_register','tasks_submit']);
 /** Model presentation for an existing assigned task, never an authority grant.
  * Exact server-created dispatch provenance, not prompt text or character role,
  * distinguishes these finite tasks from ordinary company/coordinator missions.

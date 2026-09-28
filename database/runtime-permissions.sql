@@ -62,6 +62,12 @@ GRANT UPDATE(status,diagnostic_code,poll_attempts,next_poll_at,poll_lease_id,pol
 GRANT SELECT,INSERT ON higgsfield_output_archives,higgsfield_archive_receipts,higgsfield_archive_requests TO coatria_runtime_v1;
 GRANT SELECT ON higgsfield_archive_fetches TO coatria_runtime_v1;
 GRANT UPDATE(status,revision,approved_by,approved_at,expires_at,approved_project_revision,approved_binding_revision,revoked_by,revoked_at,lease_id,lease_expires_at,diagnostic_code,updated_at) ON higgsfield_output_archives TO coatria_runtime_v1;
+-- Reference metadata and the OAuth broker stay in the control plane. The
+-- runtime can record broker allocations/confirmations, but cannot invent image
+-- inspection evidence. No existing archive-worker role gains reference access.
+GRANT SELECT,INSERT ON higgsfield_references,higgsfield_reference_receipts,higgsfield_reference_requests,higgsfield_reference_transports,higgsfield_reference_confirmations TO coatria_runtime_v1;
+GRANT SELECT ON higgsfield_reference_inspections TO coatria_runtime_v1;
+GRANT UPDATE(status,revision,approved_by,approved_at,expires_at,approval_hash,qualification_sha256,revoked_by,revoked_at,lease_id,lease_expires_at,action_id,action_operation,diagnostic_code,updated_at) ON higgsfield_references TO coatria_runtime_v1;
 GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO coatria_runtime_v1;
 ALTER ROLE coatria_runtime_v1 SET statement_timeout='15s';
 ALTER ROLE coatria_runtime_v1 SET idle_in_transaction_session_timeout='20s';

@@ -75,6 +75,7 @@ test('runtime role supports accounts and durable conversations without verificat
     const immutableStudioTables=['studio_planning_reviews','studio_planning_review_reads','studio_planning_review_decisions','studio_host_compute_reservations','studio_host_provision_requests','studio_client_delivery_files','studio_client_delivery_receipts','studio_client_delivery_requests','studio_inference_reservations','studio_inference_tool_receipts','studio_coordination_followups'];
     immutableStudioTables.push('studio_generated_artifact_sources','studio_generated_review_evidence');
     immutableStudioTables.push('trusted_service_reservations','trusted_service_requests');
+    immutableStudioTables.push('higgsfield_reference_receipts','higgsfield_reference_requests','higgsfield_reference_transports','higgsfield_reference_confirmations');
     for(const table of immutableStudioTables){
       assert.deepEqual((await client.query("SELECT has_table_privilege(current_user,$1,'SELECT') AS read,has_table_privilege(current_user,$1,'INSERT') AS append,has_any_column_privilege(current_user,$1,'UPDATE') AS edit,has_table_privilege(current_user,$1,'DELETE') AS remove",[table])).rows[0],{read:true,append:true,edit:false,remove:false},table);
       await client.query(`SELECT company_id FROM ${table} WHERE false`);
@@ -84,6 +85,9 @@ test('runtime role supports accounts and durable conversations without verificat
       await client.query(`UPDATE ${table} SET revision=revision+1 WHERE false`);
       assert.equal((await client.query("SELECT has_table_privilege(current_user,$1,'DELETE') AS allowed",[table])).rows[0].allowed,false);
     }
+    assert.deepEqual((await client.query("SELECT has_table_privilege(current_user,'higgsfield_reference_inspections','SELECT') AS read,has_table_privilege(current_user,'higgsfield_reference_inspections','INSERT') AS append,has_any_column_privilege(current_user,'higgsfield_reference_inspections','UPDATE') AS edit,has_table_privilege(current_user,'higgsfield_reference_inspections','DELETE') AS remove")).rows[0],{read:true,append:false,edit:false,remove:false});
+    await client.query('SELECT id FROM higgsfield_references WHERE false FOR UPDATE');
+    for(const column of ['project_id','project_revision','project_snapshot','project_sha256','work_item_id','work_snapshot','proxy_version_id','source_version_id','proxy_snapshot','source_snapshot','request_hash','provider_connection_id','storage_connection_id','catalog_sha256'])assert.equal((await client.query("SELECT has_column_privilege(current_user,'higgsfield_references',$1,'UPDATE') AS allowed",[column])).rows[0].allowed,false,column);
     await client.query('SELECT company_id FROM studio_client_deliveries WHERE false FOR SHARE');
     await client.query('UPDATE studio_client_deliveries SET status=status,revision=revision,revoked_at=revoked_at WHERE false');
     for(const column of ['recipient_user_id','package_hash','package_snapshot','expires_at'])assert.equal((await client.query("SELECT has_column_privilege(current_user,'studio_client_deliveries',$1,'UPDATE') AS allowed",[column])).rows[0].allowed,false,column);

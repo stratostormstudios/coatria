@@ -1,7 +1,7 @@
 import {createCipheriv,createDecipheriv,randomBytes} from 'node:crypto';
 import {fail} from './security';
 
-type Context={companyId:string;id:string;purpose:'oauth-pending'|'oauth-connection'|'provider-output'|'provider-response'};
+type Context={companyId:string;id:string;purpose:'oauth-pending'|'oauth-connection'|'provider-output'|'provider-response'|'reference-transport'};
 type Envelope={keyId:string;nonce:string;tag:string;ciphertext:string};
 function ring(){
  try{const value=JSON.parse(process.env.COATRIA_HOSTING_KEYRING||'');const keys=new Map<string,Buffer>();

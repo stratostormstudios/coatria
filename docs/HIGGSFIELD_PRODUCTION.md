@@ -116,3 +116,7 @@ Implementation references: [Node HTTPS Agent/request](https://nodejs.org/api/htt
 ## Approved project-storage archives (v1.11 implementation)
 
 The output reader is now composed with native media inspection and a durable archive worker. [Archive workflow and deployment gates](HIGGSFIELD_ARCHIVES.md) documents source/destination review, leased agent tools, per-archive human approval, actual stored-byte verification and recovery. The implementation remains operationally disabled until the decoder host and live storage path are qualified; historical release statements above describe their original release scope. Archiving does not mark artifacts, QC or client delivery complete.
+
+## Managed project references
+
+The prepared-image reference workflow is described in [HIGGSFIELD_REFERENCES.md](HIGGSFIELD_REFERENCES.md). It adds separate sharing approval, once-only transfer phases and generation `referenceIds` with revalidated provenance. It is disabled until the actual company catalog, model compatibility, storage reader and isolated worker are qualified. This source change alone does not activate uploads or establish a completed production-to-delivery pilot.

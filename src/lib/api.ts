@@ -29,6 +29,7 @@ import {projectGatewayRoute} from './project-gateway-api';
 import {studioInferenceRoute} from './studio-inference';
 import {higgsfieldRoute} from './higgsfield';
 import {higgsfieldArchiveRoute} from './higgsfield-archive-api';
+import {higgsfieldReferenceRoute} from './higgsfield-reference-api';
 import {studioCreativeAssetsRoute} from './studio-creative-assets';
 import {projectStorageRoute} from './project-storage';
 import {projectStorageTransfer} from './project-storage-transfer';
@@ -62,7 +63,7 @@ export async function handleApi(request: Request, parts: string[]): Promise<Resp
     if(!['GET','HEAD'].includes(method)&&!bearerEndpoint&&!['auth'].includes(parts[0])) {
       const user=await currentUser(request);if(user)await rateLimit(`write:${user.id}`,240,60);
     }
-    for(const handler of [identityRoute,companyRuntimeRoute,companyRuntimeExecutorRoute,projectGatewayRoute,storageRoute,higgsfieldArchiveRoute,higgsfieldRoute,studioCreativeAssetsRoute,pluginMarketplaceRoute,agentMissionRoute,studioInferenceRoute,agentRunRoute,agentToolsRoute,agentProposalRoute,studioMediaRoute,studioExecutionRoute,studioStaffingRoute,studioHostingRoute,studioHostProvisioningRoute,trustedServiceRoute,studioCoordinationRoute,studioGeneratedFollowupRoute,studioGeneratedRevisionRoute,studioReviewPolicyRoute,studioClientDeliveryRoute,studioRoute,conversationRoute,companyRoute,workRoute,integrationRoute,talentRoute]) {
+    for(const handler of [identityRoute,companyRuntimeRoute,companyRuntimeExecutorRoute,projectGatewayRoute,storageRoute,higgsfieldReferenceRoute,higgsfieldArchiveRoute,higgsfieldRoute,studioCreativeAssetsRoute,pluginMarketplaceRoute,agentMissionRoute,studioInferenceRoute,agentRunRoute,agentToolsRoute,agentProposalRoute,studioMediaRoute,studioExecutionRoute,studioStaffingRoute,studioHostingRoute,studioHostProvisioningRoute,trustedServiceRoute,studioCoordinationRoute,studioGeneratedFollowupRoute,studioGeneratedRevisionRoute,studioReviewPolicyRoute,studioClientDeliveryRoute,studioRoute,conversationRoute,companyRoute,workRoute,integrationRoute,talentRoute]) {
       const result=await handler(request,parts,method);if(result)return finish(result);
     }
     fail(404,'API endpoint not found.');

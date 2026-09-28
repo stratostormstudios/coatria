@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createHash,randomUUID} from 'node:crypto';
+import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {readFile,readdir} from 'node:fs/promises';
 import {setTimeout as delay} from 'node:timers/promises';
 import {Pool} from 'pg';
@@ -20,6 +20,7 @@ import {handleApi} from '../src/lib/api';
 import {studioCoordinatorObjective} from '../src/lib/studio-coordinator-objective';
 import {createProviderExecutor} from '../public/downloads/provider-adapter.mjs';
 import {stableRequestId,createRunInferenceClient} from '../public/downloads/agent-worker.mjs';
+import * as references from '../src/lib/higgsfield-references';
 
 const emulate=process.env.COATRIA_TEST_EMULATOR==='1',integration=process.env.COATRIA_INTEGRATION_DATABASE_URL;
 const localPostgres=(()=>{try{return !emulate&&!!integration&&['127.0.0.1','localhost'].includes(new URL(integration).hostname);}catch{return false;}})();
@@ -39,7 +40,7 @@ test('generated continuation commands cannot supply revisions, source facts or r
 });
 
 test('generated continuation executes exact leased tools against immutable synthetic verified sources',{skip:!emulate&&!localPostgres,timeout:180000},async t=>{
- const dbName='coatria_generated_followup_'+randomUUID().replaceAll('-',''),prior={pool:(globalThis as any).coatriaPool,url:process.env.DATABASE_URL,fetch:globalThis.fetch};
+ const dbName='coatria_generated_followup_'+randomUUID().replaceAll('-',''),prior={pool:(globalThis as any).coatriaPool,url:process.env.DATABASE_URL,fetch:globalThis.fetch,key:process.env.COATRIA_HOSTING_KEYRING};
  let pool:Pool|undefined,control:Pool|undefined,stop:(()=>Promise<void>)|undefined,created=false,networkCalls=0;
  const insert=async(table:string,row:Row,c:{query:typeof query}={query})=>{const keys=Object.keys(row);return(await c.query(`INSERT INTO ${table}(${keys.join(',')}) VALUES(${keys.map((_,i)=>'$'+(i+1)).join(',')}) RETURNING *`,Object.values(row))).rows[0];};
  const expiry=async()=>new Date((await query("SELECT clock_timestamp()+interval '1 day' AS at")).rows[0].at).toISOString();
@@ -47,11 +48,12 @@ test('generated continuation executes exact leased tools against immutable synth
   if(emulate){const{PGlite}=await import('@electric-sql/pglite'),{PGLiteSocketServer}=await import('@electric-sql/pglite-socket'),pg=await PGlite.create();for(const file of(await readdir('database')).filter(file=>/^\d.*\.sql$/.test(file)).sort())await pg.exec(await readFile('database/'+file,'utf8'));const socket=new PGLiteSocketServer({db:pg,host:'127.0.0.1',port:0,maxConnections:1});await socket.start();const url=new URL('postgresql://'+socket.getServerConn()+'/postgres');url.username='postgres';url.password='postgres';process.env.DATABASE_URL=url.href;pool=new Pool({connectionString:url.href,max:1});stop=async()=>{await socket.stop();await pg.close();};}
   else{control=new Pool({connectionString:integration,max:1,connectionTimeoutMillis:10000});await control.query('CREATE DATABASE '+dbName);created=true;const url=new URL(integration!);url.pathname='/'+dbName;process.env.DATABASE_URL=url.href;pool=new Pool({connectionString:url.href,max:6,connectionTimeoutMillis:10000,statement_timeout:15000});for(const file of(await readdir('database')).filter(file=>/^\d.*\.sql$/.test(file)).sort())await pool.query(await readFile('database/'+file,'utf8'));}
   (globalThis as any).coatriaPool=pool;
+  process.env.COATRIA_HOSTING_KEYRING=JSON.stringify({activeKeyId:'fixture',keys:{fixture:randomBytes(32).toString('base64')}});
   // A failure here proves these handlers attempted network I/O. Synthetic SQL
   // evidence is deliberately not a claim that decoding or a provider ran.
   globalThis.fetch=async()=>{networkCalls++;throw Error('Network access is forbidden in synthetic continuation tests');};
 
-  async function fixture(kind:keyof typeof specs='image',options:{budget?:number;optIn?:boolean;reuse?:boolean;staffed?:boolean;singleAgent?:boolean}={}){
+  async function fixture(kind:keyof typeof specs='image',options:{budget?:number;optIn?:boolean;reuse?:boolean;staffed?:boolean;singleAgent?:boolean;withReference?:boolean}={}){
    const company=randomUUID(),producer=await insert('users',{name:'Original producer',email:randomUUID()+'@example.invalid',password_hash:'not-a-login'}),registrar=await insert('users',{name:'Continuation requester',email:randomUUID()+'@example.invalid',password_hash:'not-a-login'});
    await insert('companies',{id:company,name:'Synthetic generated continuation',slug:company,template:'blank'});for(const user of[producer,registrar])await insert('memberships',{company_id:company,user_id:user.id,role:'admin'});
    const memberA={companyId:company,userId:producer.id,role:'admin',user:producer} as Membership,memberB={companyId:company,userId:registrar.id,role:'admin',user:registrar} as Membership;
@@ -96,11 +98,11 @@ test('generated continuation executes exact leased tools against immutable synth
     const source=await claim(specialist);assert.equal(source.run.id,initial.childRunId);
     if(options.singleAgent){assert.deepEqual([...source.run.capabilities].sort(),[...caps].sort());assert.notEqual(source.run.id,firstParent.run.id);await assert.rejects(()=>tool(specialist,source,'studio_coordination_get',{projectId:p.id}),(error:any)=>error.code==='COORDINATOR_GENERATION_SCOPE');const dispatchInput={projectId:p.id,workItemId:work.id,projectRevision:await projectRevision(),policyRevision:(await policy()).revision};await assert.rejects(()=>tool(specialist,source,'studio_work_dispatch',dispatchInput),denied);
      const request=await transaction(async client=>{const access=await authorizeStoredAgentRun(client,specialist as any,source.run.id,sha(source.leaseToken)),installation=await installedRuntimeContext(client,company,specialist.id);return buildStudioInferenceRequest(client,{...access,installation});});
-     assert.deepEqual(request.tools?.map(tool=>tool.function.name).sort(),['studio_get','higgsfield_connection_get','higgsfield_requests_list','higgsfield_jobs_list','storage_get','storage_files_list','tasks_claim','higgsfield_generation_propose'].sort());
+     assert.deepEqual(request.tools?.map(tool=>tool.function.name).sort(),['studio_get','higgsfield_connection_get','higgsfield_requests_list','higgsfield_jobs_list','higgsfield_references_list','tasks_claim','higgsfield_generation_propose'].sort());
      assert(Buffer.byteLength(JSON.stringify(request.tools))<5500);assert(source.run.capabilities.includes('studio.write'),'Narrowing does not remove the required run grant.');
     }
    await tool(specialist,source,'tasks_claim',{taskId:work.task_id,revision:(await task()).revision});
-   const sourceTask=await task();let proposed:Row|undefined;const sourceConnectionId=randomUUID();
+   const sourceTask=await task();let proposed:Row|undefined,referenceStorage:Row|undefined,referenceBinding:Row|undefined;const sourceConnectionId=randomUUID();
     if(options.singleAgent){
      const planning=(await query("SELECT w.id,w.task_id,w.stage FROM studio_work_items w WHERE w.company_id=$1 AND w.project_id=$2 AND w.stage IN('estimate','breakdown','references')",[company,p.id])).rows;
      const summaries:Record<string,string>={estimate:'Approved planning estimate: one original studio still; no client footage or paid source assets.',breakdown:'Approved schedule: create D010 after reference consent is confirmed; preserve the reviewed format.',references:'Approved reference plan: original geometric product on a warm neutral background; no person, brand or uploaded reference. Rights: original fixture only; no third-party transfer consent needed.'};
@@ -136,9 +138,44 @@ test('generated continuation executes exact leased tools against immutable synth
       await query('DELETE FROM tasks WHERE company_id=$1 AND id=ANY($2::uuid[])',[company,tasks.map(item=>item.id)]);
       assert.equal(((await tool(specialist,source,'studio_get',reads.get('references')!.args)).result as Row).workItem.submissionSummary,referenceSummary);
      }
-     await insert('higgsfield_connections',{company_id:company,id:sourceConnectionId,revision:1,status:'connected',connected_by:producer.id,sealed:'{}',expires_at:await expiry(),tools:JSON.stringify([{name:'generate_'+kind,description:'Synthetic official-tool fixture',inputSchema:{type:'object',properties:{prompt:{type:'string'}},required:['prompt']}}])});
+     const providerTools=[{name:'generate_'+kind,description:'Synthetic official-tool fixture',inputSchema:options.withReference?{type:'object',properties:{params:{type:'object',properties:{model:{type:'string',const:'fixture-model'},prompt:{type:'string'},medias:{type:'array',minItems:1,maxItems:8,items:{type:'object',properties:{role:{type:'string',enum:['image']},value:{type:'string',format:'uuid'}},required:['role','value'],additionalProperties:false}}},required:['model','medias'],additionalProperties:false}},required:['params'],additionalProperties:false}:{type:'object',properties:{prompt:{type:'string'}},required:['prompt']}}];
+     await insert('higgsfield_connections',{company_id:company,id:sourceConnectionId,revision:1,status:'connected',connected_by:producer.id,sealed:'{}',expires_at:await expiry(),tools:JSON.stringify(providerTools)});
+     if(options.withReference){
+      // Synthetic phase receipts establish a confirmed record, not a claim of a
+      // live provider upload or qualified decode. The separate handoff suite
+      // exercises the actual worker/transport/broker composition.
+      referenceStorage=await insert('project_storage_connections',{company_id:company,name:'Prepared reference storage',region:'US-CA-2',volume_id:'synthetic-only',secret_envelope:'{}',created_by:producer.id});
+      referenceBinding=await insert('project_storage_bindings',{company_id:company,project_id:p.id,connection_id:referenceStorage.id,created_by:producer.id});
+      const fileId=randomUUID(),versionId=randomUUID(),mediaId=randomUUID(),bytes=100,fileHash=sha(versionId),name='prepared-reference.png';
+      await insert('project_storage_files',{id:fileId,company_id:company,project_id:p.id,binding_id:referenceBinding.id,name,name_key:name,created_by:producer.id});
+      await insert('project_storage_versions',{id:versionId,company_id:company,project_id:p.id,file_id:fileId,version:1,bytes,sha256:fileHash,content_type:'image/png',object_key:`coatria/companies/${company}/projects/${p.id}/objects/${versionId}`,created_by:producer.id});
+      await insert('project_storage_verifications',{company_id:company,project_id:p.id,version_id:versionId,bytes,sha256:fileHash,provider_etag:'synthetic-etag',gateway_receipt_id:randomUUID()});
+      const actor={companyId:company,userId:producer.id},runtime:references.HiggsfieldReferenceOptions={availability:async()=>({enabled:true,code:'SYNTHETIC_QUALIFIED',message:'Offline fixture only',expiresAt:new Date(Date.now()+3600000).toISOString(),qualificationSha256:'a'.repeat(64),catalogSha256:references.higgsfieldReferenceDigest(providerTools)})};
+      const referenceRevision=await projectRevision(),reference=(await transaction(c=>references.proposeHiggsfieldReference(c,actor,{clientId:randomUUID(),projectId:p.id,projectRevision:referenceRevision,workItemId:work.id,proxyVersionId:versionId,proxyBytes:bytes,proxySha256:fileHash,role:'image',purpose:'Exact prepared still approved for this generation.'}))).reference;
+      const inspectLease=(await transaction(c=>references.claimHiggsfieldReference(c,{companyId:company,projectIds:[p.id]},runtime)))!;
+      const inspected=(await transaction(c=>references.recordHiggsfieldReferenceInspection(c,inspectLease,{descriptor:{kind:'image',format:'png',contentType:'image/png',bytes,sha256:fileHash,verification:'full_decode',inspectionVersion:1,width:16,height:16,codec:'png',color:{space:null,primaries:null,transfer:null,range:null}},profileSha256:'b'.repeat(64)},runtime))).reference;
+      await transaction(c=>references.approveHiggsfieldReference(c,{companyId:company,userId:registrar.id},reference.id,{clientId:randomUUID(),revision:inspected.revision,requestHash:inspected.requestHash,inspectionHash:inspected.inspection!.inspectionHash,expiresInMinutes:30,referenceSharingConsent:true,preparedProxyConsent:true,rightsConsent:true,allBytesConsent:true},runtime));
+      const transfer=(await transaction(c=>references.claimHiggsfieldReference(c,{companyId:company,projectIds:[p.id]},runtime)))!;
+      for(const result of [{phase:'allocate' as const,allocation:{mediaId,uploadUrl:'https://private.example/upload?opaque=synthetic',expiresAt:new Date(Date.now()+600000).toISOString()}},{phase:'put' as const,httpStatus:200 as const,bytes,sha256:fileHash},{phase:'confirm' as const,mediaId,confirmed:true as const}]){const action=await transaction(c=>references.beginHiggsfieldReferencePhase(c,transfer,result.phase,runtime));await transaction(c=>references.completeHiggsfieldReferencePhase(c,transfer,action.actionId,result,runtime));}
+      const context=await agentRunContext(specialist as any,source.run.id,source.leaseToken),fullCatalog=Object.entries(AGENT_TOOLS).filter(([,definition])=>[definition.capability,...definition.additionalCapabilities??[]].every(cap=>context.capabilities.includes(cap))).map(([name,definition])=>({name,description:definition.description,capability:definition.capability,mutating:definition.mutating,inputSchema:agentToolInputSchema(definition)}));
+      await assert.rejects(()=>tool(specialist,source,'higgsfield_references_list',{projectId:randomUUID()}),{code:'COORDINATOR_GENERATION_SCOPE'});
+      for(const [blocked,args] of [['storage_get',{projectId:p.id}],['storage_files_list',{projectId:p.id}],['higgsfield_reference_get',{referenceId:reference.id}],['higgsfield_reference_candidates_list',{projectId:p.id}],['higgsfield_reference_propose',{projectId:p.id,projectRevision:referenceRevision,workItemId:work.id,proxyVersionId:versionId,proxyBytes:bytes,proxySha256:fileHash,role:'image',purpose:'Scope-denied duplicate proposal'}]] as [string,Row][])await assert.rejects(()=>tool(specialist,source,blocked,args),{code:'COORDINATOR_GENERATION_SCOPE'});
+      let step=0,discovered:Row|undefined;const executed:string[]=[],catalogBytes:number[]=[];
+      const inference=createRunInferenceClient({runId:source.run.id,leaseToken:source.leaseToken,pollMs:0,client:{submitInference:async()=>{
+       const request=await transaction(async c=>{const access=await authorizeStoredAgentRun(c,specialist as any,source.run.id,sha(source.leaseToken)),installation=await installedRuntimeContext(c,company,specialist.id);return buildStudioInferenceRequest(c,{...access,installation});});
+       assert.equal(request.tools!.length,7);assert(request.tools!.some(item=>item.function.name==='higgsfield_references_list'));catalogBytes.push(Buffer.byteLength(JSON.stringify(request.tools)));assert(catalogBytes.at(-1)!<5500);
+       const index=step++,name=index===0?'higgsfield_references_list':'higgsfield_generation_propose';if(index===1){assert(discovered?.providerConfirmed);assert.equal(discovered.workItemId,work.id);assert.equal(discovered.status,'confirmed');}
+       const args=index===0?{projectId:p.id}:{projectId:p.id,projectRevision:await projectRevision(),workItemId:work.id,tool:'generate_image',arguments:{params:{model:'fixture-model',prompt:'An original product using the approved prepared reference.'}},referenceIds:[discovered!.id],note:'Exact request awaits separate generation credit consent.'};
+       const output=index===2?{choices:[{finish_reason:'stop',message:{role:'assistant',content:'Reference-backed proposal prepared; generation approval remains pending.'}}],usage:{prompt_tokens:1800,completion_tokens:100}}:{choices:[{finish_reason:'tool_calls',message:{role:'assistant',content:null,tool_calls:[{id:'reference-'+index,type:'function',function:{name,arguments:JSON.stringify(args)}}]}}],usage:{prompt_tokens:1800,completion_tokens:100}};
+       return {inference:{id:randomUUID(),status:'succeeded',deadlineAt:new Date(Date.now()+60000).toISOString(),protocolVersion:2,runId:source.run.id,step:index,disposition:'execute',output,usage:{promptTokens:1800,completionTokens:100,totalTokens:1900}}};
+      }}});
+      const execute=createProviderExecutor({settings:{NODE_ENV:'test',COATRIA_INFERENCE_MODE:'coatria_broker_v1'},fetch:async()=>{throw Error('No provider invocation in discovery fixture');}});
+      const result=await execute({run:context.run,context,tools:{storageTransportVersion:'1',key:(key:string)=>stableRequestId(source.run.id,key),list:async()=>({tools:fullCatalog}),call:async(name:string,args:Row,{requestId}:{requestId:string})=>{const result=(await tool(specialist,source,name,args,requestId)).result as Row;executed.push(name);if(name==='higgsfield_references_list'){assert.equal(result.nextAfter,null);discovered=result.references.find((item:Row)=>item.providerConfirmed&&item.workItemId===work.id);}else proposed=result.request;return result;}},inference});
+      assert.match(result.result,/approval remains pending/);assert.equal(step,3);assert.deepEqual(executed,['higgsfield_references_list','higgsfield_generation_propose']);assert(proposed);assert.deepEqual(proposed.referenceIds,[reference.id]);assert.deepEqual(proposed.arguments.params.medias,[{role:'image',value:mediaId}]);assert.equal(proposed.status,'proposed');assert.equal(networkCalls,0);assert.deepEqual([...context.capabilities].sort(),[...caps].sort());t.diagnostic(JSON.stringify({generationReferenceCatalogBytes:catalogBytes}));
+     }else{
      const requestId=randomUUID(),args={projectId:p.id,projectRevision:await projectRevision(),workItemId:work.id,tool:'generate_'+kind,arguments:{prompt:'Produce the approved '+kind+' using this accepted planning contribution: '+referenceSummary},note:'Await exact human credit consent; do not execute a provider.'};
      proposed=((await tool(specialist,source,'higgsfield_generation_propose',args,requestId)).result as Row).request;assert(proposed);assert.equal(proposed.status,'proposed');assert.match(proposed.arguments.prompt,/Rights: original fixture only/);assert.equal(((await tool(specialist,source,'higgsfield_generation_propose',args,requestId)).result as Row).request.id,proposed.id);assert.equal(networkCalls,0);
+     }
     }
    await finishAgentRun(specialist as any,source.run.id,'complete',{clientId:randomUUID(),leaseToken:source.leaseToken,result:'Synthetic request prepared; waiting for independently approved generation and archive.'});
    if(!options.singleAgent)await finishAgentRun(coordinator as any,firstParent.run.id,'complete',{clientId:randomUUID(),leaseToken:firstParent.leaseToken,result:'Initial synthetic generation specialist stopped for human approval.'});
@@ -146,7 +183,7 @@ test('generated continuation executes exact leased tools against immutable synth
    if(proposed)await query("UPDATE higgsfield_requests SET status='returned',approved_by=$2 WHERE id=$1",[requestId,registrar.id]);else await insert('higgsfield_requests',{id:requestId,company_id:company,project_id:p.id,requested_by:producer.id,agent_id:specialist.id,run_id:source.run.id,client_id:randomUUID(),project_revision:await projectRevision(),connection_id:connectionId,connection_revision:1,tool:'generate_'+kind,arguments:'{}',note:'Synthetic source request',request_hash:requestHash,status:'returned',approved_by:registrar.id,work_item_id:work.id,task_revision:sourceTask.revision,role_agent_id:specialist.id});
    await insert('higgsfield_job_receipts',{company_id:company,project_id:p.id,request_id:requestId,connection_id:connectionId,connection_revision:1,approved_by:registrar.id,request_hash:requestHash,contract:'synthetic-reviewed-contract',source_sha256:receiptHash,outcome:'jobs'});
    await insert('higgsfield_jobs',{id:jobId,company_id:company,project_id:p.id,request_id:requestId,connection_id:connectionId,provider_job_id:providerJobId,kind,status:'completed'});await insert('higgsfield_job_outputs',{id:outputId,company_id:company,project_id:p.id,job_id:jobId,kind,ordinal:0,locator_identity:identity});
-   const storage=await insert('project_storage_connections',{company_id:company,name:'Synthetic verified storage',region:'US-CA-2',volume_id:'synthetic-only',secret_envelope:'{}',created_by:producer.id}),binding=await insert('project_storage_bindings',{company_id:company,project_id:p.id,connection_id:storage.id,created_by:producer.id});
+   const storage=referenceStorage??await insert('project_storage_connections',{company_id:company,name:'Synthetic verified storage',region:'US-CA-2',volume_id:'synthetic-only',secret_envelope:'{}',created_by:producer.id}),binding=referenceBinding??await insert('project_storage_bindings',{company_id:company,project_id:p.id,connection_id:storage.id,created_by:producer.id});
    const snapshot={requestId,requestHash,receiptHash,contract:'synthetic-reviewed-contract',providerConnectionId:connectionId,requestConnectionRevision:1,providerSponsorId:producer.id,providerJobId,kind,model:null,outputId,ordinal:0,outputIdentity:identity,requestedBy:producer.id,agentId:specialist.id,runId:source.run.id,agentSponsorId:producer.id,approvedBy:registrar.id,workItemId:work.id,roleAgentId:specialist.id,roleHumanId:null,taskId:work.task_id,roleKey:work.role_key};
    const common={kind,format:specs[kind].format,bytes,sha256:fileHash,contentType,verification:'full_decode',inspectionVersion:1},color={space:null,primaries:null,transfer:null,range:null};
    const media=kind==='image'?{...common,width:16,height:16,codec:'png',color}:kind==='video'?{...common,width:16,height:16,codec:'h264',color,durationMs:1000,frameRate:{numerator:24,denominator:1},averageFrameRate:{numerator:24,denominator:1},vfr:false,frameCount:24,audio:null}:{...common,codec:'pcm_s16le',sampleRateHz:48000,channels:1,durationMs:1000,decodedSamples:48000};
@@ -164,6 +201,7 @@ test('generated continuation executes exact leased tools against immutable synth
    return {company,producer,registrar,memberA,memberB,coordinator,specialist,p,work,source,sourceTask,parentLease,parent,initial,archived,archive,snapshot,existing,storage,requestId,jobId,outputId,fileHash,tool,claim,dispatch,dispatchArgs,advance,effects,projectRevision,task,policy};
   }
 
+  await t.test('frozen generation harness discovers approved internal references and proposes them within the same budget and grants',async()=>{await fixture('image',{staffed:true,singleAgent:true,withReference:true});});
   for(const singleAgent of[false,true])for(const kind of['image','video','audio'] as const)await t.test(kind+(singleAgent?' one-agent mission generation and continuation':' staffing-created specialist')+' claims, registers and submits exactly once even with new outer transport IDs',async()=>{
    const f=await fixture(kind,{staffed:true,singleAgent}),queued=(await f.dispatch()).result as Row;assert(queued.childRunId);assert.notEqual(queued.childRunId,f.source.run.id);assert.equal((await f.policy()).runs_started,2);assert.equal(((await f.dispatch()).result as Row).childRunId,queued.childRunId);
    if(singleAgent){assert.equal(f.coordinator.id,f.specialist.id);assert.equal((await f.claim(f.specialist)).run,null);await finishAgentRun(f.coordinator as any,f.parentLease.run.id,'complete',{clientId:randomUUID(),leaseToken:f.parentLease.leaseToken,result:'Queued exact verified-output continuation; end this cycle.'});}
@@ -322,7 +360,7 @@ test('generated continuation executes exact leased tools against immutable synth
   });
   assert.equal(networkCalls,0);
  }finally{
-  globalThis.fetch=prior.fetch;await pool?.end();await stop?.();if(prior.pool)(globalThis as any).coatriaPool=prior.pool;else delete(globalThis as any).coatriaPool;if(prior.url===undefined)delete process.env.DATABASE_URL;else process.env.DATABASE_URL=prior.url;
+  globalThis.fetch=prior.fetch;if(prior.key===undefined)delete process.env.COATRIA_HOSTING_KEYRING;else process.env.COATRIA_HOSTING_KEYRING=prior.key;await pool?.end();await stop?.();if(prior.pool)(globalThis as any).coatriaPool=prior.pool;else delete(globalThis as any).coatriaPool;if(prior.url===undefined)delete process.env.DATABASE_URL;else process.env.DATABASE_URL=prior.url;
   try{if(created){const deadline=performance.now()+10000;while((await control!.query('SELECT 1 FROM pg_stat_activity WHERE datname=$1',[dbName])).rowCount){if(performance.now()>deadline)assert.fail('Disposable generated-followup DB sessions did not drain');await delay(25);}await control!.query('DROP DATABASE '+dbName);}}finally{await control?.end();}
  }
 });

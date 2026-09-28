@@ -108,13 +108,19 @@ test('broker runs real leased API and receipt transactions against isolated prov
     const names=await transaction(client=>studioDispatchInferenceToolNames(client,f.company,f.run.id));
     if(['estimate','breakdown'].includes(work.stage))assert.deepEqual(names,['studio_get','tasks_claim','tasks_submit']);
     else if(work.stage==='references'){for(const name of ['studio_get','tasks_claim','tasks_submit','storage_files_list','infrastructure_files','higgsfield_connection_get'])assert(names?.includes(name));assert(!names?.includes('higgsfield_generation_propose'));}
-    else if(work.stage==='generation'){for(const name of ['studio_get','tasks_claim','tasks_submit','higgsfield_generation_propose','higgsfield_archives_list','higgsfield_archive_get','higgsfield_archive_propose','studio_generated_artifact_register'])assert(names?.includes(name));assert(!names?.includes('studio_work_dispatch'));}
+    else if(work.stage==='generation'){for(const name of ['studio_get','tasks_claim','tasks_submit','higgsfield_generation_propose','higgsfield_references_list','storage_get','storage_files_list','higgsfield_archives_list','higgsfield_archive_get','higgsfield_archive_propose','studio_generated_artifact_register'])assert(names?.includes(name));assert(!names?.includes('studio_work_dispatch'));assert(!names?.includes('higgsfield_reference_propose'));}
     else assert.equal(names,null,'Human quality and delivery steps are not model dispatch workflows.');
     if(names)assert(names.every(name=>Object.hasOwn(AGENT_TOOLS,name)));
     assert.equal(await transaction(client=>studioDispatchInferenceToolNames(client,randomUUID(),f.run.id)),null,'A foreign company cannot borrow dispatch provenance.');
     if(work.stage==='generation'){
      const limited=['studio.read','studio.write','tasks.write','creative.read','creative.write'],request=await transaction(async client=>buildStudioInferenceRequest(client,{run:(await client.query('SELECT * FROM agent_runs WHERE id=$1',[f.run.id])).rows[0],capabilities:limited,installation:context.installation}));
      assert(!request.tools?.some(item=>item.function.name==='studio_generated_artifact_register'),'Missing additional storage.read is never granted by presentation.');assert(request.tools?.some(item=>item.function.name==='higgsfield_generation_propose'));
+     const required=['creative.read','creative.write','studio.read','studio.write','tasks.write','storage.read'];
+     for(const omitted of [null,...required]){
+      const allowed=capabilities.filter(cap=>cap!==omitted),scoped=await transaction(async client=>buildStudioInferenceRequest(client,{run:(await client.query('SELECT * FROM agent_runs WHERE id=$1',[f.run.id])).rows[0],capabilities:allowed,installation:context.installation}));
+      assert.equal(scoped.tools?.some(item=>item.function.name==='higgsfield_references_list'),omitted===null,'Reference discovery requires every backend grant, including '+omitted);
+     }
+     for(const name of ['higgsfield_reference_propose','higgsfield_references_list','higgsfield_reference_get','higgsfield_reference_candidates_list']){const definition=AGENT_TOOLS[name];assert.deepEqual([definition.capability,...definition.additionalCapabilities??[]].sort(),[...required].sort());}
     }
     await query('DELETE FROM studio_dispatches WHERE company_id=$1 AND run_id=$2',[f.company,f.run.id]);
    }
