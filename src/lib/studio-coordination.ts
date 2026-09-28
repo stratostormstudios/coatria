@@ -172,6 +172,25 @@ const coordinatorGenerationToolRules:Record<string,(args:Row,receipt:Row,client:
  higgsfield_generation_propose:(args,receipt)=>args.projectId===receipt.project_id&&args.workItemId===receipt.work_item_id,
 };
 export const coordinatorGenerationToolNames:readonly string[]=Object.freeze(Object.keys(coordinatorGenerationToolRules));
+const planningDispatchToolNames:readonly string[]=Object.freeze(['studio_get','tasks_claim','tasks_submit']);
+const referenceDispatchToolNames:readonly string[]=Object.freeze([...planningDispatchToolNames,'storage_get','storage_files_list','studio_storage_references_list','infrastructure_list','infrastructure_files','higgsfield_connection_get','higgsfield_requests_list','higgsfield_jobs_list']);
+const generationDispatchToolNames:readonly string[]=Object.freeze([...coordinatorGenerationToolNames,'higgsfield_archives_list','higgsfield_archive_get','higgsfield_archive_propose','studio_generated_artifact_register','tasks_submit']);
+/** Model presentation for an existing assigned task, never an authority grant.
+ * Exact server-created dispatch provenance, not prompt text or character role,
+ * distinguishes these finite tasks from ordinary company/coordinator missions.
+ * Callers must prefer the stricter generated-continuation and own-generation
+ * scopes. Legacy creative/render continuations are outside this v2 path. */
+export async function studioDispatchInferenceToolNames(client:PoolClient,companyId:string,runId:string):Promise<readonly string[]|null>{
+ const work=(await client.query(`SELECT w.stage,w.execution FROM studio_dispatches d
+  JOIN studio_work_items w ON w.company_id=d.company_id AND w.project_id=d.project_id AND w.id=d.work_item_id
+  JOIN studio_projects p ON p.company_id=w.company_id AND p.id=w.project_id
+  WHERE d.company_id=$1 AND d.run_id=$2 AND p.contract_version=2 AND p.production_path='higgsfield'`,[companyId,runId])).rows[0];
+ if(work?.execution==='agent'){
+  if(['estimate','breakdown'].includes(work.stage))return planningDispatchToolNames;
+  if(work.stage==='references')return referenceDispatchToolNames;
+ }
+ return work?.stage==='generation'&&work.execution==='creative'?generationDispatchToolNames:null;
+}
 export async function assertCoordinatorGenerationTool(client:PoolClient,agent:Row,run:Row,name:string,args:Row){
  const receipt=await coordinatorGenerationRunScope(client,agent.company_id,run.id);
  if(!receipt)return;

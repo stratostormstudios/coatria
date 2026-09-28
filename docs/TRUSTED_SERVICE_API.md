@@ -4,6 +4,10 @@ These operator APIs create fixed, separately scoped archive and gateway services
 
 All public paths are under `/api/companies/{companyId}/studio/trusted-services`. Every read and mutation requires an authenticated human company owner or administrator; mutations require the normal same-origin and optional `X-Coatria-User` identity assertion. Authority is checked again inside database transactions. Agent bearer tokens have no route into this API. Mutation rate is 12 requests per user/company per minute.
 
+Owners can use **Production studio → Agent hosts → Trusted media services** to prepare a plan, review its reservation and deadline, consent to that exact plan, start it, reconcile its state, and request shutdown. The browser retains unresolved requests per user and company in session storage. It never retries a paid start automatically; read history first and explicitly resolve the same request if necessary. A lost response or post-commit authentication failure does not imply that no service started.
+
+The same panel connects a selected project to a recently reconciled running file gateway through `GET` and `POST /api/companies/{companyId}/studio/projects/{projectId}/gateway`. The mutation supplies only `{provisionId, expectedBindingId}`. The server derives and verifies the endpoint identity; the browser cannot supply an arbitrary URL. A changed binding requires a fresh review. Reload the page after successful connection to receive the updated content security policy before transferring files. This verification neither starts compute nor proves S3 read/write access; file permissions and credentials remain independently enforced.
+
 | Method and suffix | Strict body | Result |
 | --- | --- | --- |
 | `GET /` | None | `{provisions, readiness:{archive,gateway}}`, newest 50 |

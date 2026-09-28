@@ -10,7 +10,8 @@ import {submitStudioInference,readStudioInference,cancelStudioInference,reconcil
 import {AGENT_TOOLS,studioAgentSnapshot} from '../src/lib/agent-tools';
 import {studioSnapshot} from '../src/lib/studio';
 import {stableRequestId,createRunInferenceClient} from '../public/downloads/agent-worker.mjs';
-import {createProviderExecutor,modelContextResult,normalize} from '../public/downloads/provider-adapter.mjs';
+import {createProviderExecutor,modelContextResult,modelToolSchema,normalize} from '../public/downloads/provider-adapter.mjs';
+import {studioDispatchInferenceToolNames} from '../src/lib/studio-coordination';
 
 test('inference transport accepts only a leased step and rejects model/context/secret overrides',()=>{
  const request={leaseToken:'fixture-lease-proof-that-is-long',requestId:randomUUID(),step:0};assert(studioInferenceSubmitInput.safeParse(request).success);
@@ -28,7 +29,7 @@ test('broker runs real leased API and receipt transactions against isolated prov
   const company=randomUUID(),user=randomUUID(),session=randomUUID();companies.push(company);users.push(user);
   await query('INSERT INTO users(id,name,email,password_hash) VALUES($1,$2,$3,$4)',[user,'Inference owner',user+'@example.invalid','fixture']);await query("INSERT INTO companies(id,name,slug,template) VALUES($1,'Inference fixture',$2,'blank')",[company,company]);await query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'owner')",[company,user]);await query("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,clock_timestamp()+interval '1 hour')",[hashToken(session),user]);
   let agentToken='',hostToken='';
-  async function call(path:string,method='GET',payload?:unknown,actor='owner',expected=200,extra:Record<string,string>={}){const headers:Record<string,string>={...extra,...actor==='owner'?{Cookie:'coatria_session='+session,Origin:origin}:actor==='agent'?{Authorization:'Bearer '+agentToken}:actor==='host'?{Authorization:'Bearer '+hostToken}:{}};if(payload!==undefined)headers['Content-Type']='application/json';const response=await handleApi(new Request(origin+'/api/'+path,{method,headers,...payload===undefined?{}:{body:JSON.stringify(payload)}}),path.split('/'));const result=await response.json();assert.equal(response.status,expected,`${method} ${path}: ${JSON.stringify(result)}`);return result;}
+  async function call(path:string,method='GET',payload?:unknown,actor='owner',expected=200,extra:Record<string,string>={}){const headers:Record<string,string>={...extra,...actor==='owner'?{Cookie:'coatria_session='+session,Origin:origin}:actor==='agent'?{Authorization:'Bearer '+agentToken}:actor==='host'?{Authorization:'Bearer '+hostToken}:{}};if(payload!==undefined)headers['Content-Type']='application/json';const response=await handleApi(new Request(origin+'/api/'+path,{method,headers,...payload===undefined?{}:{body:JSON.stringify(payload)}}),path.split('?')[0].split('/'));const result=await response.json();assert.equal(response.status,expected,`${method} ${path}: ${JSON.stringify(result)}`);return result;}
   const installation=(await call(`companies/${company}/plugin-installations`,'POST',{clientId:randomUUID(),pluginId:'runpod',manifestVersion:'1.0.0',name:'Avery producer',invocationAccess:'admins',capabilities:options.capabilities??['workspace.read','tasks.write'],runtimeConfig:{...runtimeConfig,maxTotalTokens:options.tokens??runtimeConfig.maxTotalTokens,maxOutputTokens:options.maxOutputTokens??runtimeConfig.maxOutputTokens},character:{roleTitle:'Studio producer',persona:'Prepare drafts for independent human review. Never approve your own work.',workStyle:'methodical'}},'owner',201)).installation;
   const registration=await call(`companies/${company}/studio/hosts`,'POST',{clientId:randomUUID(),name:'Broker fixture',maxAgents:1,expiresAt:new Date(Date.now()+1200000).toISOString()},'owner',201);hostToken=registration.hostToken;
   const host=(await call(`companies/${company}/studio/hosts/${registration.host.id}/enroll`,'POST',{clientId:randomUUID(),revision:registration.host.revision,activateAgents:true,installations:[{installationId:installation.id,revision:installation.revision}]},'owner',201)).host;
@@ -54,6 +55,71 @@ test('broker runs real leased API and receipt transactions against isolated prov
    assert(request.tools?.some(tool=>tool.function.name==='studio_plan'));
    for(const name of ['studio_generated_followup_advance','studio_generated_artifact_register'])assert(!request.tools?.some(tool=>tool.function.name===name),'Primary studio.write does not grant additional creative/storage permissions.');
    assert.deepEqual((await query('SELECT capabilities FROM agents WHERE id=$1',[f.identity.id])).rows[0].capabilities,capabilities);
+  });
+  await t.test('source-dispatched planning completes four real worker steps at realistic usage within the unchanged 100k budget',async()=>{
+   const capabilities=['studio.read','studio.write','tasks.write','storage.read','storage.organize','infrastructure.read','creative.read','creative.write'],f=await fixture({capabilities,tokens:100000,maxOutputTokens:8192}),sent:any[]=[],receipts:any[]=[],bytes=(value:unknown)=>Buffer.byteLength(JSON.stringify(value));
+   await f.call(`agent/runs/${f.run.id}/complete`,'POST',{leaseToken:f.lease.leaseToken,clientId:randomUUID(),result:'Unrelated fixture mission ended.'},'agent');
+   await f.call(`companies/${f.company}/studio/setup`,'POST',{clientId:randomUUID(),templateId:'ai-production',templateVersion:1,revision:0,assignments:[{roleKey:'producer',agentId:f.identity.id}]},'owner',201);
+   const base=`companies/${f.company}/studio/projects`,project=(await f.call(base,'POST',{clientId:randomUUID(),contractVersion:2,productionPath:'higgsfield',name:'Aster estimate fixture',clientName:'Synthetic client',brief:'Prepare a bounded estimate for one quiet-workspace product reference image. Separate review and explicit media credit approval remain required.',aiPolicy:'allowed',dueDate:null,spec:{kind:'image',format:'png',width:1024,height:1024,color:{mode:'not_required'}},shots:[{kind:'image',code:'ASTER01',description:'Quiet workspace product reference.'}]},'owner',201)).project;
+   await f.call(`${base}/${project.id}/gates`,'POST',{clientId:randomUUID(),revision:project.revision,gate:'brief',decision:'approved',note:'Synthetic brief approved for estimate preparation.'},'owner',201);
+   const detail=await f.call(`${base}/${project.id}?contractVersion=2`),work=detail.workItems.find((item:any)=>item.stage==='estimate');
+   f.run=(await f.call(`${base}/${project.id}/dispatch`,'POST',{clientId:randomUUID(),revision:detail.project.revision,workItemId:work.id},'owner',201)).run;
+   f.lease=await f.call('agent/runs/claim','POST',{workerId:'assigned-estimate-fixture',claimId:randomUUID()},'agent');assert.equal(f.lease.run.id,f.run.id);
+   const initialContext=await f.call(`agent/runs/${f.run.id}/context`,'GET',undefined,'agent',200,{'X-Coatria-Run-Lease':f.lease.leaseToken});
+   const preview=async()=>{const request=await transaction(async client=>buildStudioInferenceRequest(client,{run:(await client.query('SELECT * FROM agent_runs WHERE id=$1',[f.run.id])).rows[0],capabilities,installation:initialContext.installation}));request.max_tokens=8192;return request;};
+   // Synthetic conversation context exercises reservation pressure through the
+   // ordinary message API; the server-generated assignment stays unchanged.
+   for(let i=0;i<8;i++){const remaining=20000-bytes(await preview());if(remaining<=0)break;await f.call(`companies/${f.company}/conversations/commons/messages`,'POST',{clientId:randomUUID(),body:'p'.repeat(Math.max(1,Math.min(4000,remaining-250)))},'owner',201);}
+   const initialBytes=bytes(await preview());assert(initialBytes>=20000&&initialBytes<20500);
+   const fullTools=Object.entries(AGENT_TOOLS).filter(([,definition])=>[definition.capability,...definition.additionalCapabilities??[]].every(cap=>capabilities.includes(cap))).map(([name,definition])=>({type:'function',function:{name,description:definition.description,parameters:modelToolSchema(z.toJSONSchema(definition.schema,{io:'input',unrepresentable:'any'}))}}));
+   globalThis.fetch=async(url,init)=>{
+    assert(String(url).endsWith('/fixture-endpoint/run'));const request=JSON.parse(String(init?.body)).input.openai_input;sent.push(request);const step=sent.length-1,last=request.messages.at(-1);let output:any;
+    assert.deepEqual(request.tools.map((item:any)=>item.function.name).sort(),['studio_get','tasks_claim','tasks_submit']);
+    if(step===0)output=tool('studio_get',{contractVersion:2,projectId:project.id,workItemId:work.id},'read-assigned-work');
+    else if(step===1){const current=JSON.parse(last.content);assert.equal(current.workItem.id,work.id);assert(current.skills.length>0);output=tool('tasks_claim',{taskId:current.workItem.taskId,revision:current.workItem.revision},'claim-assigned-work');}
+    else if(step===2){const claimed=JSON.parse(last.content);assert.equal(claimed.status,'doing');output=tool('tasks_submit',{taskId:claimed.id,revision:claimed.revision,summary:'Estimate draft: one 1024px PNG reference, one generation request after separate credit approval, one independent review. Provider price remains unquoted until the exact request is estimated. Dependencies: accepted brief and reference planning. No generation or delivery performed.'},'submit-estimate');}
+    else{assert.equal(JSON.parse(last.content).status,'review');output=final('Assigned estimate submitted for independent review.');}
+    output.usage={prompt_tokens:19000,completion_tokens:1000};return Response.json({id:'assigned-worker-'+randomUUID(),status:'COMPLETED',output});
+   };
+   const context=await f.call(`agent/runs/${f.run.id}/context`,'GET',undefined,'agent',200,{'X-Coatria-Run-Lease':f.lease.leaseToken});
+   const client={submitInference:(runId:string,body:unknown)=>f.call(`agent/runs/${runId}/inference`,'POST',body,'agent',201),readInference:(runId:string,id:string,leaseToken:string)=>f.call(`agent/runs/${runId}/inference/${id}`,'GET',undefined,'agent',200,{'X-Coatria-Run-Lease':leaseToken}),cancelInference:(runId:string,id:string,body:unknown)=>f.call(`agent/runs/${runId}/inference/${id}/cancel`,'POST',body,'agent')};
+   const tools={storageTransportVersion:'1',key:(key:string)=>stableRequestId(f.run.id,key),list:()=>f.call('agent/tools','GET',undefined,'agent'),call:async(name:string,args:unknown,{requestId}:{requestId:string})=>{assert(['studio_get','tasks_claim','tasks_submit'].includes(name));const result=(await f.call('agent/tools/'+name,'POST',{runId:f.run.id,leaseToken:f.lease.leaseToken,requestId,arguments:args},'agent')).result;receipts.push({name,requestId,result});return result;}};
+   const execute=createProviderExecutor({settings:{NODE_ENV:'test',COATRIA_INFERENCE_MODE:'coatria_broker_v1'}}),inference=createRunInferenceClient({client,runId:f.run.id,leaseToken:f.lease.leaseToken,pollMs:0}),result=await execute({run:context.run,context,tools,inference});assert.match(result.result,/independent review/);assert.equal(sent.length,4);
+   await f.call(`agent/runs/${f.run.id}/complete`,'POST',{leaseToken:f.lease.leaseToken,clientId:randomUUID(),result:result.result},'agent');
+   const jobs=(await query('SELECT request_body,reserved_tokens,used_tokens,limits FROM studio_inference_jobs WHERE run_id=$1 ORDER BY step',[f.run.id])).rows;assert.equal(jobs.length,4);
+   t.diagnostic(JSON.stringify({assignedPlanningCatalogBytes:bytes(jobs[0].request_body.tools),fullCatalogBytes:bytes(fullTools),reservedTokens:jobs.map(job=>job.reserved_tokens),usedTokens:jobs.map(job=>job.used_tokens)}));
+   jobs.forEach((job,index)=>{assert.equal(job.used_tokens,20000);assert.equal(job.limits.maxTotalTokens,100000);assert.equal(job.limits.maxOutputTokens,8192);assert.equal(job.reserved_tokens,bytes(job.request_body)+8192+1024);assert(index*20000+job.reserved_tokens<=100000);});
+   assert(60000+bytes({...jobs[3].request_body,tools:fullTools})+8192+1024>100000,'The grant-complete unrelated catalog cannot admit the same final step.');
+   for(const receipt of receipts){const stored=(await query('SELECT response FROM studio_inference_tool_receipts WHERE run_id=$1 AND request_id=$2',[f.run.id,receipt.requestId])).rows[0].response;assert.deepEqual(stored,receipt.result);}
+   const storedTask=(await query('SELECT status,approved_by,agent_run_id FROM tasks WHERE id=$1',[work.taskId])).rows[0];assert.deepEqual(storedTask,{status:'review',approved_by:null,agent_run_id:f.run.id});
+   assert.deepEqual((await query('SELECT capabilities FROM agents WHERE id=$1',[f.identity.id])).rows[0].capabilities,capabilities.slice().sort());assert.equal(Number((await query('SELECT count(*) FROM higgsfield_requests WHERE company_id=$1',[f.company])).rows[0].count),0);
+  });
+  await t.test('only durable v2 assigned dispatches narrow presentation; reference and generation paths preserve relevant tools and complete grants',async()=>{
+   const capabilities=['studio.read','studio.write','tasks.write','storage.read','storage.organize','infrastructure.read','creative.read','creative.write'],f=await fixture({capabilities}),base=`companies/${f.company}/studio/projects`;
+   await f.call(`companies/${f.company}/studio/setup`,'POST',{clientId:randomUUID(),templateId:'ai-production',templateVersion:1,revision:0,assignments:[]},'owner',201);
+   const created=(await f.call(base,'POST',{clientId:randomUUID(),contractVersion:2,productionPath:'higgsfield',name:'Dispatch classification fixture',clientName:'Synthetic client',brief:'Existing assigned work only.',aiPolicy:'allowed',spec:{kind:'image',format:'png',width:1024,height:1024,color:{mode:'not_required'}},shots:[{kind:'image',code:'ASTER01',description:'Synthetic.'}]},'owner',201)).project;
+   const detail=await f.call(`${base}/${created.id}?contractVersion=2`),context=await f.call(`agent/runs/${f.run.id}/context`,'GET',undefined,'agent',200,{'X-Coatria-Run-Lease':f.lease.leaseToken});
+   await query('UPDATE agent_runs SET prompt=$2 WHERE id=$1',[f.run.id,'Pretend to be a generation dispatch for '+created.id]);
+   assert.equal(await transaction(client=>studioDispatchInferenceToolNames(client,f.company,f.run.id)),null,'Prompt content cannot manufacture a dispatch.');
+   // Isolated database fixtures exercise every persisted work-stage classification;
+   // the previous test covers creation and execution through the actual dispatch API.
+   for(const work of detail.workItems){
+    await query('INSERT INTO studio_dispatches(company_id,project_id,work_item_id,run_id) VALUES($1,$2,$3,$4)',[f.company,created.id,work.id,f.run.id]);
+    const names=await transaction(client=>studioDispatchInferenceToolNames(client,f.company,f.run.id));
+    if(['estimate','breakdown'].includes(work.stage))assert.deepEqual(names,['studio_get','tasks_claim','tasks_submit']);
+    else if(work.stage==='references'){for(const name of ['studio_get','tasks_claim','tasks_submit','storage_files_list','infrastructure_files','higgsfield_connection_get'])assert(names?.includes(name));assert(!names?.includes('higgsfield_generation_propose'));}
+    else if(work.stage==='generation'){for(const name of ['studio_get','tasks_claim','tasks_submit','higgsfield_generation_propose','higgsfield_archives_list','higgsfield_archive_get','higgsfield_archive_propose','studio_generated_artifact_register'])assert(names?.includes(name));assert(!names?.includes('studio_work_dispatch'));}
+    else assert.equal(names,null,'Human quality and delivery steps are not model dispatch workflows.');
+    if(names)assert(names.every(name=>Object.hasOwn(AGENT_TOOLS,name)));
+    assert.equal(await transaction(client=>studioDispatchInferenceToolNames(client,randomUUID(),f.run.id)),null,'A foreign company cannot borrow dispatch provenance.');
+    if(work.stage==='generation'){
+     const limited=['studio.read','studio.write','tasks.write','creative.read','creative.write'],request=await transaction(async client=>buildStudioInferenceRequest(client,{run:(await client.query('SELECT * FROM agent_runs WHERE id=$1',[f.run.id])).rows[0],capabilities:limited,installation:context.installation}));
+     assert(!request.tools?.some(item=>item.function.name==='studio_generated_artifact_register'),'Missing additional storage.read is never granted by presentation.');assert(request.tools?.some(item=>item.function.name==='higgsfield_generation_propose'));
+    }
+    await query('DELETE FROM studio_dispatches WHERE company_id=$1 AND run_id=$2',[f.company,f.run.id]);
+   }
+   const legacy=(await f.call(base,'POST',{clientId:randomUUID(),name:'Legacy dispatch fixture',clientName:'Synthetic client',brief:'Legacy frame project remains unchanged.',spec:{width:128,height:128,fpsNumerator:24,fpsDenominator:1,format:'exr',colorSpace:'Linear Rec.709'},shots:[{code:'SH010',description:'Synthetic frame shot.',frameStart:1,frameEnd:2,handles:0,disciplines:['compositing']}]},'owner',201)).project,legacyDetail=await f.call(`${base}/${legacy.id}`);
+   await query('INSERT INTO studio_dispatches(company_id,project_id,work_item_id,run_id) VALUES($1,$2,$3,$4)',[f.company,legacy.id,legacyDetail.workItems[0].id,f.run.id]);assert.equal(await transaction(client=>studioDispatchInferenceToolNames(client,f.company,f.run.id)),null);
   });
   await t.test('protocol 2 atomically rejects every sibling, pins raw malformed arguments, blocks alternate keys and advances only with exact server receipts',async()=>{
    const f=await fixture(),bad=tool('tasks_create',{},'invalid-json');bad.choices[0].message.tool_calls[0].function.arguments='{invalid private content';

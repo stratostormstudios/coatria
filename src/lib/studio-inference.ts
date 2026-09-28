@@ -7,7 +7,7 @@ import {authorizeRunTool,authorizeStoredAgentRun,type AgentRunIdentity} from './
 import {installedRuntimeContext} from './plugin-marketplace';
 import {AGENT_TOOLS} from './agent-tools';
 import {generatedFollowupRunContext,generatedFollowupToolNames} from './studio-generated-followups';
-import {coordinatorGenerationRunScope,coordinatorGenerationToolNames} from './studio-coordination';
+import {coordinatorGenerationRunScope,coordinatorGenerationToolNames,studioDispatchInferenceToolNames} from './studio-coordination';
 import {body,fail,hashToken,id,json,rateLimit,ApiError} from './security';
 import {stableRequestId} from '../../public/downloads/agent-worker.mjs';
 import {bridgePolicy,characterInstructions,normalize,usageTokens,modelContextResult,modelRequestContext,modelToolSchema} from '../../public/downloads/provider-adapter.mjs';
@@ -47,7 +47,7 @@ export async function buildStudioInferenceRequest(client:PoolClient,access:Row){
  // These classifications come from immutable server-created dispatch records,
  // never the prompt. Existing route predicates still enforce exact arguments.
  // Frozen workers accept this subset of their ordinary validated tool catalog.
- const scopedNames=generatedFollowup?generatedFollowupToolNames:await coordinatorGenerationRunScope(client,run.company_id,run.id)?coordinatorGenerationToolNames:null;
+ const scopedNames=generatedFollowup?generatedFollowupToolNames:await coordinatorGenerationRunScope(client,run.company_id,run.id)?coordinatorGenerationToolNames:await studioDispatchInferenceToolNames(client,run.company_id,run.id);
  const tools=Object.entries(AGENT_TOOLS).filter(([name,tool])=>(scopedNames===null||scopedNames.includes(name))&&[tool.capability,...tool.additionalCapabilities??[]].every(cap=>access.capabilities.includes(cap))).map(([name,tool])=>({type:'function',function:{name,description:tool.description,parameters:modelToolSchema(z.toJSONSchema(tool.schema,{io:'input',unrepresentable:'any'}))}}));
  return{model:access.installation.runtimeConfig.modelId,messages:[{role:'system',content:bridgePolicy+characterInstructions(access.installation)},{role:'user',content:bounded(modelRequestContext(run,{messages,...generatedFollowup?{generatedFollowup}:{}}),300000)}],...(tools.length?{tools}:{}),max_tokens:0,stream:false};
 }
