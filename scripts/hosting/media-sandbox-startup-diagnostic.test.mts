@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {classifySyntheticStartupStderr,diagnoseMediaSandboxStartup,diagnoseArchiveHostSandboxStartup,archiveStartupIdentity} from './media-sandbox-startup-diagnostic.mts';
-import {assertMediaSandboxBoundary,mediaSandboxBoundaryObservation,assertMediaSandboxFileDescriptorCap,assertMediaSandboxOrphanCleanup,mediaSandboxOrphanObservation} from './media-sandbox-linux-canary.mts';
+import {assertMediaSandboxBoundary,mediaSandboxBoundaryObservation,assertMediaSandboxFileDescriptorCap,assertMediaSandboxOrphanCleanup,mediaSandboxOrphanObservation,assertMediaSandboxLabelParser,mediaSandboxLabelObservation,mediaSandboxLabelFailure} from './media-sandbox-linux-canary.mts';
 import {MediaSandboxError} from '../../src/lib/higgsfield-media-sandbox';
 
 test('synthetic startup diagnostics classify setup errors without returning their text',()=>{
@@ -101,4 +101,28 @@ test('orphan diagnostics retain bounded counts and no output, paths, PIDs or unk
  for(const error of [Error(secret),new MediaSandboxError(secret as never)]){const record:Record<string,unknown>={};assert.throws(()=>assertMediaSandboxOrphanCleanup({stdout:secret,error,observations:f.observations},f.limits,record));assert.equal(record.executionCode,'CANARY_ASSERTION_FAILED');assert.doesNotMatch(JSON.stringify(record),/private-|4321/);}
  const map=new Map([['private-group',{group:'private-group',processes:new Set(Array.from({length:300},(_,i)=>4000+i)),controls:f.observations.values().next().value!.controls}]]),bounded=mediaSandboxOrphanObservation(map,f.limits,null);assert.equal(bounded.maximumObservedProcesses,256);assert.equal(bounded.execution,'succeeded');assert.doesNotMatch(JSON.stringify(bounded),/private-|4000/);
  const record:Record<string,unknown>={};assert.throws(()=>assertMediaSandboxOrphanCleanup({stdout:JSON.stringify({forked:secret,secret}),error:null,observations:f.observations},f.limits,record));assert.equal(record.forked,null);assert(!JSON.stringify(record).includes(secret));
+});
+
+test('label parser diagnostic preserves successful execution and exact trimmed output requirements',()=>{
+ for(const stdout of ['label parser ok\n',' \r\nlabel parser ok\r\n']){const record:Record<string,unknown>={};assertMediaSandboxLabelParser({stdout,error:null},record);assert.equal(record.check,'output_match');assert.equal(record.execution,'succeeded');assert.equal(record.exactExpectedOutput,true);assert.equal(record.stdoutBytes,Buffer.byteLength(stdout));assert.equal(record.qualified,false);assert.equal(record.diagnosticOnly,true);}
+ const failed:Record<string,unknown>={};assert.throws(()=>assertMediaSandboxLabelParser({stdout:'label parser ok',error:new MediaSandboxError('PROCESS_FAILED')},failed));assert.equal(failed.check,'execution');assert.equal(failed.executionCode,'PROCESS_FAILED');assert.equal(failed.exactExpectedOutput,true);
+ for(const stdout of ['', 'label parser ok\nprivate-output-canary', 'private-output-canary']){const record:Record<string,unknown>={};assert.throws(()=>assertMediaSandboxLabelParser({stdout,error:null},record));assert.equal(record.check,'output_match');assert.equal(record.exactExpectedOutput,false);assert.equal(record.execution,'succeeded');assert(!JSON.stringify(record).includes('private-output-canary'));}
+});
+
+test('label diagnostics distinguish fixed observation phases and retain only bounded output metadata',()=>{
+ for(const check of ['input_open','process_start','cgroup_observation','process_drain'])assert.deepEqual(mediaSandboxLabelObservation(check),{diagnosticOnly:true,qualified:false,check,execution:'not_observed',executionCode:null});
+ assert.equal(mediaSandboxLabelObservation('private-stage-path').check,null);
+ assert.equal(mediaSandboxLabelObservation('process_drain',null).execution,'succeeded');assert.equal(mediaSandboxLabelObservation('process_drain',new MediaSandboxError('CLEANUP_FAILED')).executionCode,'CLEANUP_FAILED');
+ const record:Record<string,unknown>={};assert.throws(()=>assertMediaSandboxLabelParser({stdout:'x'.repeat(65537)+'private-secret',error:null},record));assert.equal(record.stdoutBytes,65536);assert.equal(record.stdoutTruncated,true);assert.equal(record.exactExpectedOutput,false);assert(!JSON.stringify(record).includes('private-secret'));
+});
+
+test('label failure classification excludes raw messages, paths, PIDs, output and unknown error codes',()=>{
+ const secret='/private/credential-canary pid=4321 stdout=secret';
+ const filesystem=Object.assign(Error(secret),{code:'ENODEV',path:secret,syscall:secret});assert.deepEqual(mediaSandboxLabelFailure(filesystem),{errorCategory:'filesystem',errorCode:'ENODEV'});
+ for(const errorCode of ['ENOENT','EIO','EACCES','EPERM','ESRCH','EMFILE','ENFILE','ENOMEM','EBUSY','ENOTDIR','EISDIR','EROFS','EINVAL'])assert.deepEqual(mediaSandboxLabelFailure(Object.assign(Error(secret),{code:errorCode})),{errorCategory:'filesystem',errorCode});
+ assert.deepEqual(mediaSandboxLabelFailure(Object.assign(Error(secret),{code:'ERR_ASSERTION'})),{errorCategory:'assertion',errorCode:'ERR_ASSERTION'});
+ assert.deepEqual(mediaSandboxLabelFailure(new MediaSandboxError('PROCESS_FAILED')),{errorCategory:'sandbox',errorCode:'PROCESS_FAILED'});
+ const inaccessible=Object.defineProperty({},'code',{get(){throw Error(secret);}}),trappedDescriptor=new Proxy({},{getOwnPropertyDescriptor(){throw Error(secret);}}),trappedPrototype=new Proxy({},{getPrototypeOf(){throw Error(secret);}});
+ for(const error of [Error(secret),Object.assign(Error(secret),{code:secret}),new MediaSandboxError(secret as never),secret,null,undefined,inaccessible,trappedDescriptor,trappedPrototype]){const failure=mediaSandboxLabelFailure(error);assert.deepEqual(failure,{errorCategory:'unknown',errorCode:'UNKNOWN'});assert.doesNotMatch(JSON.stringify(failure),/private|credential|4321|stdout|secret/);}
+ const record:Record<string,unknown>={};let original:unknown;try{assertMediaSandboxLabelParser({stdout:secret,error:null},record);}catch(error){original=error;Object.assign(record,mediaSandboxLabelFailure(error));}assert(original instanceof assert.AssertionError);assert.equal(record.check,'output_match');assert.equal(record.errorCategory,'assertion');assert.doesNotMatch(JSON.stringify(record),/private|credential|4321|stdout=|secret/);
 });

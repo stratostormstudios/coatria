@@ -89,6 +89,25 @@ export function assertMediaSandboxOrphanCleanup(orphan:{stdout:string;error:unkn
  diagnostic.check='cgroup_controls';checkControls(orphan.observations,limits);
  diagnostic.check='descendants_observed';assert.ok([...orphan.observations.values()].some(item=>item.processes.size>=5));
 }
+const labelObservedChecks=new Set(['input_open','process_start','cgroup_observation','process_drain']);
+const labelFilesystemCodes=new Set(['ENOENT','ENODEV','EIO','EACCES','EPERM','ESRCH','EMFILE','ENFILE','ENOMEM','EBUSY','ENOTDIR','EISDIR','EROFS','EINVAL']);
+/** Fixed diagnostic categories only. Never retain exception text, paths or output. */
+export function mediaSandboxLabelFailure(error:unknown){
+ try{const value=error&&typeof error==='object'?Object.getOwnPropertyDescriptor(error,'code')?.value:undefined;
+  if(error instanceof MediaSandboxError)return typeof value==='string'&&boundaryErrorCodes.has(value)?{errorCategory:'sandbox',errorCode:value}:{errorCategory:'unknown',errorCode:'UNKNOWN'};
+  if(value==='ERR_ASSERTION')return {errorCategory:'assertion',errorCode:value};
+  return typeof value==='string'&&labelFilesystemCodes.has(value)?{errorCategory:'filesystem',errorCode:value}:{errorCategory:'unknown',errorCode:'UNKNOWN'};
+ }catch{return {errorCategory:'unknown',errorCode:'UNKNOWN'};}
+}
+export function mediaSandboxLabelObservation(check:string,error:unknown=undefined){
+ return {diagnosticOnly:true,qualified:false,check:labelObservedChecks.has(check)?check:null,execution:error===undefined?'not_observed':error===null?'succeeded':'failed',executionCode:error===undefined||error===null?null:mediaSandboxLabelFailure(error).errorCode};
+}
+/** Preserve the original execution and exact trimmed-output assertions. */
+export function assertMediaSandboxLabelParser(label:{stdout:string;error:unknown},diagnostic:Record<string,unknown>){
+ Object.assign(diagnostic,mediaSandboxLabelObservation('process_drain',label.error),{stdoutBytes:Math.min(Buffer.byteLength(label.stdout),65536),stdoutTruncated:Buffer.byteLength(label.stdout)>65536,exactExpectedOutput:label.stdout.trim()==='label parser ok'});
+ diagnostic.check='execution';assert.equal(label.error,null);
+ diagnostic.check='output_match';assert.equal(label.stdout.trim(),'label parser ok');
+}
 async function runObserved(config:Config,sandbox:QualifiedLinuxMediaSandbox,args:string[],options:{timeoutMs?:number;signal?:AbortSignal;diagnostic?:(check:'input_open'|'process_start'|'cgroup_observation'|'process_drain',observations:Map<string,Observation>,error?:unknown)=>void}={}){
  const mark=(check:'input_open'|'process_start'|'cgroup_observation'|'process_drain',observations:Map<string,Observation>,error?:unknown)=>options.diagnostic?.(check,observations,error);
  mark('input_open',new Map());
@@ -118,7 +137,9 @@ export async function runMediaSandboxCanary(config:Config){
   checkpoint('parent_cgroup_controls');const parentLimits:Record<string,string>={};for(const file of ['memory.max','memory.swap.max','pids.max','cpu.max'])parentLimits[file]=await text(join(config.serviceRoot,file));assert.deepEqual(parentLimits,{'memory.max':String(2*1024**3),'memory.swap.max':'0','pids.max':'256','cpu.max':'200000 100000'});report.aggregateParentLimits=parentLimits;
   checkpoint('conformance_profile');const events:MediaSandboxExitEvidence[]=[];report.adversarialEvents=events;const sandbox=await createLinuxMediaSandbox({...config.profiles.conformance,cgroupRoot:config.cgroupRoot,onExitEvidence:event=>events.push(event)});assert.equal(events.length,2);assert.ok(events.every(event=>event.drained));startingProfile=null;
   const limits=events[0].limits;
-  checkpoint('label_parser');const labelCheck=await runObserved(config,sandbox,['label-check']);assert.equal(labelCheck.error,null);assert.equal(labelCheck.stdout.trim(),'label parser ok');
+  checkpoint('label_parser');const labelDiagnostic:Record<string,unknown>=mediaSandboxLabelObservation('input_open');report.labelDiagnostic=labelDiagnostic;
+  try{const labelCheck=await runObserved(config,sandbox,['label-check'],{diagnostic:(check,_observations,error)=>Object.assign(labelDiagnostic,mediaSandboxLabelObservation(check,error))});assertMediaSandboxLabelParser(labelCheck,labelDiagnostic);}
+  catch(error){Object.assign(labelDiagnostic,mediaSandboxLabelFailure(error));throw error;}
   checkpoint('boundary');const boundaryDiagnostic:Record<string,unknown>={diagnosticOnly:true,qualified:false,check:'host_listener_start'};report.boundaryDiagnostic=boundaryDiagnostic;
   let connections=0;listener=createServer(socket=>{connections++;socket.end();});await new Promise<void>((resolve,reject)=>{listener!.once('error',reject);listener!.listen(0,'127.0.0.1',resolve);});const address=listener.address();boundaryDiagnostic.check='host_listener_address';assert.ok(address&&typeof address==='object');
   boundaryDiagnostic.check='host_listener_positive_control';await new Promise<void>((resolve,reject)=>{const socket=connect(address.port,'127.0.0.1');socket.once('error',reject);socket.once('end',resolve);});boundaryDiagnostic.hostListenerPositiveControl=connections===1;assert.equal(connections,1);connections=0;
