@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {classifySyntheticStartupStderr,diagnoseMediaSandboxStartup,diagnoseArchiveHostSandboxStartup,archiveStartupIdentity} from './media-sandbox-startup-diagnostic.mts';
-import {assertMediaSandboxBoundary,mediaSandboxBoundaryObservation,assertMediaSandboxFileDescriptorCap,assertMediaSandboxOrphanCleanup,mediaSandboxOrphanObservation,assertMediaSandboxLabelParser,mediaSandboxLabelObservation,mediaSandboxLabelFailure} from './media-sandbox-linux-canary.mts';
+import {assertMediaSandboxBoundary,mediaSandboxBoundaryObservation,assertMediaSandboxFileDescriptorCap,assertMediaSandboxOrphanCleanup,mediaSandboxOrphanObservation,assertMediaSandboxLabelParser,mediaSandboxLabelObservation,mediaSandboxLabelFailure,withMediaSandboxInputLifetime} from './media-sandbox-linux-canary.mts';
 import {MediaSandboxError} from '../../src/lib/higgsfield-media-sandbox';
 
 test('synthetic startup diagnostics classify setup errors without returning their text',()=>{
@@ -125,4 +125,27 @@ test('label failure classification excludes raw messages, paths, PIDs, output an
  const inaccessible=Object.defineProperty({},'code',{get(){throw Error(secret);}}),trappedDescriptor=new Proxy({},{getOwnPropertyDescriptor(){throw Error(secret);}}),trappedPrototype=new Proxy({},{getPrototypeOf(){throw Error(secret);}});
  for(const error of [Error(secret),Object.assign(Error(secret),{code:secret}),new MediaSandboxError(secret as never),secret,null,undefined,inaccessible,trappedDescriptor,trappedPrototype]){const failure=mediaSandboxLabelFailure(error);assert.deepEqual(failure,{errorCategory:'unknown',errorCode:'UNKNOWN'});assert.doesNotMatch(JSON.stringify(failure),/private|credential|4321|stdout|secret/);}
  const record:Record<string,unknown>={};let original:unknown;try{assertMediaSandboxLabelParser({stdout:secret,error:null},record);}catch(error){original=error;Object.assign(record,mediaSandboxLabelFailure(error));}assert(original instanceof assert.AssertionError);assert.equal(record.check,'output_match');assert.equal(record.errorCategory,'assertion');assert.doesNotMatch(JSON.stringify(record),/private|credential|4321|stdout=|secret/);
+});
+
+function deferred<Value>(){let resolve!:(value:Value)=>void;return {promise:new Promise<Value>(done=>{resolve=done;}),resolve:(value:Value)=>resolve(value)};}
+const turn=()=>new Promise<void>(resolve=>setImmediate(resolve));
+test('observer failure retains its input until sandbox settlement and preserves the original exception',async()=>{
+ for(const sandboxError of [null,new MediaSandboxError('PROCESS_FAILED'),new MediaSandboxError('CLEANUP_FAILED')]){
+  const pending=deferred<{stdout:string;error:MediaSandboxError|null}>(),events:string[]=[],observerError=Object.assign(Error('Synthetic observer failure'),{code:'ENODEV'});let returned=false,closes=0;
+  const outcome=pending.promise.then(value=>{events.push('sandbox_settled');return value;});
+  const result=withMediaSandboxInputLifetime(()=>{events.push('started');return outcome;},async()=>{events.push('observer_failed');throw observerError;},async()=>{closes++;events.push('input_closed');});
+  const checked=assert.rejects(result,error=>{returned=true;assert.strictEqual(error,observerError);return true;});await turn();assert.equal(closes,0);assert.equal(returned,false);assert.deepEqual(events,['started','observer_failed']);
+  pending.resolve({stdout:'',error:sandboxError});await checked;assert.equal(closes,1);assert.deepEqual(events,['started','observer_failed','sandbox_settled','input_closed']);
+ }
+});
+test('normal observed success and captured sandbox failure retain their exact outcomes and close once',async()=>{
+ for(const error of [null,new MediaSandboxError('TIMEOUT')]){
+  const pending=deferred<{stdout:string;error:MediaSandboxError|null}>(),expected={stdout:error?'':'label parser ok\n',error};let closes=0;
+  const result=withMediaSandboxInputLifetime(()=>pending.promise,async outcome=>await outcome,async()=>{closes++;});await turn();assert.equal(closes,0);pending.resolve(expected);assert.strictEqual(await result,expected);assert.equal(closes,1);
+ }
+});
+test('lifetime helper closes input after synchronous start failure and preserves existing close errors',async()=>{
+ const startError=Error('Synthetic startup failure');let closes=0;
+ await assert.rejects(withMediaSandboxInputLifetime(()=>{throw startError;},async()=>assert.fail('Observer must not run'),async()=>{closes++;}),error=>error===startError);assert.equal(closes,1);
+ const closeError=Error('Synthetic close failure');await assert.rejects(withMediaSandboxInputLifetime(async()=>({stdout:'ok',error:null}),async outcome=>await outcome,async()=>{throw closeError;}),error=>error===closeError);
 });

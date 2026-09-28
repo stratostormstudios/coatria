@@ -108,13 +108,20 @@ export function assertMediaSandboxLabelParser(label:{stdout:string;error:unknown
  diagnostic.check='execution';assert.equal(label.error,null);
  diagnostic.check='output_match';assert.equal(label.stdout.trim(),'label parser ok');
 }
+/** start returns the nonrejecting execution outcome, including sandbox failures.
+ * An observer failure must not release its input before the bounded run settles. */
+export async function withMediaSandboxInputLifetime<Outcome,Result>(start:()=>Promise<Outcome>,observeRun:(outcome:Promise<Outcome>)=>Promise<Result>,closeInput:()=>Promise<void>):Promise<Result>{
+ let outcome:Promise<Outcome>|undefined;
+ try{outcome=start();return await observeRun(outcome);}
+ finally{await outcome;await closeInput();}
+}
 async function runObserved(config:Config,sandbox:QualifiedLinuxMediaSandbox,args:string[],options:{timeoutMs?:number;signal?:AbortSignal;diagnostic?:(check:'input_open'|'process_start'|'cgroup_observation'|'process_drain',observations:Map<string,Observation>,error?:unknown)=>void}={}){
  const mark=(check:'input_open'|'process_start'|'cgroup_observation'|'process_drain',observations:Map<string,Observation>,error?:unknown)=>options.diagnostic?.(check,observations,error);
  mark('input_open',new Map());
  const file=await open(fixture(config,'synthetic.png'),constants.O_RDONLY),observations=new Map<string,Observation>();let finished=false;
- try{mark('process_start',observations);const promise=sandbox.run({tool:'ffprobe',args,inputFd:file.fd,timeoutMs:options.timeoutMs??9000,signal:options.signal,maxOutputBytes:65536,maxStderrBytes:65536}).then(stdout=>({stdout,error:null}),error=>({stdout:'',error})).finally(()=>{finished=true;});
+ return withMediaSandboxInputLifetime(()=>{mark('process_start',observations);return sandbox.run({tool:'ffprobe',args,inputFd:file.fd,timeoutMs:options.timeoutMs??9000,signal:options.signal,maxOutputBytes:65536,maxStderrBytes:65536}).then(stdout=>({stdout,error:null}),error=>({stdout:'',error})).finally(()=>{finished=true;});},async promise=>{
   while(!finished){mark('cgroup_observation',observations);await observe(config,observations);await delay(10);}const outcome=await promise;mark('process_drain',observations,outcome.error);await assertDrained(config,observations);return {...outcome,observations};
- }finally{await file.close();}
+ },()=>file.close());
 }
 
 async function configInput(){assert.equal(process.platform,'linux');assert.equal(process.arch,'x64');assert.ok(process.getuid&&process.getuid()>0);const path=process.env.COATRIA_MEDIA_QUALIFICATION;assert.ok(path);const info=await lstat(path);assert.equal(info.uid,0);assert.equal(info.mode&0o022,0);const config=JSON.parse(await text(path)) as Config;assert.equal(config.version,1);assert.equal(process.getuid!(),config.uid);assert.equal(process.getgid!(),config.gid);assert.ok((await text('/proc/self/cgroup')).includes(config.supervisorGroup.slice('/sys/fs/cgroup'.length)));return config;}
