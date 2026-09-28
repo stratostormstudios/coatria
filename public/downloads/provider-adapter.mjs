@@ -12,6 +12,24 @@ const PROVIDERS={
 const object=value=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const integer=(value,min,max,name)=>{if(!Number.isSafeInteger(value)||value<min||value>max)throw new Error('Invalid '+name+' limit.');return value;};
 const encoded=(value,limit=1024*1024)=>{let result;try{result=JSON.stringify(value);}catch{throw new Error('Invalid bridge data.');}if(typeof result!=='string'||Buffer.byteLength(result)>limit)throw new Error('Bridge data exceeded its size limit.');return result;};
+const standardUuidPattern='^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$';
+/** Reduce repeated model text only. Full catalog schemas still compile the
+ * worker validators, and the server validates every call with its original Zod
+ * schema. Never remove custom UUID patterns or walk defaults/examples as schema.
+ */
+export function modelToolSchema(schema){
+ const projected=JSON.parse(encoded(schema,128*1024));let nodes=0;
+ function visit(rule,depth=0){
+  if(++nodes>2000||depth>16)throw new Error('Coatria tool schema exceeded its limits.');
+  if(!object(rule))return;
+  delete rule.$schema;
+  if(rule.type==='string'&&rule.format==='uuid'&&rule.pattern===standardUuidPattern)delete rule.pattern;
+  if(object(rule.properties))for(const child of Object.values(rule.properties))visit(child,depth+1);
+  for(const key of['propertyNames','items','additionalProperties'])if(Object.hasOwn(rule,key))visit(rule[key],depth+1);
+  for(const key of['anyOf','allOf','oneOf'])if(Array.isArray(rule[key]))for(const child of rule[key])visit(child,depth+1);
+ }
+ visit(projected);return projected;
+}
 const calendarDate=(year,month,day)=>{const days=[31,year%4===0&&(year%100!==0||year%400===0)?29:28,31,30,31,30,31,31,30,31,30,31];return month>=1&&month<=12&&day>=1&&day<=days[month-1];};
 // Match the zoned ISO timestamps emitted by the API schemas. Checking the local
 // calendar fields avoids Date.parse silently normalizing impossible dates or
@@ -198,6 +216,10 @@ export function normalize(data,protocol){
 // turn. This projection affects model history only: the HTTP API and layout_get
 // still expose the complete reviewed layout. Never mutate the tool response.
 export function modelContextResult(name,value){
+ // Static template definitions are available through their dedicated tool.
+ // Keep current assignments, every skill instruction and project state intact.
+ // This is a model-history view; studio_get receipts retain the full response.
+ if(name==='studio_get'&&object(value)&&Array.isArray(value.templates))return {...value,templates:value.templates.map(({id,version,name})=>({id,version,name})),templatesAreSummaries:true,templateDetails:'Use studio_templates for complete curated template definitions. Current role bindings and all skill instructions are included unchanged.'};
  // A transfer ticket belongs to the trusted API/worker transport, never to an
  // inference provider. Explicit metadata allowlists also exclude future nested
  // token/header/URL fields. Applying this twice (broker storage + replay) is safe.
@@ -228,7 +250,7 @@ export function createProviderExecutor({settings=process.env,fetch:transport=glo
   for(const tool of definitions){if(!/^[-a-zA-Z0-9_]{1,80}$/.test(tool.name)||allowed.has(tool.name)||typeof tool.description!=='string'||!object(tool.inputSchema))throw new Error('Invalid Coatria tool definition.');encoded(tool.inputSchema,128*1024);allowed.set(tool.name,argumentValidator(tool.inputSchema));}
   const policy=bridgePolicy+characterInstructions(context.installation),prompt=encoded(modelRequestContext(run,context),300000);
   const history=config.protocol==='responses'?[{role:'user',content:prompt}]:[{role:'user',content:prompt}];
-  const toolDefs=definitions.map(tool=>config.protocol==='anthropic'?{name:tool.name,description:tool.description,input_schema:tool.inputSchema}:config.protocol==='responses'?{type:'function',name:tool.name,description:tool.description,parameters:tool.inputSchema,strict:false}:{type:'function',function:{name:tool.name,description:tool.description,parameters:tool.inputSchema}});
+  const toolDefs=definitions.map(tool=>{const schema=modelToolSchema(tool.inputSchema);return config.protocol==='anthropic'?{name:tool.name,description:tool.description,input_schema:schema}:config.protocol==='responses'?{type:'function',name:tool.name,description:tool.description,parameters:schema,strict:false}:{type:'function',function:{name:tool.name,description:tool.description,parameters:schema}};});
   let spent=0,callCount=0,correctionCount=0;const seenCalls=new Set();
   for(let step=0;step<config.limits.maxSteps;step++){
    active.throwIfAborted();

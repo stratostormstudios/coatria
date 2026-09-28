@@ -9,7 +9,7 @@ import {AGENT_TOOLS} from './agent-tools';
 import {generatedFollowupRunContext} from './studio-generated-followups';
 import {body,fail,hashToken,id,json,rateLimit,ApiError} from './security';
 import {stableRequestId} from '../../public/downloads/agent-worker.mjs';
-import {bridgePolicy,characterInstructions,normalize,usageTokens,modelContextResult,modelRequestContext} from '../../public/downloads/provider-adapter.mjs';
+import {bridgePolicy,characterInstructions,normalize,usageTokens,modelContextResult,modelRequestContext,modelToolSchema} from '../../public/downloads/provider-adapter.mjs';
 import {studioInferenceSubmitInput,studioInferenceCancelInput,studioInferenceLeaseInput,studioInferenceConfigInput,type StudioInference} from './studio-inference-protocol';
 import {assertInferenceJsonSafe,validateInferenceArguments} from './studio-inference-validation';
 
@@ -43,7 +43,7 @@ export async function buildStudioInferenceRequest(client:PoolClient,access:Row){
  const run=access.run,generatedFollowup=await generatedFollowupRunContext(client,run.company_id,run.id);
  if(!generatedFollowup)await client.query('SELECT id FROM conversations WHERE company_id=$1 AND id=$2 FOR SHARE',[run.company_id,run.conversation_id]);
  const messages=generatedFollowup||run.purpose==='connection_test'?[]:(await client.query(`SELECT m.id,m.body,m.parent_id AS "parentId",m.sequence::text AS sequence,m.deleted_at AS "deletedAt",m.actor_kind AS "actorKind",COALESCE(m.user_id,m.agent_id) AS "actorId",COALESCE(u.name,a.name,'Former teammate') AS "authorName" FROM messages m LEFT JOIN users u ON u.id=m.user_id LEFT JOIN agents a ON a.company_id=m.company_id AND a.id=m.agent_id WHERE m.company_id=$1 AND m.conversation_id=$2 AND (($3::uuid IS NULL AND m.parent_id IS NULL) OR m.id=$3 OR m.parent_id=$3) ORDER BY (m.id=$3) DESC NULLS LAST,m.sequence DESC LIMIT 30`,[run.company_id,run.conversation_id,run.parent_id])).rows.sort((a,b)=>BigInt(a.sequence)<BigInt(b.sequence)?-1:1);
- const tools=Object.entries(AGENT_TOOLS).filter(([,tool])=>access.capabilities.includes(tool.capability)).map(([name,tool])=>({type:'function',function:{name,description:tool.description,parameters:z.toJSONSchema(tool.schema,{io:'input',unrepresentable:'any'})}}));
+ const tools=Object.entries(AGENT_TOOLS).filter(([,tool])=>access.capabilities.includes(tool.capability)).map(([name,tool])=>({type:'function',function:{name,description:tool.description,parameters:modelToolSchema(z.toJSONSchema(tool.schema,{io:'input',unrepresentable:'any'}))}}));
  return{model:access.installation.runtimeConfig.modelId,messages:[{role:'system',content:bridgePolicy+characterInstructions(access.installation)},{role:'user',content:bounded(modelRequestContext(run,{messages,...generatedFollowup?{generatedFollowup}:{}}),300000)}],...(tools.length?{tools}:{}),max_tokens:0,stream:false};
 }
 function effectiveLimits(access:Row){const p=access.host.preset,r=access.installation.runtimeConfig;const limits={maxSteps:Math.min(r.maxSteps??8,p.maxSteps,20),maxOutputTokens:Math.min(r.maxOutputTokens??2048,p.maxOutputTokens,8192),maxTotalTokens:Math.min(r.maxTotalTokens??24000,p.maxTotalTokens,100000),timeoutSeconds:Math.min(r.timeoutSeconds??180,p.timeoutSeconds,600)};if(Object.values(limits).some(v=>!Number.isSafeInteger(v)||v<1))fail(409,'The approved inference limits are invalid.','INFERENCE_LIMITS_INVALID');return limits;}
@@ -89,7 +89,10 @@ export async function recordStudioInferenceToolReceipt(client:PoolClient,identit
  await assertStudioInferenceTool(client,identity,runId,requestId,name,rawArguments);
  const steps=(await client.query("SELECT id,step,model_calls FROM studio_inference_jobs WHERE company_id=$1 AND agent_id=$2 AND run_id=$3 AND status='succeeded' ORDER BY step",[identity.company_id,identity.id,runId])).rows;
  let match:Row|undefined;for(const step of steps)for(const call of step.model_calls)if(stableRequestId(runId,'provider:'+step.step+':'+call.id)===requestId)match={inferenceId:step.id,...call};if(!match)return result;
- if(match.name!==name||digest(rawArguments)!==digest(match.args))fail(409,'This tool receipt does not match the exact model request.','INFERENCE_TOOL_MISMATCH');const projected=modelContextResult(name,result);bounded(projected,262144);
+ // Static overview summaries save model context only; preserve the exact
+ // studio_get response in durable evidence. Secret-bearing transfer receipts
+ // and the existing workspace projection keep their established boundaries.
+ if(match.name!==name||digest(rawArguments)!==digest(match.args))fail(409,'This tool receipt does not match the exact model request.','INFERENCE_TOOL_MISMATCH');const projected=name==='studio_get'?result:modelContextResult(name,result);bounded(projected,262144);
  const old=(await client.query('SELECT run_id,inference_id,tool,arguments_hash,response FROM studio_inference_tool_receipts WHERE company_id=$1 AND agent_id=$2 AND request_id=$3',[identity.company_id,identity.id,requestId])).rows[0];if(old){if(old.run_id!==runId||old.inference_id!==match.inferenceId||old.tool!==name||old.arguments_hash!==digest(rawArguments))fail(409,'This tool evidence key changed.','INFERENCE_TOOL_MISMATCH');return result;}
  await client.query('INSERT INTO studio_inference_tool_receipts(company_id,agent_id,run_id,inference_id,request_id,tool,arguments_hash,response) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[identity.company_id,identity.id,runId,match.inferenceId,requestId,name,digest(rawArguments),JSON.stringify(projected)]);return result;
 }

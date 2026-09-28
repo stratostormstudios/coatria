@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createProviderExecutor,providerConfiguration,characterInstructions,runpodCompletion,modelContextResult} from '../public/downloads/provider-adapter.mjs';
+import {z} from 'zod';
+import {STUDIO_TEMPLATES,STUDIO_SKILLS} from '../src/lib/studio-protocol';
+import {createProviderExecutor,providerConfiguration,characterInstructions,runpodCompletion,modelContextResult,modelToolSchema} from '../public/downloads/provider-adapter.mjs';
 
 const models:Record<string,string>={openai:'gpt-6-astra',xai:'grok-4.6',anthropic:'claude-sonnet-5',fireworks:'accounts/fireworks/models/qwen3p8-max',together:'Qwen/Qwen3.5-9B',runpod:'Qwen/Qwen3.5-9B'};
 const providerKey='fixture-key-not-real-123456',agentToken='ca_fixture-only-private-token',lease='fixture-run-lease-private';
@@ -16,6 +18,30 @@ function response(provider:string,call=true,overrides:Record<string,any>={}):Rec
 }
 const queued=(output:any)=>({id:'fixture-job-123-e1',status:'COMPLETED',output:[output]});
 const wire=(provider:string,items:any[],inspect?:(url:string,init:any,index:number)=>void)=>{let index=0;return async(url:any,init:any)=>{inspect?.(String(url),init,index);if(index>=items.length)throw new Error('Unexpected inference');const item=items[index++];return new Response(JSON.stringify(provider==='runpod'?queued(item):item),{status:200,headers:{'Content-Type':'application/json'}});};};
+
+test('model schemas remove only exact redundant UUID patterns and schema annotations without altering data or validation assertions',()=>{
+ const uuid=z.toJSONSchema(z.string().uuid()),literal={$schema:'literal data',type:'string',format:'uuid',pattern:uuid.pattern};
+ const schema={$schema:'https://json-schema.org/draft/2020-12/schema',type:'object',properties:{$schema:{type:'string',const:'keep this property'},id:uuid,restricted:{...uuid,pattern:'^10000000-'},nonString:{...uuid,type:['string','null']},unformatted:{type:'string',pattern:uuid.pattern},values:{type:'array',items:{anyOf:[uuid,{type:'null'}]},minItems:1,maxItems:2}},propertyNames:{type:'string',maxLength:80},required:['id'],additionalProperties:false,default:literal,examples:[literal]};
+ const before=JSON.stringify(schema),freeze=(value:any)=>{if(value&&typeof value==='object'){Object.values(value).forEach(freeze);Object.freeze(value);}};freeze(schema);
+ const result=modelToolSchema(schema),expected=JSON.parse(before);delete expected.$schema;for(const key of ['id','restricted','nonString'])delete expected.properties[key].$schema;delete expected.properties.values.items.anyOf[0].$schema;delete expected.properties.id.pattern;delete expected.properties.values.items.anyOf[0].pattern;
+ assert.deepEqual(result,expected);assert.equal(JSON.stringify(schema),before);assert.deepEqual(modelToolSchema(result),result);assert.equal(modelToolSchema(false),false);assert.equal(result.properties.id.format,'uuid');assert.equal(result.properties.restricted.pattern,'^10000000-');assert.deepEqual(result.default,literal);assert.deepEqual(result.examples,[literal]);
+});
+
+test('every provider gets compact model schemas while the worker still validates the unchanged full catalog before any write',async t=>{
+ const schema=z.toJSONSchema(z.object({taskId:z.string().uuid()}).strict()),catalog={...tool,inputSchema:schema},before=JSON.stringify(catalog),valid='10000000-0000-4000-8000-000000000991';
+ for(const provider of Object.keys(models))await t.test(provider,async()=>{
+  const options=input(provider);options.tools.list=async()=>({tools:[catalog]}) as any;let calls=0;options.tools.call=async(_name,args)=>{assert.deepEqual(args,{taskId:valid});calls++;return{name:'Fixture Company'};};
+  const output=response(provider);if(['openai','xai'].includes(provider))output.output[1].arguments=JSON.stringify({taskId:valid});else if(provider==='anthropic')output.content[1].input={taskId:valid};else output.choices[0].message.tool_calls[0].function.arguments=JSON.stringify({taskId:valid});
+  await createProviderExecutor({settings,fetch:wire(provider,[output,response(provider,false)],(_url,init)=>{const envelope=JSON.parse(init.body),body=provider==='runpod'?envelope.input.openai_input:envelope,definition=body.tools[0],projected=provider==='anthropic'?definition.input_schema:['openai','xai'].includes(provider)?definition.parameters:definition.function.parameters;assert.deepEqual(projected,modelToolSchema(schema));assert.equal(projected.properties.taskId.pattern,undefined);}) as typeof fetch})(options);
+  assert.equal(calls,1);assert.equal(JSON.stringify(catalog),before);
+ });
+ // The worker's format validator accepts uppercase UUID text, but the full
+ // canonical regex deliberately permits only the lowercase all-ones UUID.
+ // This distinguishes the original validator from the projected model schema.
+ const invalid='FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF';assert.equal(z.string().uuid().safeParse(invalid).success,false);
+ const options=input('runpod');options.tools.list=async()=>({tools:[catalog]}) as any;let writes=0;options.tools.call=async()=>{writes++;return{name:'Unexpected'};};const bad=response('runpod');bad.choices[0].message.tool_calls[0].function.arguments=JSON.stringify({taskId:invalid});
+ await assert.rejects(()=>createProviderExecutor({settings,fetch:wire('runpod',[bad]) as typeof fetch})(options),/outside the approved schema/);assert.equal(writes,0);assert.equal(JSON.stringify(catalog),before);
+});
 
 test('each provider completes its documented tool-call and final-answer wire protocol',async t=>{
  for(const provider of Object.keys(models))await t.test(provider,async()=>{
@@ -57,6 +83,16 @@ test('workspace geometry larger than the model-result limit stays API-accessible
   }) as typeof fetch});
   assert.deepEqual(await execute(options),{result:'Fixture Company is ready.'});
   assert.equal(inspected,true);assert.equal(JSON.stringify(workspace),original);
+ });
+});
+
+test('studio template summaries save model history while every role binding, skill instruction and full lookup remains intact',async t=>{
+ const snapshot={templates:STUDIO_TEMPLATES,skills:STUDIO_SKILLS,profile:{templateId:'ai-production',revision:4,roles:[{key:'producer',agentId:'10000000-0000-4000-8000-000000000991',humanId:null},{key:'qc',agentId:null,humanId:null}]},projects:[],hasMore:false,nextAfter:null},before=JSON.stringify(snapshot),projected=modelContextResult('studio_get',snapshot);
+ assert.equal(JSON.stringify(snapshot),before);assert.strictEqual(projected.profile,snapshot.profile);assert.strictEqual(projected.skills,snapshot.skills);assert.deepEqual(projected.templates,STUDIO_TEMPLATES.map(({id,version,name})=>({id,version,name})));assert.equal(projected.templatesAreSummaries,true);assert.match(projected.templateDetails,/studio_templates/);assert(Buffer.byteLength(before)-Buffer.byteLength(JSON.stringify(projected))>4000);assert.deepEqual(modelContextResult('studio_get',projected),projected);assert.strictEqual(modelContextResult('studio_templates',snapshot),snapshot);
+ for(const provider of Object.keys(models))await t.test(provider,async()=>{
+  const options=input(provider);options.context.capabilities=['studio.read'];options.tools.list=async()=>({tools:[{...tool,name:'studio_get',capability:'studio.read'}]});options.tools.call=async()=>snapshot as any;
+  const output=response(provider);if(['openai','xai'].includes(provider))output.output[1].name='studio_get';else if(provider==='anthropic')output.content[1].name='studio_get';else output.choices[0].message.tool_calls[0].function.name='studio_get';
+  let checked=false;await createProviderExecutor({settings,fetch:wire(provider,[output,response(provider,false)],(_url,init,index)=>{if(!index)return;const envelope=JSON.parse(init.body),body=provider==='runpod'?envelope.input.openai_input:envelope,text=['openai','xai'].includes(provider)?body.input.at(-1).output:provider==='anthropic'?body.messages.at(-1).content[0].content:body.messages.at(-1).content;assert.deepEqual(JSON.parse(text),projected);checked=true;}) as typeof fetch})(options);assert(checked);assert.equal(JSON.stringify(snapshot),before);
  });
 });
 
