@@ -1,4 +1,6 @@
 import {sameRuntimeConfiguration} from './company-runtime-preset';
+import {observeRunpodCpuCreate} from './runpod-cpu-diagnostics';
+import {RUNPOD_CPU_CATALOG_PATH,runpodCpuCapacity} from './runpod-cpu-capacity';
 /** Bounded, server-owned archive/gateway CPU provisioning. No agent enrollment,
  * credential projection, generic container parameters or provider create retry. */
 import {randomUUID} from 'node:crypto';
@@ -67,9 +69,10 @@ async function verifyDatabase(service:TrustedServiceKind,url:string,companyId:st
  try{if(service==='archive')await assertHiggsfieldArchiveDatabase(pool);else{const client=await pool.connect();try{await assertProjectStorageGatewayDatabase(client);}finally{client.release();}}if(!(await pool.query('SELECT id FROM companies WHERE id=$1',[companyId])).rowCount)throw Error();}
  catch{fail(503,'The dedicated service LOGIN and grants were not verified.','SERVICE_DATABASE_UNCONFIRMED');}finally{await pool.end();}
 }
-async function provider(path:string,method:string,payload:unknown,transport:typeof fetch){
+async function provider(path:string,method:string,payload:unknown,transport:typeof fetch,createProvisionId?:string){
  const key=process.env.MANAGED_RUNPOD_API_KEY;if(!key)fail(503,'The server lifecycle credential is unavailable.','SERVICE_PROVIDER_UNAVAILABLE');
- const response=await transport('https://api.runpod.io/v2'+path,{method,headers:{Authorization:'Bearer '+key,...payload===undefined?{}:{'Content-Type':'application/json'}},...payload===undefined?{}:{body:JSON.stringify(payload)},redirect:'error',cache:'no-store',signal:AbortSignal.timeout(10000)});
+ const request=()=>transport('https://api.runpod.io/v2'+path,{method,headers:{Authorization:'Bearer '+key,...payload===undefined?{}:{'Content-Type':'application/json'}},...payload===undefined?{}:{body:JSON.stringify(payload)},redirect:'error',cache:'no-store',signal:AbortSignal.timeout(10000)});
+ const response=await(createProvisionId?observeRunpodCpuCreate(createProvisionId,request):request());
  if(!response.ok){void response.body?.cancel().catch(()=>{});fail(503,'The provider operation was not confirmed.','SERVICE_PROVIDER_UNCONFIRMED');}
  const reader=response.body?.getReader();if(!reader)fail(503,'The provider response was empty.','SERVICE_PROVIDER_UNCONFIRMED');const chunks:Uint8Array[]=[];let size=0;
  try{for(;;){const part=await reader.read();if(part.done)break;size+=part.value.length;if(size>2000000)fail(503,'The provider response exceeded the bound.','SERVICE_PROVIDER_UNCONFIRMED');chunks.push(part.value);}return JSON.parse(Buffer.concat(chunks).toString('utf8')) as Row;}catch{void reader.cancel().catch(()=>{});fail(503,'The provider response was invalid.','SERVICE_PROVIDER_UNCONFIRMED');}
@@ -94,14 +97,17 @@ export async function reconcileTrustedService(provisionId:string,dependencies:De
   if(!submitted){
    if(row.stop_requested_at)return await save({phase:'stopped'});
    const env=await tx(async db=>{await control(db,row.company_id);const current=await rowFor(db,row.company_id,row.id);if(!await currentConfiguration(db,current))fail(409,'The reviewed service preset changed.','SERVICE_PRESET_CHANGED');return companyTrustedServiceEnvironment(db,await loadTrustedServicePreset(db,row.company_id,row.service),row.id);});const preset=row.preset as TrustedServicePreset;await (dependencies.verifyDatabase??verifyDatabase)(row.service,env.DATABASE_URL,row.company_id);deadline.throwIfAborted();
-   const cpu=await provider('/catalog/cpus/cpu3c','GET',undefined,transport);
+   const cpu=await provider(RUNPOD_CPU_CATALOG_PATH,'GET',undefined,transport);
    if(cpu.id!=='cpu3c'||cpu.ramGbPerVcpu!==2||!Number.isInteger(cpu.vcpu?.min)||!Number.isInteger(cpu.vcpu?.max)||cpu.vcpu.min<1||cpu.vcpu.min>2||cpu.vcpu.max<2||!Number.isFinite(cpu.price?.securePerVcpu)||cpu.price.securePerVcpu<=0||Math.ceil(cpu.price.securePerVcpu*2*1000000)>preset.maxHourlyMicrousd)fail(409,'The CPU price or resource changed.','SERVICE_CATALOG_CHANGED');
+   const capacity=runpodCpuCapacity(cpu,preset.dataCenterId);
+   if(capacity==='unavailable')fail(409,'The reviewed CPU size has no current capacity in the approved region.','SERVICE_CAPACITY_UNAVAILABLE');
+   if(capacity!=='available')fail(503,'Current CPU capacity in the approved region could not be verified.','SERVICE_CAPACITY_UNCONFIRMED');
    const request={name:row.pod_name,cloud:'SECURE',image:TRUSTED_SERVICE_IMAGE,args:preset.bootstrapArgs,disk:10,cpu:{id:'cpu3c',vcpuCount:2},dataCenterIds:[preset.dataCenterId],ports:ports(row.service),startSsh:false,startJupyter:false,env};row.expected_environment_hashes=environmentHashes(env);
    const allowed=await tx(async db=>{await control(db,row.company_id);const current=await rowFor(db,row.company_id,row.id),now=await dbNow(db);if(current.lease_id!==lease||current.submitted_at||current.stop_requested_at||+new Date(current.expires_at)<=now||!await currentConfiguration(db,current))return false;if(!(await db.query("SELECT user_id FROM memberships WHERE company_id=$1 AND user_id=$2 AND role IN ('owner','admin') FOR SHARE",[row.company_id,row.created_by])).rowCount)return false;
     const freshEnvironment=await companyTrustedServiceEnvironment(db,await loadTrustedServicePreset(db,row.company_id,row.service),row.id);
     if(trustedServiceHash(environmentHashes(freshEnvironment))!==trustedServiceHash(row.expected_environment_hashes))fail(409,'The private service credentials changed before submission.','SERVICE_CREDENTIAL_CHANGED');
     await db.query("UPDATE trusted_service_provisions SET phase='submitting',submitted_at=clock_timestamp(),expected_environment_hashes=$3,revision=revision+1 WHERE company_id=$1 AND id=$2",[row.company_id,row.id,JSON.stringify(row.expected_environment_hashes)]);return true;});
-   if(!allowed)return await save({phase:'stopped'});submitted=true;const pod=verifyPod(row,await provider('/pods','POST',request,transport));return await finishPod(pod);
+   if(!allowed)return await save({phase:'stopped'});submitted=true;const pod=verifyPod(row,await provider('/pods','POST',request,transport,row.id));return await finishPod(pod);
   }
   const pod=row.pod_id?verifyPod(row,await provider('/pods/'+row.pod_id,'GET',undefined,transport)):await discover(row,transport);if(!pod)return await save({phase:'uncertain',error:'SERVICE_CREATE_UNCERTAIN'});
   return await finishPod(pod);

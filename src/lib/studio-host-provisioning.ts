@@ -1,4 +1,6 @@
 import {loadCompanyRuntimeConfiguration} from './company-runtime-config';
+import {observeRunpodCpuCreate} from './runpod-cpu-diagnostics';
+import {RUNPOD_CPU_CATALOG_PATH,runpodCpuCapacity} from './runpod-cpu-capacity';
 import {createCipheriv,createDecipheriv,randomBytes,randomUUID} from 'node:crypto';
 import type {PoolClient} from 'pg';
 import {z} from 'zod';
@@ -113,16 +115,20 @@ async function currentConfiguration(client:PoolClient,row:Row){
  catch{return false;}
 }
 export type StudioCpuDependencies={fetch?:typeof fetch;now?:()=>number;transaction?:typeof transaction};
-async function providerRequest(path:string,method:string,payload:unknown,transport:typeof fetch){
+async function providerRequest(path:string,method:string,payload:unknown,transport:typeof fetch,createProvisionId?:string){
  const token=process.env.MANAGED_RUNPOD_API_KEY;if(!token)fail(503,'The server Runpod lifecycle credential is unavailable.','CPU_CONFIGURATION_REQUIRED');
- const response=await transport(providerBase+path,{method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},...(payload===undefined?{}:{body:JSON.stringify(payload)}),redirect:'error',cache:'no-store',signal:AbortSignal.timeout(10000)});
+ const request=()=>transport(providerBase+path,{method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},...(payload===undefined?{}:{body:JSON.stringify(payload)}),redirect:'error',cache:'no-store',signal:AbortSignal.timeout(10000)});
+ const response=await(createProvisionId?observeRunpodCpuCreate(createProvisionId,request):request());
  return readProviderJson(response);
 }
 async function readProviderJson(response:Response){if(!response.ok)fail(503,'Runpod did not confirm the compute operation.','CPU_PROVIDER_UNCONFIRMED');const reader=response.body?.getReader();if(!reader)fail(503,'Runpod returned an empty result.','CPU_PROVIDER_UNCONFIRMED');const chunks:Uint8Array[]=[];let size=0;for(;;){const part=await reader.read();if(part.done)break;size+=part.value.length;if(size>2000000){void reader.cancel().catch(()=>{});fail(503,'Runpod returned an oversized result.','CPU_PROVIDER_UNCONFIRMED');}chunks.push(part.value);}try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{fail(503,'Runpod returned an invalid result.','CPU_PROVIDER_UNCONFIRMED');}}
 async function preflight(p:PinnedPreset,transport:typeof fetch){
- const cpu=await providerRequest('/catalog/cpus/cpu3c','GET',undefined,transport),volume=await providerRequest('/network-volumes/'+p.company.volumeId,'GET',undefined,transport);
+ const cpu=await providerRequest(RUNPOD_CPU_CATALOG_PATH,'GET',undefined,transport),volume=await providerRequest('/network-volumes/'+p.company.volumeId,'GET',undefined,transport);
  if(cpu.id!=='cpu3c'||cpu.ramGbPerVcpu!==2||cpu.vcpu?.min>2||cpu.vcpu?.max<2||!Number.isFinite(cpu.price?.securePerVcpu)||cpu.price.securePerVcpu<=0||Math.ceil(cpu.price.securePerVcpu*2*1000000)>p.maxHourlyMicrousd)fail(409,'The fixed CPU SKU or current price does not match the reviewed ceiling.','CPU_CATALOG_CHANGED');
  if(volume.id!==p.company.volumeId||volume.dataCenter!==p.company.dataCenterId)fail(409,'The retained volume does not match this company and region.','CPU_VOLUME_CHANGED');
+ const capacity=runpodCpuCapacity(cpu,p.company.dataCenterId);
+ if(capacity==='unavailable')fail(409,'The reviewed CPU size has no current capacity in the approved region.','CPU_CAPACITY_UNAVAILABLE');
+ if(capacity!=='available')fail(503,'Current CPU capacity in the approved region could not be verified.','CPU_CAPACITY_UNCONFIRMED');
  // Read-only readiness. A CPU approval never changes the separately managed
  // GPU endpoint's worker floor/ceiling, and health does not submit inference.
  try{const endpoint=await providerRequest('/serverless/'+p.endpointId,'GET',undefined,transport);if(endpoint.id!==p.endpointId||!Number.isInteger(endpoint.workers?.max)||endpoint.workers.max<1)throw Error();const response=await transport('https://api.runpod.ai/v2/'+p.endpointId+'/health',{method:'GET',headers:{Authorization:'Bearer '+(p.inference?process.env.MANAGED_RUNPOD_API_KEY:process.env.COATRIA_MANAGED_RUNPOD_INFERENCE_KEY)},redirect:'error',cache:'no-store',signal:AbortSignal.timeout(10000)});const health=await readProviderJson(response);if(!health||typeof health.workers!=='object'||!health.workers)throw Error();}catch{fail(503,'The approved inference endpoint is disabled or its configured server/provider credential cannot read health.','CPU_INFERENCE_UNAVAILABLE');}
@@ -166,7 +172,7 @@ export async function reconcileStudioHostProvision(provisionId:string,dependenci
    await tx(async client=>{await lockCompany(client,row.company_id);const current=await rowFor(client,row.company_id,row.id);if(!await currentConfiguration(client,current))fail(409,'The preset changed before compute submission.','CPU_PRESET_CHANGED');const ready=await companyStudioCpuReadiness(client,row.company_id);if(!ready.ready)fail(503,ready.reasons.join(' '),'CPU_CONFIGURATION_REQUIRED');});await preflight(row.preset,transport);const request=payload(row);
    row.expected_environment_hashes=Object.fromEntries(Object.entries(request.env).map(([key,value])=>[key,hashToken(value)]));
    const authorized=await tx(async client=>{await lockCompany(client,row.company_id);const r=await rowFor(client,row.company_id,row.id);if(r.lease_id!==leaseId||r.submitted_at)return false;const live=(await client.query("SELECT h.id FROM studio_managed_hosts h JOIN memberships m ON m.company_id=h.company_id AND m.user_id=h.created_by WHERE h.company_id=$1 AND h.id=$2 AND h.status='active' AND h.expires_at>clock_timestamp() AND m.role IN ('owner','admin') FOR SHARE OF h,m",[r.company_id,r.host_id])).rowCount;if(r.stop_requested_at||!live||+new Date(r.expires_at)<=now()||!await currentConfiguration(client,r))return false;const currentBindings=(await client.query("SELECT count(*)::int AS count FROM studio_host_credentials c JOIN plugin_installations p ON p.company_id=c.company_id AND p.id=c.installation_id AND p.agent_id=c.agent_id JOIN agents a ON a.company_id=c.company_id AND a.id=c.agent_id JOIN memberships m ON m.company_id=a.company_id AND m.user_id=a.created_by WHERE c.company_id=$1 AND c.host_id=$2 AND c.installation_id=ANY($3::uuid[]) AND c.revoked_at IS NULL AND c.expires_at>clock_timestamp() AND p.revision=c.installation_revision AND a.token_hash=c.token_hash AND a.status='active' AND a.expires_at>clock_timestamp() AND m.role IN ('owner','admin') AND p.runtime_config=c.configuration->'runtimeConfig' AND p.character=c.configuration->'character' AND a.capabilities=c.configuration->'capabilities' AND a.invocation_access=c.configuration->>'invocationAccess' AND a.conversation_access=c.configuration->>'conversationAccess'",[r.company_id,r.host_id,r.plan.installations.map((item:any)=>item.installationId)])).rows[0].count;if(currentBindings!==r.plan.installations.length)fail(409,'Enrolled agents changed before CPU submission. Review a fresh plan.','CPU_INSTALLATION_CHANGED');await client.query("UPDATE studio_host_provisions SET phase='submitting',submitted_at=clock_timestamp(),expected_environment_hashes=$3,revision=revision+1 WHERE company_id=$1 AND id=$2",[r.company_id,r.id,JSON.stringify(row.expected_environment_hashes)]);return true;});
-   if(!authorized)return await save({phase:'stopped'});submitted=true;const pod=verifyPod(row,await providerRequest('/pods','POST',request,transport));return await finishPod(pod);
+   if(!authorized)return await save({phase:'stopped'});submitted=true;const pod=verifyPod(row,await providerRequest('/pods','POST',request,transport,row.id));return await finishPod(pod);
   }
   const pod=row.pod_id?verifyPod(row,await providerRequest('/pods/'+row.pod_id,'GET',undefined,transport)):await discover(row,transport);if(!pod)return await save({phase:'uncertain',errorCode:'CPU_CREATE_UNCERTAIN'});
   return await finishPod(pod);

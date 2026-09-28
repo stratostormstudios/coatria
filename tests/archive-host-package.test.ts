@@ -9,7 +9,7 @@ import {ARCHIVE_HOST_SOURCE_FILES,buildArchiveHostBundle} from '../scripts/hosti
 import {archiveHostUnit,inspectArchiveHostBundle,archiveHostQualificationInvocation} from '../scripts/hosting/install-archive-host.mjs';
 import {createArchiveHostCiCommand,ArchiveHostCiCommandError} from '../scripts/hosting/archive-host-ci-command.mjs';
 import {createArchiveNpmEnvironment,ArchiveRuntimeExportError} from '../scripts/hosting/export-archive-host-runtime.mjs';
-import {ArchiveHostRunError,archiveHostCanarySummary,archiveHostJournalFailure,archiveHostStartupSummary,archiveHostCpuSummary,archiveHostBoundarySummary,archiveHostFileDescriptorSummary} from '../scripts/hosting/archive-host-diagnostics.mjs';
+import {ArchiveHostRunError,archiveHostCanarySummary,archiveHostJournalFailure,archiveHostStartupSummary,archiveHostCpuSummary,archiveHostBoundarySummary,archiveHostFileDescriptorSummary,archiveHostOrphanSummary} from '../scripts/hosting/archive-host-diagnostics.mjs';
 
 const git=(cwd:string,args:string[])=>{const result=spawnSync('git',['-c','core.autocrlf=false','-c','user.name=Archive Fixture','-c','user.email=archive-fixture@example.invalid','-C',cwd,...args],{encoding:'utf8',timeout:10000,maxBuffer:1024*1024});assert.equal(result.status,0,result.stderr);return result.stdout.trim();};
 async function fixture(){
@@ -165,4 +165,16 @@ test('CI failure evidence accepts fixed JSON only from the latest service invoca
  const journal=[row(previous,new ArchiveHostRunError('host_identity',{code:'EACCES'}).diagnostic),row(current,privateText),row(current,{...diagnostic,privateText}),row(current,{...diagnostic,stage:privateText})].join('\n');
  assert.deepEqual(archiveHostJournalFailure(journal,current),diagnostic);assert.ok(!JSON.stringify(archiveHostJournalFailure(journal,current)).includes(privateText));assert.equal(archiveHostJournalFailure(row(previous,diagnostic),current),null);assert.equal(archiveHostJournalFailure(journal,privateText),null);
  const calls:unknown[][]=[];const command=createArchiveHostCiCommand(((...args:unknown[])=>{calls.push(args);return {status:0,stdout:journal};}) as unknown as typeof spawnSync);assert.equal(command('read_qualifier_diagnostics',['--no-pager']),journal);assert.equal(calls[0][0],'/usr/bin/journalctl');
+});
+
+test('orphan fixed subchecks survive host and current-invocation projections without leaking raw evidence',()=>{
+ const secret='private-path-output-credential',id='a'.repeat(32),controls={'keysMatch':true,'memory.max':true,'memory.swap.max':true,'memory.oom.group':true,'pids.max':true,'cpu.max':true};
+ for(const check of ['input_open','process_start','cgroup_observation','process_drain','execution','output_json','fork_count','cgroup_controls','descendants_observed']){
+  const orphanDiagnostic={diagnosticOnly:true,qualified:false,check,execution:'failed',executionCode:'CLEANUP_FAILED',observedGroups:1,observationsTruncated:false,controls:[{...controls,path:secret}],maximumObservedProcesses:4,stdoutBytes:28,stdoutTruncated:false,forked:3,stdout:secret,paths:[secret],pids:[4301]};
+  const summary=archiveHostCanarySummary({qualified:false,failureCode:'CANARY_ASSERTION_FAILED',failingCheck:'orphan_cleanup',tests:Array(5).fill({passed:true}),realFormats:[],orphanDiagnostic}),diagnostic=new ArchiveHostRunError('qualification_canary',{code:'ERR_ASSERTION'},summary).diagnostic,message=JSON.stringify(diagnostic);
+  assert(Buffer.byteLength(message)<=4096);assert.doesNotMatch(message,/private-|4301/);assert.equal(diagnostic.canary?.orphan?.check,check);assert.equal(diagnostic.canary?.orphan?.maximumObservedProcesses,4);assert.equal(diagnostic.canary?.orphan?.controlMatches['cpu.max'],true);
+  assert.deepEqual(archiveHostJournalFailure(JSON.stringify({_SYSTEMD_INVOCATION_ID:id,MESSAGE:message}),id),diagnostic);assert.equal(archiveHostJournalFailure(JSON.stringify({_SYSTEMD_INVOCATION_ID:'b'.repeat(32),MESSAGE:message}),id),null);assert.deepEqual(archiveHostOrphanSummary(diagnostic.canary?.orphan),diagnostic.canary?.orphan);
+ }
+ const invalid={diagnosticOnly:true,qualified:false,check:secret,execution:secret,executionCode:secret,maximumObservedProcesses:257,observedGroups:-1,stdoutBytes:65537,stdoutTruncated:secret,forked:Infinity,controls:Array(17).fill({path:secret})},safe=archiveHostOrphanSummary(invalid);assert.equal(safe?.check,null);assert.equal(safe?.maximumObservedProcesses,null);assert.equal(safe?.stdoutBytes,null);assert.equal(safe?.forked,null);assert.equal(safe?.executionCode,'UNKNOWN');assert(!JSON.stringify(safe).includes(secret));assert.equal(archiveHostOrphanSummary({...invalid,qualified:true}),null);
+ const irrelevant=archiveHostCanarySummary({qualified:false,failingCheck:'cpu_usage',tests:[],realFormats:[],orphanDiagnostic:invalid});assert.equal(irrelevant?.orphan,undefined);
 });

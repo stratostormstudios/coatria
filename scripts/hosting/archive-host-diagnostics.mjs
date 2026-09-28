@@ -15,6 +15,7 @@ const boundaryNamespaces=['mnt','pid','net','ipc','uts','user','cgroup'];
 const boundaryControls=['keysMatch','memory.max','memory.swap.max','memory.oom.group','pids.max','cpu.max'];
 const boundaryChecks=new Set(['host_listener_start','host_listener_address','host_listener_positive_control','input_open','process_start','cgroup_observation','process_drain','execution','output_json','output_lines','cgroup_presence','cgroup_controls','host_listener_isolated','input_unchanged','complete',...boundaryNetwork.map(key=>'network_'+key),...boundaryFacts.map(key=>'fact_'+key),...boundaryNamespaces.flatMap(key=>['namespace_format_'+key,'namespace_isolated_'+key])]);
 const descriptorChecks=new Set(['input_open','process_start','cgroup_observation','process_drain','execution','output_json','limited','open_files']);
+const orphanChecks=new Set(['input_open','process_start','cgroup_observation','process_drain','execution','output_json','fork_count','cgroup_controls','descendants_observed']);
 const boolean=value=>typeof value==='boolean'?value:null;
 const booleans=(value,keys)=>Object.fromEntries(keys.map(key=>[key,boolean(value?.[key])]));
 /** Idempotent fixed-size projections survive both host and journal boundaries.
@@ -29,9 +30,13 @@ export function archiveHostFileDescriptorSummary(value){
  if(!value||value.diagnosticOnly!==true||value.qualified!==false)return null;
  return {diagnosticOnly:true,qualified:false,check:descriptorChecks.has(value.check)?value.check:null,executionCode:value.executionCode===null?null:fixedCode(value.executionCode),stdoutBytes:numeric(value.stdoutBytes,65536),stdoutTruncated:boolean(value.stdoutTruncated),approvedOpenFiles:numeric(value.approvedOpenFiles,1024),limited:boolean(value.limited),openFiles:numeric(value.openFiles,1024)};
 }
-function canaryCheckDetails(check,boundary,fileDescriptor){
- const selectedBoundary=check==='boundary'?archiveHostBoundarySummary(boundary):null,selectedDescriptor=check==='file_descriptor_cap'?archiveHostFileDescriptorSummary(fileDescriptor):null;
- return {...selectedBoundary?{boundary:selectedBoundary}:{},...selectedDescriptor?{fileDescriptor:selectedDescriptor}:{}};
+export function archiveHostOrphanSummary(value){
+ const boundary=archiveHostBoundarySummary(value);if(!boundary)return null;
+ return {diagnosticOnly:true,qualified:false,check:orphanChecks.has(value.check)?value.check:null,execution:boundary.execution,executionCode:boundary.executionCode,observedGroups:boundary.observedGroups,observationsTruncated:boundary.observationsTruncated,controlsObserved:boundary.controlsObserved,controlMatches:boundary.controlMatches,maximumObservedProcesses:numeric(value.maximumObservedProcesses,256),stdoutBytes:numeric(value.stdoutBytes,65536),stdoutTruncated:boolean(value.stdoutTruncated),forked:numeric(value.forked,256)};
+}
+function canaryCheckDetails(check,boundary,fileDescriptor,orphan){
+ const selectedBoundary=check==='boundary'?archiveHostBoundarySummary(boundary):null,selectedDescriptor=check==='file_descriptor_cap'?archiveHostFileDescriptorSummary(fileDescriptor):null,selectedOrphan=check==='orphan_cleanup'?archiveHostOrphanSummary(orphan):null;
+ return {...selectedBoundary?{boundary:selectedBoundary}:{},...selectedDescriptor?{fileDescriptor:selectedDescriptor}:{},...selectedOrphan?{orphan:selectedOrphan}:{}};
 }
 export function archiveHostCpuSummary(value){
  if(!value||typeof value!=='object')return null;
@@ -44,13 +49,13 @@ export function archiveHostStartupSummary(value){
 }
 export function archiveHostCanarySummary(value){
  if(!value||value.qualified!==false||!Array.isArray(value.tests)||value.tests.length>10||!Array.isArray(value.realFormats)||value.realFormats.length>7)return null;
- return {failureCode:fixedCode(value.failureCode),failingCheck:canaryChecks.has(value.failingCheck)?value.failingCheck:null,cpu:archiveHostCpuSummary(value.cpuObservation),testsPassed:value.tests.filter(t=>t?.passed===true).length,formatsPassed:value.realFormats.length,startup:archiveHostStartupSummary(value.startupDiagnostic),...canaryCheckDetails(value.failingCheck,value.boundaryDiagnostic,value.fileDescriptorDiagnostic)};
+ return {failureCode:fixedCode(value.failureCode),failingCheck:canaryChecks.has(value.failingCheck)?value.failingCheck:null,cpu:archiveHostCpuSummary(value.cpuObservation),testsPassed:value.tests.filter(t=>t?.passed===true).length,formatsPassed:value.realFormats.length,startup:archiveHostStartupSummary(value.startupDiagnostic),...canaryCheckDetails(value.failingCheck,value.boundaryDiagnostic,value.fileDescriptorDiagnostic,value.orphanDiagnostic)};
 }
 export class ArchiveHostRunError extends Error{
- /** @param {string} stage @param {unknown} error @param {{failureCode:string,testsPassed:number,formatsPassed:number,failingCheck?:string|null,cpu?:unknown,startup?:unknown,boundary?:unknown,fileDescriptor?:unknown}|null} [canary] */
+ /** @param {string} stage @param {unknown} error @param {{failureCode:string,testsPassed:number,formatsPassed:number,failingCheck?:string|null,cpu?:unknown,startup?:unknown,boundary?:unknown,fileDescriptor?:unknown,orphan?:unknown}|null} [canary] */
  constructor(stage,error,canary=null){
   super('ARCHIVE_HOST_PRECONDITION_OR_QUALIFICATION_FAILED');this.name='ArchiveHostRunError';
-  this.diagnostic=Object.freeze({event:'archive-host-failed',code:'ARCHIVE_HOST_PRECONDITION_OR_QUALIFICATION_FAILED',stage:stages.has(stage)?stage:'unknown_stage',errorCode:error?.message==='ARCHIVE_HOST_PACKAGE_REJECTED'?'CHECK_FAILED':fixedCode(error?.code),canary:canary&&Number.isInteger(canary.testsPassed)&&canary.testsPassed>=0&&canary.testsPassed<=10&&Number.isInteger(canary.formatsPassed)&&canary.formatsPassed>=0&&canary.formatsPassed<=7?{failureCode:fixedCode(canary.failureCode),failingCheck:canaryChecks.has(canary.failingCheck)?canary.failingCheck:null,cpu:archiveHostCpuSummary(canary.cpu),testsPassed:canary.testsPassed,formatsPassed:canary.formatsPassed,startup:archiveHostStartupSummary(canary.startup),...canaryCheckDetails(canary.failingCheck,canary.boundary,canary.fileDescriptor)}:null});
+  this.diagnostic=Object.freeze({event:'archive-host-failed',code:'ARCHIVE_HOST_PRECONDITION_OR_QUALIFICATION_FAILED',stage:stages.has(stage)?stage:'unknown_stage',errorCode:error?.message==='ARCHIVE_HOST_PACKAGE_REJECTED'?'CHECK_FAILED':fixedCode(error?.code),canary:canary&&Number.isInteger(canary.testsPassed)&&canary.testsPassed>=0&&canary.testsPassed<=10&&Number.isInteger(canary.formatsPassed)&&canary.formatsPassed>=0&&canary.formatsPassed<=7?{failureCode:fixedCode(canary.failureCode),failingCheck:canaryChecks.has(canary.failingCheck)?canary.failingCheck:null,cpu:archiveHostCpuSummary(canary.cpu),testsPassed:canary.testsPassed,formatsPassed:canary.formatsPassed,startup:archiveHostStartupSummary(canary.startup),...canaryCheckDetails(canary.failingCheck,canary.boundary,canary.fileDescriptor,canary.orphan)}:null});
  }
 }
 /** Only the current service invocation's fixed JSON is eligible. Raw journal

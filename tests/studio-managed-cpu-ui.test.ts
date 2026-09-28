@@ -7,8 +7,8 @@ import {chromium} from '@playwright/test';
 
 const companyId='10000000-0000-4000-8000-000000000001',provisionId='20000000-0000-4000-8000-000000000002';
 const base=`/api/companies/${companyId}/studio/host-provisions`,path=`${base}/${provisionId}/readiness`;
-const provision=()=>({id:provisionId,revision:4,phase:'failed',plan:{installations:[{name:'Studio coordinator'}],durationMinutes:15},submittedAt:null,podId:null,stopRequestedAt:null,expiresAt:null,providerStatus:null,errorCode:'CPU_INFERENCE_UNAVAILABLE',computeStopped:false,credentialsRevoked:false});
-const readiness=()=>({provisionId,checkedAt:new Date().toISOString(),readOnly:true,authorizesStart:false,ready:true,providerReady:true,configuration:{state:'current'},checks:[{stage:'lifecycle',ready:true,code:'ready',httpStatus:200},{stage:'health',ready:true,code:'ready',httpStatus:200}]});
+const provision=()=>({id:provisionId,revision:4,phase:'failed',plan:{installations:[{name:'Studio coordinator'}],durationMinutes:15,preset:{dataCenterId:'US-NC-2'}},submittedAt:null,podId:null,stopRequestedAt:null,expiresAt:null,providerStatus:null,errorCode:'CPU_INFERENCE_UNAVAILABLE',computeStopped:false,credentialsRevoked:false});
+const readiness=()=>({provisionId,checkedAt:new Date().toISOString(),readOnly:true,authorizesStart:false,ready:true,providerReady:true,configuration:{state:'current'},checks:[{stage:'lifecycle',ready:true,code:'ready',httpStatus:200},{stage:'health',ready:true,code:'ready',httpStatus:200}],cpuCapacity:{stage:'cpu_capacity',ready:true,code:'ready',httpStatus:200,regionReady:true}});
 
 test('managed host diagnostics and failed-start closure use explicit, bounded UI actions',{timeout:90_000},async t=>{
  // Actual React component, browser fetch, and hooks; fake local HTTP server only.
@@ -41,9 +41,9 @@ test('managed host diagnostics and failed-start closure use explicit, bounded UI
     await page.getByRole('button',{name:'Refresh managed CPU hosts'}).click();
     await page.getByRole('button',{name:'Check provider connection',exact:true}).click();
     const pending=page.getByRole('button',{name:'Checking connection…',exact:true});await pending.waitFor();assert(await pending.isDisabled());
-    await pending.dispatchEvent('click');await page.getByText('Checking endpoint access and inference health…').waitFor();
+    await pending.dispatchEvent('click');await page.getByText('Checking endpoint access, inference health and CPU capacity…').waitFor();
     assert.equal(requests.filter(item=>item.path===path).length,1);release();wait=null;
-    await page.getByText('Endpoint access: Passed',{exact:true}).waitFor();await page.getByText('Inference health: Passed',{exact:true}).waitFor();
+    await page.getByText('Endpoint access: Passed',{exact:true}).waitFor();await page.getByText('Inference health: Passed',{exact:true}).waitFor();await page.getByText('CPU capacity in US-NC-2: Available',{exact:true}).waitFor();
     assert.match(await page.locator('body').innerText(),/runtime configuration is inactive/);assert(!((await page.locator('body').innerText()).includes('PRIVATE_PROVIDER_DETAIL')));
     assert.deepEqual(requests.filter(item=>item.path===path).map(({method,body,identity})=>({method,body,identity})),[{method:'GET',body:'',identity:'30000000-0000-4000-8000-000000000003'}]);assert(requests.every(item=>item.method==='GET'));
    }finally{release();wait=null;await page.close();}
@@ -51,6 +51,21 @@ test('managed host diagnostics and failed-start closure use explicit, bounded UI
   await t.test('stage failures use fixed messages, including unknown inherited-object names',async()=>{
    reply={...readiness(),ready:false,providerReady:false,checks:[{stage:'lifecycle',ready:false,code:'http_unauthorized',httpStatus:403,message:'PRIVATE_PROVIDER_ERROR'},{stage:'health',ready:false,code:'toString',httpStatus:null}]};const page=await open();
    try{await page.getByRole('button',{name:'Check provider connection',exact:true}).click();await page.getByText('Endpoint access: Needs attention',{exact:true}).waitFor();await page.getByText('The server credential cannot access this endpoint. Ask an administrator to check its permissions.',{exact:true}).waitFor();await page.getByText('The connection could not be verified. Ask an administrator to inspect the provider setup.',{exact:true}).waitFor();assert(!((await page.locator('body').innerText()).includes('PRIVATE_PROVIDER_ERROR')));assert(requests.every(item=>item.method==='GET'));}finally{await page.close();}
+  });
+  await t.test('regional capacity separates unavailable and unconfirmed from the earlier uncertain create',async()=>{
+   for(const capacity of [{code:'cpu_capacity_unavailable',regionReady:false,httpStatus:200,label:'Unavailable'},{code:'cpu_capacity_unconfirmed',httpStatus:200,label:'Unconfirmed'},{code:'cpu_sku_mismatch',httpStatus:200,label:'Unconfirmed'},{code:'network_error',httpStatus:null,label:'Unconfirmed'}]){
+    host={...provision(),phase:'uncertain',submittedAt:new Date().toISOString(),errorCode:'CPU_CREATE_UNCERTAIN'};reply={...readiness(),ready:false,providerReady:false,configuration:{state:'inactive'},cpuCapacity:{stage:'cpu_capacity',ready:false,...capacity,providerRegion:'PRIVATE_PROVIDER_REGION',message:'PRIVATE_PROVIDER_ERROR'}};const page=await open();
+    try{await page.getByRole('button',{name:'Check provider connection',exact:true}).click();await page.getByText(`CPU capacity in US-NC-2: ${capacity.label}`,{exact:true}).waitFor();await page.getByText('Endpoint access: Passed',{exact:true}).waitFor();await page.getByText('Inference health: Passed',{exact:true}).waitFor();const body=await page.locator('body').innerText();assert.match(body,/does not establish whether an earlier Pod request was accepted/);assert.match(body,/do not submit an uncertain request again/);assert.match(body,/CPU_CREATE_UNCERTAIN/);assert.match(body,/runtime configuration is inactive/);assert(!body.includes('PRIVATE_PROVIDER_'));assert.equal(await page.getByRole('button',{name:'Close failed start',exact:true}).count(),0);assert.equal(requests.filter(item=>item.path===path).length,1);assert(requests.every(item=>item.method==='GET'));}finally{await page.close();}
+   }
+   host=provision();
+  });
+  await t.test('older endpoint-only responses explicitly leave CPU capacity unchecked',async()=>{
+   const {cpuCapacity:unused,...legacy}=readiness();reply=legacy;const page=await open();
+   try{await page.getByRole('button',{name:'Check provider connection',exact:true}).click();await page.getByText('Endpoint access: Passed',{exact:true}).waitFor();await page.getByText('Inference health: Passed',{exact:true}).waitFor();await page.getByText('CPU capacity in US-NC-2: Not checked',{exact:true}).waitFor();assert.match(await page.locator('body').innerText(),/endpoint access and inference health do not establish CPU availability/);assert.equal(await page.getByText('CPU capacity in US-NC-2: Available',{exact:true}).count(),0);assert.equal(requests.filter(item=>item.path===path).length,1);assert(requests.every(item=>item.method==='GET'));}finally{await page.close();}
+  });
+  await t.test('duplicate stages, misplaced CPU facts and contradictory capacity never appear as passed',async()=>{
+   const cases=[{checks:[...readiness().checks,readiness().cpuCapacity]},{checks:[readiness().checks[1],readiness().checks[1]]},{cpuCapacity:{stage:'health',ready:true,code:'ready',httpStatus:200,regionReady:true}},{cpuCapacity:{stage:'cpu_capacity',ready:true,code:'ready',httpStatus:200}},{cpuCapacity:{stage:'cpu_capacity',ready:false,code:'cpu_capacity_unavailable',httpStatus:200,regionReady:true}},{cpuCapacity:{stage:'cpu_capacity',ready:true,code:'cpu_capacity_unconfirmed',httpStatus:200,regionReady:true}},{cpuCapacity:{stage:'cpu_capacity',ready:false,code:'cpu_capacity_unconfirmed',httpStatus:200,regionReady:'PRIVATE_PROVIDER_DETAIL'}}];
+   for(const patch of cases){reply={...readiness(),...patch};const page=await open();try{await page.getByRole('button',{name:'Check provider connection',exact:true}).click();await page.getByRole('alert').waitFor();assert.equal(await page.getByText('CPU capacity in US-NC-2: Available',{exact:true}).count(),0);assert(!((await page.locator('body').innerText()).includes('PRIVATE_PROVIDER_DETAIL')));assert.equal(requests.filter(item=>item.path===path).length,1);assert(requests.every(item=>item.method==='GET'));}finally{await page.close();}}
   });
   await t.test('HTTP errors and mismatched capability claims display no raw response or automatic retry',async()=>{
    status=403;reply={error:'PRIVATE_ACCESS_DETAIL'};const page=await open();

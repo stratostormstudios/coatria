@@ -5,12 +5,13 @@ import {loadCompanyRuntimeConfiguration} from './company-runtime-config';
 import {parseStudioCpuPreset,sameRuntimeConfiguration,trustedServiceHash,type PinnedStudioCpuPreset} from './company-runtime-preset';
 import {studioCpuPreset} from './studio-host-provisioning';
 import {ApiError,fail,id} from './security';
+import {RUNPOD_CPU_CATALOG_PATH,runpodCpuCapacity} from './runpod-cpu-capacity';
 
-export const PROVIDER_READINESS_CODES=['ready','credential_missing','http_unauthorized','http_rate_limited','http_failed','redirect_rejected','timeout','network_error','response_too_large','invalid_json','invalid_response','endpoint_mismatch','worker_limit_invalid','endpoint_disabled','health_workers_invalid'] as const;
+export const PROVIDER_READINESS_CODES=['ready','credential_missing','http_unauthorized','http_rate_limited','http_failed','redirect_rejected','timeout','network_error','response_too_large','invalid_json','invalid_response','endpoint_mismatch','worker_limit_invalid','endpoint_disabled','health_workers_invalid','cpu_sku_mismatch','cpu_capacity_unavailable','cpu_capacity_unconfirmed'] as const;
 type Code=typeof PROVIDER_READINESS_CODES[number];
 type FieldType='missing'|'null'|'array'|'object'|'number'|'string'|'boolean'|'undefined';
-export type StudioHostProviderCheck={stage:'lifecycle'|'health';ready:boolean;code:Code;httpStatus:number|null;endpointIdMatches?:boolean;endpointType?:'QUEUE'|'LOAD_BALANCER'|'other'|'missing';workersMax?:number|null;workersMaxType?:FieldType;workersMin?:number|null;workersMinType?:FieldType;workersType?:FieldType;workerCounts?:Record<string,number|null>};
-export type StudioHostProviderReadiness={provisionId:string;checkedAt:string;readOnly:true;authorizesStart:false;ready:boolean;providerReady:boolean;configuration:{state:'current'|'inactive'|'changed'|'unavailable'};checks:StudioHostProviderCheck[]};
+export type StudioHostProviderCheck={stage:'lifecycle'|'health'|'cpu_capacity';ready:boolean;code:Code;httpStatus:number|null;regionReady?:boolean;endpointIdMatches?:boolean;endpointType?:'QUEUE'|'LOAD_BALANCER'|'other'|'missing';workersMax?:number|null;workersMaxType?:FieldType;workersMin?:number|null;workersMinType?:FieldType;workersType?:FieldType;workerCounts?:Record<string,number|null>};
+export type StudioHostProviderReadiness={provisionId:string;checkedAt:string;readOnly:true;authorizesStart:false;ready:boolean;providerReady:boolean;configuration:{state:'current'|'inactive'|'changed'|'unavailable'};checks:StudioHostProviderCheck[];cpuCapacity?:StudioHostProviderCheck};
 const MAX_RESPONSE=2*1024*1024,TIMEOUT_MS=10000,providerId=/^[A-Za-z0-9_-]{1,100}$/;
 const isObject=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const fieldType=(v:unknown):FieldType=>v===undefined?'missing':v===null?'null':Array.isArray(v)?'array':typeof v as FieldType;
@@ -19,17 +20,22 @@ class ProbeError extends Error{constructor(readonly code:Code){super(code);}}
 
 /** This projection never includes endpoint environments, provider URLs, errors,
  * arbitrary text, keys, credentials, or the raw response. */
-export function projectStudioProviderCheck(stage:'lifecycle'|'health',endpointId:string,value:unknown,status:number):StudioHostProviderCheck{
+export function projectStudioProviderCheck(stage:StudioHostProviderCheck['stage'],scopeId:string,value:unknown,status:number):StudioHostProviderCheck{
  const base:StudioHostProviderCheck={stage,ready:false,code:'invalid_response',httpStatus:status};
  if(status>=300&&status<400)return {...base,code:'redirect_rejected'};
  if(status<200||status>=300)return {...base,code:status===401||status===403?'http_unauthorized':status===429?'http_rate_limited':'http_failed'};
  if(!isObject(value))return base;
+ if(stage==='cpu_capacity'){
+  if(value.id!=='cpu3c')return {...base,code:'cpu_sku_mismatch',regionReady:false};
+  const capacity=runpodCpuCapacity(value,scopeId),ready=capacity==='available';
+  return {...base,ready,regionReady:ready,code:ready?'ready':capacity==='unavailable'?'cpu_capacity_unavailable':'cpu_capacity_unconfirmed'};
+ }
  if(stage==='health'){
   const workers=value.workers,result={...base,workersType:fieldType(workers)};
   if(!isObject(workers))return {...result,code:'health_workers_invalid'};
   return {...result,ready:true,code:'ready',workerCounts:Object.fromEntries(['idle','initializing','ready','running','throttled','unhealthy'].map(key=>[key,count(workers[key])]))};
  }
- const workers=isObject(value.workers)?value.workers:{},maximum=count(workers.max),minimum=count(workers.min),matches=value.id===endpointId;
+ const workers=isObject(value.workers)?value.workers:{},maximum=count(workers.max),minimum=count(workers.min),matches=value.id===scopeId;
  const endpointType=value.type===undefined?'missing':value.type==='QUEUE'||value.type==='LOAD_BALANCER'?value.type:'other';
  const result:StudioHostProviderCheck={...base,endpointIdMatches:matches,endpointType,workersMax:maximum,workersMaxType:fieldType(workers.max),workersMin:minimum,workersMinType:fieldType(workers.min)};
  if(!matches)return {...result,code:'endpoint_mismatch'};
@@ -44,16 +50,18 @@ async function responseJson(response:Response){
 }
 /** Fixed provider origins; each stage is independent, including when max=0.
  * A health GET cannot start inference. No fallback credential or retry. */
-export async function probeStudioHostProviders(preset:Pick<PinnedStudioCpuPreset,'endpointId'|'inference'>,settings:NodeJS.ProcessEnv=process.env,transport:typeof fetch=fetch):Promise<StudioHostProviderCheck[]>{
+export async function probeStudioHostProviders(preset:Pick<PinnedStudioCpuPreset,'endpointId'|'inference'> & {company:Pick<PinnedStudioCpuPreset['company'],'dataCenterId'>},settings:NodeJS.ProcessEnv=process.env,transport:typeof fetch=fetch):Promise<StudioHostProviderCheck[]>{
  if(!providerId.test(preset.endpointId))fail(409,'The stored endpoint is invalid.','CPU_READINESS_SCOPE_INVALID');
- return Promise.all((['lifecycle','health'] as const).map(async stage=>{
-  const key=stage==='lifecycle'||preset.inference?settings.MANAGED_RUNPOD_API_KEY:settings.COATRIA_MANAGED_RUNPOD_INFERENCE_KEY;
+ if(!preset.company||!providerId.test(preset.company.dataCenterId))fail(409,'The stored CPU region is invalid.','CPU_READINESS_SCOPE_INVALID');
+ return Promise.all((['lifecycle','health','cpu_capacity'] as const).map(async stage=>{
+  const key=stage!=='health'||preset.inference?settings.MANAGED_RUNPOD_API_KEY:settings.COATRIA_MANAGED_RUNPOD_INFERENCE_KEY;
   const base:StudioHostProviderCheck={stage,ready:false,code:'credential_missing',httpStatus:null};if(!key)return base;
-  const url=stage==='lifecycle'?'https://api.runpod.io/v2/serverless/'+preset.endpointId:'https://api.runpod.ai/v2/'+preset.endpointId+'/health';
+  const url=stage==='cpu_capacity'?'https://api.runpod.io/v2'+RUNPOD_CPU_CATALOG_PATH:stage==='lifecycle'?'https://api.runpod.io/v2/serverless/'+preset.endpointId:'https://api.runpod.ai/v2/'+preset.endpointId+'/health';
+  const scopeId=stage==='cpu_capacity'?preset.company.dataCenterId:preset.endpointId;
   const signal=AbortSignal.timeout(TIMEOUT_MS);let status:number|null=null;
   try{const response=await transport(url,{method:'GET',headers:{Authorization:'Bearer '+key,Accept:'application/json'},redirect:'manual',cache:'no-store',signal});status=response.status;
-   if(status<200||status>=300){await response.body?.cancel().catch(()=>{});return projectStudioProviderCheck(stage,preset.endpointId,null,status);}
-   return projectStudioProviderCheck(stage,preset.endpointId,await responseJson(response),status);
+   if(status<200||status>=300){await response.body?.cancel().catch(()=>{});return projectStudioProviderCheck(stage,scopeId,null,status);}
+   return projectStudioProviderCheck(stage,scopeId,await responseJson(response),status);
   }catch(error){return {...base,httpStatus:status,code:signal.aborted?'timeout':error instanceof ProbeError?error.code:'network_error'};}
  }));
 }
@@ -79,11 +87,14 @@ async function readTarget(client:PoolClient,member:Membership,provisionId:string
 export async function readStudioHostProviderReadiness(member:Membership,provisionId:string,options:{fetch?:typeof fetch;settings?:NodeJS.ProcessEnv}={}):Promise<StudioHostProviderReadiness>{
  id(provisionId);const settings=options.settings??process.env;
  const before=await memberMutation(member,true,client=>readTarget(client,member,provisionId,settings));
- const checks=await probeStudioHostProviders(before.preset,settings,options.fetch??fetch);
+ const observations=await probeStudioHostProviders(before.preset,settings,options.fetch??fetch);
  // Release DB locks for network I/O, then recheck current admin membership and
  // immutable provision identity. Never return observations after losing access.
  const after=await memberMutation(member,true,client=>readTarget(client,member,provisionId,settings));
  if(before.planHash!==after.planHash||before.presetHash!==after.presetHash)fail(409,'The reviewed provision changed while checking it.','CPU_READINESS_SCOPE_CHANGED');
- const providerReady=checks.every(check=>check.ready);
- return {provisionId,checkedAt:new Date().toISOString(),readOnly:true,authorizesStart:false,providerReady,ready:providerReady&&after.configuration.state==='current',configuration:after.configuration,checks};
+ const providerReady=observations.every(check=>check.ready);
+ // Keep the original two-stage checks array for already-open clients. Capacity
+ // is additive, but still participates in the aggregate readiness result.
+ const [lifecycle,health,cpuCapacity]=observations;
+ return {provisionId,checkedAt:new Date().toISOString(),readOnly:true,authorizesStart:false,providerReady,ready:providerReady&&after.configuration.state==='current',configuration:after.configuration,checks:[lifecycle,health],cpuCapacity};
 }

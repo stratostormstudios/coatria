@@ -75,6 +75,20 @@ export function assertMediaSandboxFileDescriptorCap(files:{stdout:string;error:u
  diagnostic.check='open_files';assert.ok(facts.openFiles<limits.openFiles);
  return facts;
 }
+/** Observe the existing orphan canary without retaining paths, PIDs or output. */
+export function mediaSandboxOrphanObservation(observations:Map<string,Observation>,limits:MediaSandboxLimits,error:unknown=undefined){
+ let maximumObservedProcesses=0;for(const item of observations.values())maximumObservedProcesses=Math.max(maximumObservedProcesses,Math.min(item.processes.size,256));
+ return {...mediaSandboxBoundaryObservation(observations,limits,error),maximumObservedProcesses};
+}
+export function assertMediaSandboxOrphanCleanup(orphan:{stdout:string;error:unknown;observations:Map<string,Observation>},limits:MediaSandboxLimits,diagnostic:Record<string,unknown>){
+ Object.assign(diagnostic,mediaSandboxOrphanObservation(orphan.observations,limits,orphan.error),{stdoutBytes:Math.min(Buffer.byteLength(orphan.stdout),65536),stdoutTruncated:Buffer.byteLength(orphan.stdout)>65536});
+ diagnostic.check='execution';assert.equal(orphan.error,null);
+ diagnostic.check='output_json';const facts=JSON.parse(orphan.stdout);
+ diagnostic.forked=Number.isSafeInteger(facts?.forked)&&facts.forked>=0&&facts.forked<=256?facts.forked:null;
+ diagnostic.check='fork_count';assert.equal(facts.forked,3);
+ diagnostic.check='cgroup_controls';checkControls(orphan.observations,limits);
+ diagnostic.check='descendants_observed';assert.ok([...orphan.observations.values()].some(item=>item.processes.size>=5));
+}
 async function runObserved(config:Config,sandbox:QualifiedLinuxMediaSandbox,args:string[],options:{timeoutMs?:number;signal?:AbortSignal;diagnostic?:(check:'input_open'|'process_start'|'cgroup_observation'|'process_drain',observations:Map<string,Observation>,error?:unknown)=>void}={}){
  const mark=(check:'input_open'|'process_start'|'cgroup_observation'|'process_drain',observations:Map<string,Observation>,error?:unknown)=>options.diagnostic?.(check,observations,error);
  mark('input_open',new Map());
@@ -122,7 +136,8 @@ export async function runMediaSandboxCanary(config:Config){
   checkpoint('cpu_execution');const cpuStart=performance.now(),cpu=await runObserved(config,sandbox,['cpu']);report.cpuObservation=archiveHostCpuSummary({elapsedMs:Math.round(performance.now()-cpuStart),cgroupUsageUsec:events.at(-1)?.cpuUsageUsec,cgroupsObserved:cpu.observations.size,executionCode:cpu.error===null?null:code(cpu.error)});assert.equal(cpu.error,null);
   checkpoint('cpu_output');const usage=JSON.parse(cpu.stdout);report.cpuObservation=archiveHostCpuSummary({...report.cpuObservation as object,cpuNs:usage.cpuNs,wallNs:usage.wallNs,children:usage.children});
   checkpoint('cpu_usage');assert.ok(usage.cpuNs>=500_000_000);checkpoint('cpu_wall');assert.ok(usage.wallNs>=1_500_000_000);checkpoint('cpu_controls');checkControls(cpu.observations,limits);checkpoint('cpu_cgroup_usage');assert.ok(events.at(-1)!.cpuUsageUsec>=500000);results.push({name:'aggregate-cpu-bandwidth',passed:true,usage,evidence:events.at(-1)});
-  checkpoint('orphan_cleanup');const orphan=await runObserved(config,sandbox,['orphan']);assert.equal(orphan.error,null);assert.equal(JSON.parse(orphan.stdout).forked,3);checkControls(orphan.observations,limits);assert.ok([...orphan.observations.values()].some(item=>item.processes.size>=5));results.push({name:'normal-exit-descendant-cleanup',passed:true,evidence:events.at(-1)});
+  checkpoint('orphan_cleanup');const orphanDiagnostic:Record<string,unknown>={diagnosticOnly:true,qualified:false,check:'input_open'};report.orphanDiagnostic=orphanDiagnostic;
+  const orphan=await runObserved(config,sandbox,['orphan'],{diagnostic:(check,observations,error)=>Object.assign(orphanDiagnostic,mediaSandboxOrphanObservation(observations,limits,error),{check})});assertMediaSandboxOrphanCleanup(orphan,limits,orphanDiagnostic);results.push({name:'normal-exit-descendant-cleanup',passed:true,evidence:events.at(-1)});
   checkpoint('deadline_cleanup');const timeout=await runObserved(config,sandbox,['timeout'],{timeoutMs:900});assert.equal(code(timeout.error),'TIMEOUT');checkControls(timeout.observations,limits);results.push({name:'deadline-kills-descendants',passed:true,evidence:events.at(-1)});
   checkpoint('abort_cleanup');const controller=new AbortController(),abortTimer=setTimeout(()=>controller.abort(),600);const aborted=await runObserved(config,sandbox,['timeout'],{signal:controller.signal});clearTimeout(abortTimer);assert.equal(code(aborted.error),'ABORTED');checkControls(aborted.observations,limits);results.push({name:'abort-kills-descendants',passed:true,evidence:events.at(-1)});
 

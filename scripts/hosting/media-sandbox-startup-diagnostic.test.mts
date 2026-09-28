@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {classifySyntheticStartupStderr,diagnoseMediaSandboxStartup,diagnoseArchiveHostSandboxStartup,archiveStartupIdentity} from './media-sandbox-startup-diagnostic.mts';
-import {assertMediaSandboxBoundary,mediaSandboxBoundaryObservation,assertMediaSandboxFileDescriptorCap} from './media-sandbox-linux-canary.mts';
+import {assertMediaSandboxBoundary,mediaSandboxBoundaryObservation,assertMediaSandboxFileDescriptorCap,assertMediaSandboxOrphanCleanup,mediaSandboxOrphanObservation} from './media-sandbox-linux-canary.mts';
 import {MediaSandboxError} from '../../src/lib/higgsfield-media-sandbox';
 
 test('synthetic startup diagnostics classify setup errors without returning their text',()=>{
@@ -83,4 +83,22 @@ test('file descriptor failure diagnostics exclude raw output, error text and une
   const diagnostic:Record<string,unknown>={};assert.throws(()=>assertMediaSandboxFileDescriptorCap({stdout:JSON.stringify(facts),error:null},{openFiles:64},diagnostic));assert.equal(diagnostic.openFiles,typeof facts.openFiles==='number'&&facts.openFiles<=1024?facts.openFiles:null);assert(!JSON.stringify(diagnostic).includes(secret));assert(!JSON.stringify(diagnostic).includes('privateField'));
  }
  const diagnostic:Record<string,unknown>={};assert.throws(()=>assertMediaSandboxFileDescriptorCap({stdout:'x'.repeat(65537),error:null},{openFiles:64},diagnostic));assert.equal(diagnostic.stdoutBytes,65536);assert.equal(diagnostic.stdoutTruncated,true);assert.equal(diagnostic.check,'output_json');
+});
+
+test('orphan checkpoints preserve execution, fork, exact controls and observed-descendant assertions',()=>{
+ const fixture=()=>{const f=boundaryFixture();f.observations.values().next().value!.processes=new Set([4301,4302,4303,4304,4305]);return {...f,orphan:{stdout:'{"forked":3,"limited":false}',error:null as unknown,observations:f.observations}};};
+ const good=fixture(),passed:Record<string,unknown>={};assertMediaSandboxOrphanCleanup(good.orphan,good.limits,passed);assert.equal(passed.check,'descendants_observed');assert.equal(passed.maximumObservedProcesses,5);assert.equal(passed.forked,3);assert.equal(passed.qualified,false);
+ for(const [patch,check]of [[{error:new MediaSandboxError('CLEANUP_FAILED')},'execution'],[{stdout:'private-not-json'},'output_json'],[{stdout:'{"forked":2}'},'fork_count'],[{observations:new Map()},'cgroup_controls']] as const){
+  const f=fixture(),diagnostic:Record<string,unknown>={};assert.throws(()=>assertMediaSandboxOrphanCleanup({...f.orphan,...patch},f.limits,diagnostic));assert.equal(diagnostic.check,check);assert.equal(diagnostic.qualified,false);assert(!JSON.stringify(diagnostic).includes('private-not-json'));
+ }
+ for(const key of Object.keys(good.observations.values().next().value!.controls)){const f=fixture(),diagnostic:Record<string,unknown>={};(f.observations.values().next().value!.controls as Record<string,string>)[key]='private-control-secret';assert.throws(()=>assertMediaSandboxOrphanCleanup(f.orphan,f.limits,diagnostic));assert.equal(diagnostic.check,'cgroup_controls');assert(!JSON.stringify(diagnostic).includes('private-control-secret'));}
+ const missing=fixture(),record:Record<string,unknown>={};missing.observations.values().next().value!.processes=new Set([4301,4302,4303,4304]);assert.throws(()=>assertMediaSandboxOrphanCleanup(missing.orphan,missing.limits,record));assert.equal(record.check,'descendants_observed');assert.equal(record.maximumObservedProcesses,4);
+ const failed:Record<string,unknown>={};assert.throws(()=>assertMediaSandboxOrphanCleanup({...good.orphan,error:new MediaSandboxError('CLEANUP_FAILED')},good.limits,failed));assert.equal(failed.executionCode,'CLEANUP_FAILED');
+});
+
+test('orphan diagnostics retain bounded counts and no output, paths, PIDs or unknown error text',()=>{
+ const f=boundaryFixture(),secret='private-credential-path';
+ for(const error of [Error(secret),new MediaSandboxError(secret as never)]){const record:Record<string,unknown>={};assert.throws(()=>assertMediaSandboxOrphanCleanup({stdout:secret,error,observations:f.observations},f.limits,record));assert.equal(record.executionCode,'CANARY_ASSERTION_FAILED');assert.doesNotMatch(JSON.stringify(record),/private-|4321/);}
+ const map=new Map([['private-group',{group:'private-group',processes:new Set(Array.from({length:300},(_,i)=>4000+i)),controls:f.observations.values().next().value!.controls}]]),bounded=mediaSandboxOrphanObservation(map,f.limits,null);assert.equal(bounded.maximumObservedProcesses,256);assert.equal(bounded.execution,'succeeded');assert.doesNotMatch(JSON.stringify(bounded),/private-|4000/);
+ const record:Record<string,unknown>={};assert.throws(()=>assertMediaSandboxOrphanCleanup({stdout:JSON.stringify({forked:secret,secret}),error:null,observations:f.observations},f.limits,record));assert.equal(record.forked,null);assert(!JSON.stringify(record).includes(secret));
 });
