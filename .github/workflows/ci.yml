@@ -130,7 +130,7 @@ jobs:
           import {buildTrustedServiceBundle} from './scripts/hosting/build-trusted-service-bundle.mjs';
           const output=join(process.env.RUNNER_TEMP,'coatria-trusted-services');
           await mkdir(output);
-          for(const service of ['archive','gateway','media-qualification']) {
+          for(const service of ['archive','gateway','reference','media-qualification']) {
             const result=await buildTrustedServiceBundle({root:process.cwd(),commit:process.env.GITHUB_SHA,service,output:join(output,service)});
             console.log(JSON.stringify({service,sourceCommit:result.sourceCommit,bundleSha256:result.bundleSha256,runtimeBytes:result.runtime.bytes,qualified:false,providerCalled:false}));
           }
