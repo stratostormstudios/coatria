@@ -6,7 +6,7 @@ import type {PoolClient} from 'pg';
 import {normalizeHiggsfieldModelContract,checkHiggsfieldModelContract,prepareHiggsfieldModelCostArguments} from '../src/lib/higgsfield-model-contract';
 import {getHiggsfieldModelContract,recordHiggsfieldModelContracts,revalidateHiggsfieldModelContract} from '../src/lib/higgsfield-model-contract-db';
 import {bindHiggsfieldReferenceArguments} from '../src/lib/higgsfield-reference-arguments';
-import {observedImageModel,observedImageTool} from './fixtures/higgsfield-model-contract';
+import {observedImageModel,observedImageModelPage,observedImageTool} from './fixtures/higgsfield-model-contract';
 
 const medias=[{role:'image' as const,value:randomUUID()}];
 const contract=normalizeHiggsfieldModelContract(observedImageModel);
@@ -65,5 +65,19 @@ test('company model cache binds current provider evidence, expires and retires i
   await assert.rejects(recordHiggsfieldModelContracts(client,company,connection,'models_get',{model_id:'different'},{structuredContent:observedImageModel}));
   await recordHiggsfieldModelContracts(client,company,connection,'models_get',{model_id:'gpt_image_2'},{structuredContent:observedImageModel});
   assert.deepEqual((await getHiggsfieldModelContract(client,company,connection,'gpt_image_2')).descriptor,contract);
+  await db.query('DELETE FROM higgsfield_model_contracts WHERE company_id=$1',[company]);
+  const page={structuredContent:observedImageModelPage,content:[{type:'text',text:'A duplicate text representation is not authoritative.'}]};
+  for(const action of ['search','recommend','LIST',undefined]){
+   await recordHiggsfieldModelContracts(client,company,connection,'models_explore',{action},page);
+   await assert.rejects(getHiggsfieldModelContract(client,company,connection,'gpt_image_2'));
+  }
+  await recordHiggsfieldModelContracts(client,company,connection,'models_explore',{action:'list'},page);
+  assert.deepEqual((await getHiggsfieldModelContract(client,company,connection,'gpt_image_2')).descriptor,contract);
+  for(const args of [{action:'get'},{action:'get',model_id:'different'},{action:'get',model_id:['gpt_image_2']}])await assert.rejects(recordHiggsfieldModelContracts(client,company,connection,'models_explore',args,{structuredContent:observedImageModel}));
+  for(const result of [{isError:true,...page},{content:page.content},{structuredContent:{items:[observedImageModel,observedImageModel]}}])await assert.rejects(recordHiggsfieldModelContracts(client,company,connection,'models_explore',{action:'list'},result));
+  await recordHiggsfieldModelContracts(client,company,connection,'models_explore',{action:'get',model_id:'gpt_image_2'},{structuredContent:observedImageModel});
+  assert.deepEqual((await getHiggsfieldModelContract(client,company,connection,'gpt_image_2')).descriptor,contract);
+  await recordHiggsfieldModelContracts(client,company,connection,'models_explore',{action:'list'},{structuredContent:{items:[{...observedImageModel,unreviewed_constraint:true}],has_more:true}});
+  await assert.rejects(getHiggsfieldModelContract(client,company,connection,'gpt_image_2'));
  }finally{await db.close();}
 });

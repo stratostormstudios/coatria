@@ -16,7 +16,7 @@ import {prepareHiggsfieldCostArguments} from './higgsfield-cost-arguments';
 import {HIGGSFIELD_REFERENCE_TOOLS} from './higgsfield-reference-provider';
 import {resolveHiggsfieldReferences,revalidateHiggsfieldReferences} from './higgsfield-references';
 import {bindHiggsfieldReferenceArguments} from './higgsfield-reference-arguments';
-import {getHiggsfieldModelContract,listHiggsfieldModelContracts,recordHiggsfieldModelContracts,revalidateHiggsfieldModelContract,type HiggsfieldModelSnapshot} from './higgsfield-model-contract-db';
+import {classifyHiggsfieldModelRead,getHiggsfieldModelContract,listHiggsfieldModelContracts,recordHiggsfieldModelContracts,revalidateHiggsfieldModelContract,type HiggsfieldModelSnapshot} from './higgsfield-model-contract-db';
 import {prepareHiggsfieldModelCostArguments} from './higgsfield-model-contract';
 
 const callback='https://coatria.com/api/higgsfield/callback';
@@ -291,7 +291,7 @@ export async function higgsfieldRoute(request:Request,parts:string[],method:stri
   await rateLimit(`higgsfield-read:${companyId}`,30,60);const saved=await higgsfieldCredential(member);if('error'in saved)fail(409,'Reconnect Higgsfield.','HIGGSFIELD_RECONNECT_REQUIRED');
   if(!saved.row.tools.some((tool:Row)=>tool.name===data.tool))fail(409,'This tool is unavailable in the official connection.');
   const result=await callHiggsfieldTool(saved.token,data.tool,arguments_,{timeoutMs:20000});
-  if(['models_list','models_get'].includes(data.tool))await memberMutation(member,true,async db=>{const current=await connection(db,companyId);if(current.id!==saved.row.id||current.revision!==saved.row.revision||digest(current.tools)!==digest(saved.row.tools))fail(409,'The connection changed while reading models. Refresh again.','HIGGSFIELD_MODEL_CONTRACT_CHANGED');await recordHiggsfieldModelContracts(db,companyId,current,data.tool,arguments_,result);});
+  if(classifyHiggsfieldModelRead(data.tool,arguments_))await memberMutation(member,true,async db=>{const current=await connection(db,companyId);if(current.id!==saved.row.id||current.revision!==saved.row.revision||digest(current.tools)!==digest(saved.row.tools))fail(409,'The connection changed while reading models. Refresh again.','HIGGSFIELD_MODEL_CONTRACT_CHANGED');await recordHiggsfieldModelContracts(db,companyId,current,data.tool,arguments_,result);});
   return json({result});
  }
  if(parts.length===4&&parts[3]==='jobs'&&method==='GET'){const data=parse(higgsfieldJobsInput,Object.fromEntries(new URL(request.url).searchParams));return json(await memberMutation(member,false,db=>listHiggsfieldJobs(db,companyId,data)));}

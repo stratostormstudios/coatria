@@ -7,14 +7,21 @@ export type HiggsfieldModelSnapshot={version:1;companyId:string;connectionId:str
 const object=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const identifier=(v:unknown):v is string=>typeof v==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(v);
 function changed():never{fail(409,'The selected model metadata is missing, stale or changed. Refresh Available models (or models_get) in this company connection, then review the generation again.','HIGGSFIELD_MODEL_CONTRACT_CHANGED');}
+/** Only explicit catalog list/get reads can update model constraints. Discovery
+ * search/recommend output and an omitted models_explore action are not evidence. */
+export function classifyHiggsfieldModelRead(tool:string,args:Record<string,unknown>):'list'|'get'|null{
+ if(tool==='models_list')return 'list';
+ if(tool==='models_get')return 'get';
+ return tool==='models_explore'&&(args.action==='list'||args.action==='get')?args.action:null;
+}
 /** Called only after the authenticated official read and a current connection
  * recheck. No browser or agent request can directly supply cached descriptors. */
 export async function recordHiggsfieldModelContracts(db:PoolClient,companyId:string,connection:Connection,tool:string,args:Record<string,unknown>,result:unknown){
- if(!['models_list','models_get'].includes(tool))return;
+ const kind=classifyHiggsfieldModelRead(tool,args);if(!kind)return;
  if(!object(result)||result.isError===true||!object(result.structuredContent))changed();
  const value=result.structuredContent;
- const entries=tool==='models_get'?[value]:value.items;
- if(!Array.isArray(entries)||entries.length>100||tool==='models_get'&&(!identifier(args.model_id)||value.id!==args.model_id))changed();
+ const entries=kind==='get'?[value]:value.items;
+ if(!Array.isArray(entries)||entries.length>100||kind==='get'&&(!identifier(args.model_id)||value.id!==args.model_id))changed();
  const ids=entries.map(e=>object(e)?e.id:null);if(ids.some(v=>!identifier(v))||new Set(ids).size!==ids.length)changed();
  for(const entry of entries){
   let descriptor:HiggsfieldModelContract|null=null;try{descriptor=normalizeHiggsfieldModelContract(entry);}catch{/* Retire any formerly supported observation for this exact ID. */}

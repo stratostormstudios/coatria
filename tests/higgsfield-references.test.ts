@@ -9,7 +9,7 @@ import {createProjectStorageConnection,bindProjectStorage} from '../src/lib/proj
 import * as refs from '../src/lib/higgsfield-references';
 import {higgsfieldReferenceRoute} from '../src/lib/higgsfield-reference-api';
 import {higgsfieldRoute,proposeHiggsfieldRequest,higgsfieldAgentConnection} from '../src/lib/higgsfield';
-import {observedImageModel,observedImageTool} from './fixtures/higgsfield-model-contract';
+import {observedImageModel,observedImageModelPage,observedImageTool} from './fixtures/higgsfield-model-contract';
 import {studioRoute} from '../src/lib/studio';
 import {workRoute} from '../src/lib/work';
 import {claimAgentRun,finishAgentRun} from '../src/lib/agent-runs';
@@ -230,7 +230,7 @@ test('prepared reference authority, finite consent, durable phases and generatio
    }finally{globalThis.fetch=deniedFetch;}
   });
   await t.test('company model reads bind proposal hashes and fence drift before cost or paid RPC',async()=>{
-   const tools=[observedImageTool,{name:'models_list',description:'Model listing',inputSchema:{type:'object'}}];
+   const tools=[observedImageTool,{name:'models_list',description:'Model listing',inputSchema:{type:'object'}},{name:'models_explore',description:'Model catalog actions',inputSchema:{type:'object',required:['action'],properties:{action:{enum:['list','get','search','recommend']},model_id:{type:'string'}}}}];
    const f=await fixture('generation',tools),reference=await f.confirm(),data={clientId:randomUUID(),projectId:f.project,projectRevision:1,workItemId:f.work,referenceIds:[reference.reference.id],tool:'generate_image',arguments:{params:{model:'gpt_image_2',prompt:'Approved synthetic concept',quality:'high',resolution:'1k',aspect_ratio:'1:1'}},note:'Bound model contract'};
    const propose=()=>transaction(c=>proposeHiggsfieldRequest(c,f.actor,data));await assert.rejects(propose(),{code:'HIGGSFIELD_MODEL_CONTRACT_CHANGED'});
    let rpc=0,reads=0,estimates=0,paid=0,descriptor:unknown=structuredClone(observedImageModel);const deniedFetch=globalThis.fetch;
@@ -239,14 +239,21 @@ test('prepared reference authority, finite consent, durable phases and generatio
     if(command.method==='notifications/initialized')return new Response(null,{status:202});
     if(command.method==='initialize')return Response.json({jsonrpc:'2.0',id:command.id,result:{protocolVersion:'2025-11-25',capabilities:{tools:{}}}});
     assert.equal(command.method,'tools/call');let structuredContent;
-    if(command.params.name==='models_list'){reads++;structuredContent={items:[descriptor],has_more:false};}
+    if(['models_list','models_explore'].includes(command.params.name)){reads++;structuredContent=command.params.arguments.action==='get'?descriptor:{...observedImageModelPage,items:[descriptor]};}
     else {assert.equal(command.params.name,'generate_image');assert.deepEqual(command.params.arguments.params.medias,[{role:'image',value:reference.mediaId}]);assert.equal(command.params.arguments.params.quality,'high');assert.equal(command.params.arguments.params.resolution,'1k');const cost=command.params.arguments.params.get_cost===true;if(cost)estimates++;else paid++;structuredContent=cost?{cost:2}:{job_ids:[randomUUID()],status:'queued'};}
     return Response.json({jsonrpc:'2.0',id:command.id,result:{content:[],structuredContent}});
    };
    const call=async(suffix:string,payload:unknown)=>{const parts=['companies',f.company,'higgsfield',...suffix.split('/')],response=await higgsfieldRoute(new Request('https://coatria.com/api/'+parts.join('/'),{method:'POST',headers:{Origin:'https://coatria.com',Cookie:'coatria_session='+f.sessions.admin,'Content-Type':'application/json'},body:JSON.stringify(payload)}),parts,'POST');return response!.json();};
-   const refresh=()=>call('read',{tool:'models_list',arguments:{}});
+   const refresh=()=>call('read',{tool:'models_explore',arguments:{action:'list'}});
    try{
-    await refresh();assert.equal(reads,1);assert.equal(paid,0);
+    await call('read',{tool:'models_list',arguments:{}});assert.equal(reads,1);
+    assert.equal((await transaction(c=>higgsfieldAgentConnection(c,f.company))).modelCatalog!.models[0].modelId,'gpt_image_2');
+    await query('DELETE FROM higgsfield_model_contracts WHERE company_id=$1',[f.company]);
+    await call('read',{tool:'models_explore',arguments:{action:'search',query:'image'}});
+    assert.deepEqual((await transaction(c=>higgsfieldAgentConnection(c,f.company))).modelCatalog!.models,[]);
+    await refresh();assert.equal(reads,3);assert.equal(paid,0);
+    await assert.rejects(call('read',{tool:'models_explore',arguments:{action:'get',model_id:'other_model'}}),{code:'HIGGSFIELD_MODEL_CONTRACT_CHANGED'});
+    await call('read',{tool:'models_explore',arguments:{action:'get',model_id:'gpt_image_2'}});
     const catalog=await transaction(c=>higgsfieldAgentConnection(c,f.company));assert(catalog.modelCatalog);assert.equal(catalog.modelCatalog.models[0].modelId,'gpt_image_2');
     const exact=await transaction(c=>higgsfieldAgentConnection(c,f.company,'generate_image','gpt_image_2'));assert(exact.modelContract);assert.equal(exact.modelContract.descriptor.modelId,'gpt_image_2');
     const request=(await propose()).request;assert.equal(request.modelSnapshot.connectionId,f.providerId);assert.equal(request.modelSnapshot.descriptor.modelId,'gpt_image_2');assert.equal((await propose()).replayed,true);
