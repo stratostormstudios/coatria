@@ -1,4 +1,5 @@
 import test from 'node:test';
+import type {PoolClient} from 'pg';
 import assert from 'node:assert/strict';
 import {randomBytes,randomUUID} from 'node:crypto';
 import {readFile,readdir} from 'node:fs/promises';
@@ -148,12 +149,34 @@ for(const coordinated of [false,true])test(`reviewed ingest staffing executes th
     }finally{await c.query('ROLLBACK TO SAVEPOINT parent_lease_clock');}
    }));
    await t.test('real PostgreSQL policy pause wins before a waiting post-run inspection',{skip:emulate},async()=>{
-    const blocker=await database().connect();let inspectionAttempt:Promise<unknown>|undefined;
-    try{await blocker.query('BEGIN');await blocker.query("UPDATE studio_coordination_policies SET status='paused' WHERE project_id=$1",[f.p.id]);inspectionAttempt=transaction(c=>references.claimHiggsfieldReference(c,{companyId:company,projectIds:[f.p.id]},runtime));
-     let waiting=false;for(let i=0;i<100;i++){const state=await blocker.query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND wait_event_type='Lock' AND query LIKE '%studio_coordination_policies%' LIMIT 1");if(state.rowCount){waiting=true;break;}await new Promise(resolve=>setTimeout(resolve,20));}assert(waiting,'Inspection actually waits on exact policy row');await blocker.query('COMMIT');assert.equal(await inspectionAttempt,null);assert.equal((await query('SELECT count(*)::int n FROM higgsfield_reference_inspections WHERE reference_id=$1',[saved!.id])).rows[0].n,0);
-    }finally{await blocker.query('ROLLBACK');blocker.release();await inspectionAttempt;}
-    // This fixture alone restores its synthetic policy/proposal for the positive case.
-    await query("UPDATE studio_coordination_policies SET status='active' WHERE project_id=$1",[f.p.id]);await query("UPDATE higgsfield_references SET status='proposed',diagnostic_code=NULL WHERE id=$1",[saved!.id]);
+    const pool=database(),blocker=await pool.connect();let observer:PoolClient|undefined,inspector:PoolClient|undefined;
+    let inspectionAttempt:Promise<{ok:true}|{ok:false;error:unknown}>|undefined,originalStatus:string|undefined;
+    try{
+     observer=await pool.connect();inspector=await pool.connect();
+     const inspectionPid=(await inspector.query('SELECT pg_backend_pid() AS pid')).rows[0].pid,blockerPid=(await blocker.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+     originalStatus=(await blocker.query('SELECT status FROM studio_coordination_policies WHERE project_id=$1',[f.p.id])).rows[0].status;
+     await blocker.query('BEGIN');await blocker.query("UPDATE studio_coordination_policies SET status='paused' WHERE project_id=$1",[f.p.id]);
+     // Roll back this observation transaction even when a test assertion fails.
+     // A failed observer must never consume a lease needed by the positive case.
+     const attempt=(async()=>{await inspector!.query('BEGIN');try{
+      const lease=await references.claimHiggsfieldReference(inspector!,{companyId:company,projectIds:[f.p.id]},runtime);
+      const state=(await inspector!.query('SELECT status,lease_id,lease_expires_at FROM higgsfield_references WHERE id=$1',[saved!.id])).rows[0],count=(await inspector!.query('SELECT count(*)::int n FROM higgsfield_reference_inspections WHERE reference_id=$1',[saved!.id])).rows[0].n;
+      assert.equal(lease,null);assert.equal(state.status,'blocked');assert.equal(state.lease_id,null);assert.equal(state.lease_expires_at,null);assert.equal(count,0,'Check writes before rolling back the isolated inspection transaction');
+     }finally{await inspector!.query('ROLLBACK');}})();
+     inspectionAttempt=attempt.then(()=>({ok:true as const}),error=>({ok:false as const,error}));
+     let waiting=false;const deadline=performance.now()+2000;
+     while(performance.now()<deadline){
+      // Autocommit gets fresh activity each time; the blocking transaction's
+      // pg_stat_activity snapshot would otherwise remain cached until COMMIT.
+      const observationQuery={text:"SELECT 1 FROM pg_stat_activity WHERE pid=$1 AND wait_event_type='Lock' AND query LIKE '%studio_coordination_policies%' AND $2::integer=ANY(pg_blocking_pids(pid))",values:[inspectionPid,blockerPid],query_timeout:Math.max(1,Math.ceil(deadline-performance.now()))};const observed=await observer.query(observationQuery);
+      if(observed.rowCount){waiting=true;break;}await new Promise(resolve=>setTimeout(resolve,Math.min(20,Math.max(0,deadline-performance.now()))));
+     }
+     assert(waiting,'Exact inspection backend actually waits on the held policy row');await blocker.query('COMMIT');
+     const result=await inspectionAttempt;if(!result.ok)throw result.error;
+    }finally{
+     try{await blocker.query('ROLLBACK');await inspectionAttempt;if(originalStatus!==undefined)await blocker.query('UPDATE studio_coordination_policies SET status=$2 WHERE project_id=$1',[f.p.id,originalStatus]);}
+     finally{inspector?.release();observer?.release();blocker.release();}
+    }
    });
   }
   const inspection=await transaction(c=>references.claimHiggsfieldReference(c,{companyId:company,projectIds:[f.p.id]},runtime));assert(inspection,'A committed successful factual plan preserves finite inspection authority');assert.equal(inspection.phase,'inspect');
