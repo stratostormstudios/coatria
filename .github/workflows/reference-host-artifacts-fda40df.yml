@@ -1,0 +1,88 @@
+name: Coatria reference artifacts fda40df
+
+on:
+  push:
+    branches: [codex/reference-host-artifacts-fda40df]
+    paths: [.github/workflows/reference-host-artifacts-fda40df.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coatria-reference-artifacts-fda40df
+  cancel-in-progress: false
+
+jobs:
+  reference-artifacts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fda40df9887f2baa5e9b1cb14b7fcd0e27b48db9
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+          cache: npm
+      - name: Require the exact live source and lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = fda40df9887f2baa5e9b1cb14b7fcd0e27b48db9
+          test "$(git rev-parse HEAD^{tree})" = 99b1b8c98961daa6618857ed7582073deb4329d6
+          printf '%s  package-lock.json\n' 5031f781df55306ff41339f14f12f17207e1ef20227963c9ab1585dd0b051aff | sha256sum --check --status
+          npm ci --ignore-scripts
+      - name: Prepare the existing pinned Linux native closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo env CI=true COATRIA_TEST_UID="$(id -u)" COATRIA_TEST_GID="$(id -g)" GITHUB_ENV="$GITHUB_ENV" "$(command -v node)" scripts/hosting/prepare-media-sandbox-ci.mjs
+      - name: Build and archive exact host and all six standalone services
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo env CI=true COATRIA_MEDIA_QUALIFICATION="$COATRIA_MEDIA_QUALIFICATION" COATRIA_NPM_CACHE="$(npm config get cache)" "$(command -v node)" --input-type=module <<'NODE'
+          import {mkdir,readFile,writeFile} from 'node:fs/promises';
+          import {createReadStream} from 'node:fs';
+          import {createHash,randomUUID} from 'node:crypto';
+          import {spawnSync} from 'node:child_process';
+          import {join,resolve} from 'node:path';
+          import {exportArchiveHostRuntime} from './scripts/hosting/export-archive-host-runtime.mjs';
+          import {buildTrustedServiceBundle} from './scripts/hosting/build-trusted-service-bundle.mjs';
+          import {buildReferenceHostBundle} from './scripts/hosting/build-reference-host-bundle.mjs';
+          import {verifyArchiveTree} from './scripts/hosting/archive-host-package.mjs';
+          const commit='fda40df9887f2baa5e9b1cb14b7fcd0e27b48db9',tree='99b1b8c98961daa6618857ed7582073deb4329d6';
+          if(process.platform!=='linux'||process.arch!=='x64'||process.getuid()!==0||process.env.CI!=='true')throw Error('ARTIFACT_BUILD_REJECTED');
+          const sourceRoot=process.cwd(),base='/var/lib/coatria-reference-artifact-build-'+randomUUID(),output=resolve('.devdata/reference-host-artifacts');
+          await mkdir(base,{mode:0o755});await mkdir(output,{mode:0o755});const standalone=join(base,'standalone');await mkdir(standalone,{mode:0o755});
+          const runtime=await exportArchiveHostRuntime({sourceRoot,qualificationPath:process.env.COATRIA_MEDIA_QUALIFICATION,npmCache:process.env.COATRIA_NPM_CACHE,output:join(base,'native-runtime')});
+          const bundles={};
+          for(const service of ['archive','gateway','media-qualification','reference','reference-qualification','reference-registrar']){
+            const bundle=await buildTrustedServiceBundle({root:sourceRoot,commit,service,output:join(standalone,service)});
+            if(bundle.sourceCommit!==commit||bundle.sourceTree!==tree||bundle.qualified!==false)throw Error('ARTIFACT_SOURCE_REJECTED');
+            await verifyArchiveTree(bundle.output,[{...bundle.runtime,mode:0o444}],{extra:['bundle.json']});bundles[service]=bundle;
+          }
+          const host=await buildReferenceHostBundle({sourceRoot,commit,runtimeRoot:runtime.output,runtimeManifestSha256:runtime.runtimeManifestSha256,workerBundlePath:bundles.reference.output,workerBundleSha256:bundles.reference.bundleSha256,qualifierBundlePath:bundles['reference-qualification'].output,qualifierBundleSha256:bundles['reference-qualification'].bundleSha256,output:join(base,'host')});
+          if(host.commit!==commit||host.tree!==tree||host.qualified!==false||host.servicesEnabled!==false)throw Error('ARTIFACT_SOURCE_REJECTED');
+          const artifacts=[];
+          for(const [name,path]of [['reference-host-fda40df.tar.gz',host.output],['standalone-bundles-fda40df.tar.gz',standalone]]){
+            const destination=join(output,name),packed=spawnSync('/usr/bin/tar',['--sort=name','--owner=0','--group=0','--numeric-owner','-czf',destination,'-C',path,'.'],{shell:false,env:{PATH:'/usr/bin:/bin',LANG:'C',LC_ALL:'C'},timeout:120000,maxBuffer:1048576});
+            if(packed.status!==0||packed.error)throw Error('ARTIFACT_ARCHIVE_REJECTED');
+            const digest=createHash('sha256');let bytes=0;for await(const chunk of createReadStream(destination)){bytes+=chunk.length;digest.update(chunk);}artifacts.push({path:name,bytes,sha256:digest.digest('hex')});
+          }
+          for(const [name,path]of [['reference-host-bundle.json',join(host.output,'bundle.json')],['native-runtime-manifest.json',join(runtime.output,'runtime-manifest.json')],...Object.entries(bundles).map(([service,b])=>[service+'-bundle.json',join(b.output,'bundle.json')])])await writeFile(join(output,name),await readFile(path),{flag:'wx',mode:0o444});
+          const components=Object.fromEntries(Object.entries(bundles).map(([service,b])=>[service,{bundleSha256:b.bundleSha256,runtimeSha256:b.runtime.sha256,runtimeBytes:b.runtime.bytes}]));
+          const result={version:1,kind:'coatria-reference-artifact-build',sourceCommit:commit,sourceTree:tree,hostBundleSha256:host.bundleSha256,runtimeManifestSha256:runtime.runtimeManifestSha256,components,artifacts,qualified:false,productionQualified:false,servicesInstalled:false,servicesEnabled:false,enrolled:false,noProviderCalls:true,noApplicationCredentials:true};
+          await writeFile(join(output,'build.json'),JSON.stringify(result,null,2)+'\n',{flag:'wx',mode:0o444});
+          await writeFile(join(output,'SHA256SUMS'),artifacts.map(a=>a.sha256+'  '+a.path+'\n').join(''),{flag:'wx',mode:0o444});
+          console.log(JSON.stringify(result));
+          NODE
+      - name: Preserve complete immutable bundles for operator review
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coatria-reference-host-fda40df-${{ github.run_id }}
+          path: .devdata/reference-host-artifacts
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
