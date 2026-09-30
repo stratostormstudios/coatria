@@ -3,6 +3,11 @@ import type {HiggsfieldMediaDescriptor} from './higgsfield-media-inspection';
 
 const uuid=z.string().uuid(),revision=z.number().int().positive(),sha=z.string().regex(/^[a-f0-9]{64}$/);
 export const HIGGSFIELD_REFERENCE_POLICY=Object.freeze({version:1,maxBytes:10*1024**2,maxDimension:4096,maxPixels:16_000_000,maxApprovalMinutes:60});
+export const HIGGSFIELD_REFERENCE_PREPARATION_CAPABILITIES=Object.freeze(['creative.read','studio.read','studio.write','tasks.write','storage.read'] as const);
+export const HIGGSFIELD_REFERENCE_GENERATION_CAPABILITIES=Object.freeze([...HIGGSFIELD_REFERENCE_PREPARATION_CAPABILITIES,'creative.write'] as const);
+export const HIGGSFIELD_REFERENCE_INSPECTION_LIMITS=Object.freeze({version:1,maxMinutes:60,maxAttempts:3,maxProposalsPerWork:8});
+/** Private, server-derived authority. Never expose the credential fingerprint. */
+export type HiggsfieldReferenceInspectionAuthority={version:1;mode:'prepared_image_v1';companyId:string;projectId:string;workItemId:string;runId:string;agentId:string;requestedBy:string;agentSponsorId:string;credentialSha256:string;installation:{id:string;revision:number}|null;startedAt:string;attempt:1;expiresAt:string};
 export const HIGGSFIELD_REFERENCE_ROLES=['image','start_image','end_image'] as const;
 export const HIGGSFIELD_REFERENCE_STATUSES=['proposed','inspecting','awaiting_approval','queued','reading','allocating','allocated','uploading','uploaded','confirming','confirmed','uncertain','blocked','failed','revoked'] as const;
 export const higgsfieldReferenceProposalInput=z.object({clientId:uuid,projectId:uuid,projectRevision:revision,workItemId:uuid,proxyVersionId:uuid,proxySha256:sha,proxyBytes:z.number().int().positive().max(HIGGSFIELD_REFERENCE_POLICY.maxBytes),sourceVersionId:uuid.optional(),role:z.enum(HIGGSFIELD_REFERENCE_ROLES),purpose:z.string().trim().min(1).max(1000)}).strict().refine(v=>v.sourceVersionId!==v.proxyVersionId,'The linked original must be a distinct version from the prepared proxy.');
@@ -20,6 +25,7 @@ export type HiggsfieldReference={
  storageConnectionId:string;storageConnectionRevision:number;bindingId:string;bindingRevision:number;providerConnectionId:string;providerConnectionRevision:number;
  inspection:HiggsfieldReferenceInspection|null;proposedBy:string;proposedAgentId:string|null;createdAt:string;approvedBy:string|null;approvedAt:string|null;expiresAt:string|null;approvalHash:string|null;revokedAt:string|null;diagnosticCode:string|null;
  providerConfirmed:boolean;originalUploaded:false;bytesSharedUnchanged:true;metadataRemoved:false;
+ inspectionAuthorityMode?:'live_run'|'prepared_image_v1';inspectionExpiresAt?:string;inspectionAttempts?:number;
 };
 export type HiggsfieldReferencePage={references:HiggsfieldReference[];hasMore:boolean;nextAfter:string|null};
 export type HiggsfieldReferenceCandidatePage={versions:HiggsfieldReferenceVersion[];hasMore:boolean;nextAfter:string|null};

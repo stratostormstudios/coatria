@@ -36,3 +36,28 @@ test('generated pipeline never offers the legacy followup',async({page})=>{
  await expect(page.getByRole('button',{name:'Review generation handoff',exact:true})).toHaveCount(0);
  await expect(page.getByRole('tabpanel')).toContainText('Register a verified project archive');
 });
+
+for(const hasStorageRead of [false,true])test(`prepared image selection uses explicit existing grants (${hasStorageRead?'ready':'missing storage'})`,async({page},testInfo)=>{
+ const state=generatedFixture(),agentId=uuid(60),capabilities=['studio.read','studio.write','tasks.write','creative.read',...(hasStorageRead?['storage.read']:[])];
+ state.detail.workItems=[{...state.detail.workItems[0],title:'Select exact prepared images',stage:'references',roleKey:'ingest',status:'todo',readiness:'ready',execution:'agent',agentId,humanId:null}];
+ state.detail.roles=state.detail.roles.map(role=>role.key==='ingest'?{...role,agentId,humanId:null}:role);
+ let attempts=0;
+ state.handler=async(route,url)=>{
+  if(url.pathname.endsWith('/workspace')){await route.fulfill({json:{company:state.company,rooms:[],members:[{...state.user,userId:state.user.id,role:'owner'}],agents:[{id:agentId,name:'Reviewed reference specialist',status:'active',harness:'custom',capabilities,pluginInstallationId:uuid(61),invocationAccess:'admins',expiresAt:'2099-01-01T00:00:00Z'}],tasks:[],messages:[],presence:[],activity:[],drives:[],openings:[],applications:[],layout:[]}});return true;}
+  if(url.pathname.endsWith('/dispatch')&&route.request().method()==='POST'){
+   attempts++;if(attempts===1){await route.fulfill({status:503,json:{error:'Synthetic unknown dispatch response.'}});return true;}
+   state.detail.workItems[0]={...state.detail.workItems[0],runId:uuid(62),runStatus:'queued',readiness:'queued'};
+   await route.fulfill({status:201,json:{run:{id:uuid(62),status:'queued'},project:state.detail.project,replayed:true}});return true;
+  }return false;
+ };
+ await mockGenerated(page,state);await openGenerated(page,state);await page.getByRole('tab',{name:/^Production work/}).click();
+ const prepare=page.getByRole('button',{name:'Select prepared images',exact:true}),ordinary=page.getByRole('button',{name:'Queue specialist',exact:true});
+ await expect(ordinary).toBeEnabled();await expect(page.getByRole('tabpanel')).toContainText('Uses existing verified images unchanged');
+ expect(capabilities).not.toContain('creative.write');
+ if(!hasStorageRead){await expect(prepare).toBeDisabled();expect(state.writes.filter(w=>w.path.endsWith('/dispatch'))).toHaveLength(0);return;}
+ await expect(prepare).toBeEnabled();await prepare.click();await expect(page.getByRole('tabpanel').getByRole('alert')).toContainText('Synthetic unknown dispatch response');expect(attempts).toBe(1);
+ await page.screenshot({path:testInfo.outputPath('prepared-reference-dispatch-desktop.png'),fullPage:true});
+ await page.setViewportSize({width:390,height:844});await prepare.scrollIntoViewIfNeeded();await noOverflow(page);await page.screenshot({path:testInfo.outputPath('prepared-reference-dispatch-mobile.png'),fullPage:true});
+ await prepare.click();await expect(prepare).toHaveCount(0);await expect(ordinary).toHaveCount(0);expect(attempts).toBe(2);
+ const writes=state.writes.filter(w=>w.path.endsWith('/dispatch'));expect(writes[0].body).toEqual(writes[1].body);expect(writes[0].body).toMatchObject({preparationProfile:'prepared_image_v1',revision:7,workItemId:ids.work});expect(Object.keys(writes[0].body).sort()).toEqual(['clientId','preparationProfile','revision','workItemId']);expect(state.unexpected).toEqual([]);
+});

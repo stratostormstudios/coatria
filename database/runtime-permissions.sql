@@ -67,6 +67,10 @@ GRANT UPDATE(status,revision,approved_by,approved_at,expires_at,approved_project
 -- inspection evidence. No existing archive-worker role gains reference access.
 GRANT SELECT,INSERT ON higgsfield_references,higgsfield_reference_receipts,higgsfield_reference_requests,higgsfield_reference_transports,higgsfield_reference_confirmations TO coatria_runtime_v1;
 GRANT SELECT ON higgsfield_reference_inspections TO coatria_runtime_v1;
+-- Exact explicit dispatch and inspection authority are immutable once saved.
+GRANT SELECT,INSERT ON studio_reference_preparation_dispatches TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON higgsfield_model_contracts TO coatria_runtime_v1;
+GRANT UPDATE(connection_id,connection_revision,catalog_sha256,descriptor,descriptor_sha256,observed_at,expires_at) ON higgsfield_model_contracts TO coatria_runtime_v1;
 GRANT UPDATE(status,revision,approved_by,approved_at,expires_at,approval_hash,qualification_sha256,revoked_by,revoked_at,lease_id,lease_expires_at,action_id,action_operation,diagnostic_code,updated_at) ON higgsfield_references TO coatria_runtime_v1;
 GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO coatria_runtime_v1;
 ALTER ROLE coatria_runtime_v1 SET statement_timeout='15s';

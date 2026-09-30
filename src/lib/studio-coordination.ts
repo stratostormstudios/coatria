@@ -173,6 +173,28 @@ const coordinatorGenerationToolRules:Record<string,(args:Row,receipt:Row,client:
 export const coordinatorGenerationToolNames:readonly string[]=Object.freeze(Object.keys(coordinatorGenerationToolRules));
 const planningDispatchToolNames:readonly string[]=Object.freeze(['studio_get','tasks_claim','tasks_submit']);
 const referenceDispatchToolNames:readonly string[]=Object.freeze([...planningDispatchToolNames,'storage_get','storage_files_list','studio_storage_references_list','infrastructure_list','infrastructure_files','higgsfield_connection_get','higgsfield_requests_list','higgsfield_jobs_list']);
+/** Only the immutable administrator-selected marker opts a run into preparation.
+ * Its predicates are also enforced before cached tool receipts are replayed. */
+export async function studioReferencePreparationRunScope(client:PoolClient,companyId:string,runId:string){
+ return (await client.query(`SELECT d.project_id,d.work_item_id,w.task_id FROM studio_reference_preparation_dispatches d
+  JOIN studio_dispatches dispatched ON dispatched.company_id=d.company_id AND dispatched.project_id=d.project_id AND dispatched.work_item_id=d.work_item_id AND dispatched.run_id=d.run_id
+  JOIN studio_work_items w ON w.company_id=d.company_id AND w.project_id=d.project_id AND w.id=d.work_item_id
+  WHERE d.company_id=$1 AND d.run_id=$2 AND d.authority_version=1`,[companyId,runId])).rows[0] as Row|undefined;
+}
+const referencePreparationToolRules:Record<string,(args:Row,receipt:Row,client:PoolClient,companyId:string)=>unknown>={
+ studio_get:coordinatorGenerationToolRules.studio_get,
+ tasks_claim:(args,receipt)=>args.taskId===receipt.task_id,
+ tasks_submit:(args,receipt)=>args.taskId===receipt.task_id,
+ higgsfield_reference_candidates_list:(args,receipt)=>args.projectId===receipt.project_id,
+ higgsfield_reference_propose:(args,receipt)=>args.projectId===receipt.project_id&&args.workItemId===receipt.work_item_id,
+ higgsfield_references_list:(args,receipt)=>args.projectId===receipt.project_id,
+ higgsfield_connection_get:()=>true,
+};
+export const referencePreparationToolNames:readonly string[]=Object.freeze(Object.keys(referencePreparationToolRules));
+export async function assertStudioReferencePreparationTool(client:PoolClient,agent:Row,run:Row,name:string,args:Row){
+ const receipt=await studioReferencePreparationRunScope(client,agent.company_id,run.id);if(!receipt)return;
+ if(!Object.hasOwn(referencePreparationToolRules,name)||!await referencePreparationToolRules[name](args,receipt,client,agent.company_id))fail(403,'This prepared-image request may only read its assigned context, reserve and submit its reference task, and propose exact prepared references. It cannot generate, transfer, approve or delegate work.','STUDIO_REFERENCE_PREPARATION_SCOPE');
+}
 // Ordinary specialists also archive outputs and still need destination storage
 // browsing. The separate coordinator-generation child only proposes generation.
 const generationDispatchToolNames:readonly string[]=Object.freeze([...coordinatorGenerationToolNames,'storage_get','storage_files_list','higgsfield_archives_list','higgsfield_archive_get','higgsfield_archive_propose','studio_generated_artifact_register','tasks_submit']);
@@ -182,6 +204,7 @@ const generationDispatchToolNames:readonly string[]=Object.freeze([...coordinato
  * Callers must prefer the stricter generated-continuation and own-generation
  * scopes. Legacy creative/render continuations are outside this v2 path. */
 export async function studioDispatchInferenceToolNames(client:PoolClient,companyId:string,runId:string):Promise<readonly string[]|null>{
+ if(await studioReferencePreparationRunScope(client,companyId,runId))return referencePreparationToolNames;
  const work=(await client.query(`SELECT w.stage,w.execution FROM studio_dispatches d
   JOIN studio_work_items w ON w.company_id=d.company_id AND w.project_id=d.project_id AND w.id=d.work_item_id
   JOIN studio_projects p ON p.company_id=w.company_id AND p.id=w.project_id
