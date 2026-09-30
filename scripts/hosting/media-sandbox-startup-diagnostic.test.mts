@@ -4,7 +4,7 @@ import {mkdtemp,mkdir,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import assert from 'node:assert/strict';
 import {classifySyntheticStartupStderr,diagnoseMediaSandboxStartup,diagnoseArchiveHostSandboxStartup,archiveStartupIdentity} from './media-sandbox-startup-diagnostic.mts';
-import {assertMediaSandboxBoundary,mediaSandboxBoundaryObservation,assertMediaSandboxFileDescriptorCap,assertMediaSandboxOrphanCleanup,mediaSandboxOrphanObservation,assertMediaSandboxLabelParser,mediaSandboxLabelObservation,mediaSandboxLabelFailure,withMediaSandboxInputLifetime,observeMediaSandboxCgroups,mediaSandboxObserverFailure} from './media-sandbox-linux-canary.mts';
+import {mediaSandboxCrashChildArguments,parseMediaSandboxCrashChildInput,assertMediaSandboxBoundary,mediaSandboxBoundaryObservation,assertMediaSandboxFileDescriptorCap,assertMediaSandboxOrphanCleanup,mediaSandboxOrphanObservation,assertMediaSandboxLabelParser,mediaSandboxLabelObservation,mediaSandboxLabelFailure,withMediaSandboxInputLifetime,observeMediaSandboxCgroups,mediaSandboxObserverFailure} from './media-sandbox-linux-canary.mts';
 import {ArchiveHostRunError,archiveHostCanarySummary,archiveHostJournalFailure} from './archive-host-diagnostics.mjs';
 import {MediaSandboxError} from '../../src/lib/higgsfield-media-sandbox';
 
@@ -224,4 +224,14 @@ test('default disappearance probe distinguishes a real retained child from its r
  await assert.rejects(observeMediaSandboxCgroups({cgroupRoot:root},new Map(),undefined,input),error=>error===original);
  await rm(path,{recursive:true});
  await observeMediaSandboxCgroups({cgroupRoot:root},new Map(),undefined,input);
+});
+
+
+test('installed crash child uses only pinned compiled qualifier and keeps archive source-loader behavior',()=>{
+ const config={version:1,uid:123,gid:123,sourceRoot:'/release/source'} as Parameters<typeof mediaSandboxCrashChildArguments>[0];
+ const source=mediaSandboxCrashChildArguments(config);assert.deepEqual(source.slice(0,2),['--import','tsx']);assert.match(source[2],/media-sandbox-linux-canary\.mts$/);assert.equal(source[3],'--supervisor-crash-child');
+ const entry='/var/lib/coatria-reference-releases/'+'a'.repeat(64)+'/qualifier/runtime.mjs';assert.deepEqual(mediaSandboxCrashChildArguments({...config,compiledCrashEntrypoint:entry}),[entry,'--supervisor-crash-child']);
+ for(const bad of ['/tmp/runtime.mjs',entry.replace('/qualifier/','/worker/'),entry+'/../runtime.mjs','runtime.mjs'])assert.throws(()=>mediaSandboxCrashChildArguments({...config,compiledCrashEntrypoint:bad}));
+ const raw=JSON.stringify(config);assert.deepEqual(parseMediaSandboxCrashChildInput(raw,123,123),config);
+ for(const [input,uid,gid]of [[undefined,123,123],['',123,123],['{}',123,123],[raw,0,123],[raw,123,456],['é'.repeat(8193),123,123]] as const)assert.throws(()=>parseMediaSandboxCrashChildInput(input,uid,gid));
 });

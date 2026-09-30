@@ -29,7 +29,7 @@ jobs:
       - name: Typecheck media qualification and diagnostic modules
         run: node node_modules/typescript/bin/tsc --noEmit --allowJs --allowImportingTsExtensions --strict --skipLibCheck --target ES2022 --module esnext --moduleResolution bundler --esModuleInterop scripts/hosting/media-sandbox-linux-canary.mts scripts/hosting/media-sandbox-startup-diagnostic.test.mts scripts/hosting/reference-worker-linux-canary.test.mts scripts/hosting/run-archive-host.mts tests/archive-host-package.test.ts
       - name: Test bounded diagnostic classification and fail-closed invocation
-        run: node --import tsx --test scripts/hosting/media-sandbox-startup-diagnostic.test.mts scripts/hosting/reference-worker-linux-canary.test.mts scripts/hosting/media-apparmor-ci.test.mjs
+        run: node --import tsx --test scripts/hosting/media-sandbox-startup-diagnostic.test.mts scripts/hosting/reference-worker-linux-canary.test.mts scripts/hosting/media-apparmor-ci.test.mjs scripts/hosting/reference-host-ci.test.mjs
       - name: Prepare pinned closure and one capped delegated service
         run: |
           sudo env CI=true COATRIA_TEST_UID="$(id -u)" COATRIA_TEST_GID="$(id -g)" GITHUB_ENV="$GITHUB_ENV" "$(command -v node)" scripts/hosting/prepare-media-sandbox-ci.mjs
@@ -39,6 +39,9 @@ jobs:
       - name: Build the exact archive release and qualify its disabled systemd service
         run: |
           sudo env CI=true GITHUB_SHA="$GITHUB_SHA" COATRIA_MEDIA_QUALIFICATION="$COATRIA_MEDIA_QUALIFICATION" COATRIA_NPM_CACHE="$(npm config get cache)" "$(command -v node)" scripts/hosting/qualify-archive-host-ci.mjs
+      - name: Qualify the exact reference-only install twice without enrollment or credentials
+        run: |
+          sudo env CI=true GITHUB_SHA="$GITHUB_SHA" COATRIA_MEDIA_QUALIFICATION="$COATRIA_MEDIA_QUALIFICATION" COATRIA_NPM_CACHE="$(npm config get cache)" "$(command -v node)" scripts/hosting/qualify-reference-host-ci.mjs
       - name: Preserve scoped AppArmor mode and sanitized kernel denial categories
         if: always() && env.COATRIA_MEDIA_QUALIFICATION != ''
         run: |
@@ -130,7 +133,7 @@ jobs:
           import {buildTrustedServiceBundle} from './scripts/hosting/build-trusted-service-bundle.mjs';
           const output=join(process.env.RUNNER_TEMP,'coatria-trusted-services');
           await mkdir(output);
-          for(const service of ['archive','gateway','reference','media-qualification']) {
+          for(const service of ['archive','gateway','reference','reference-qualification','media-qualification']) {
             const result=await buildTrustedServiceBundle({root:process.cwd(),commit:process.env.GITHUB_SHA,service,output:join(output,service)});
             console.log(JSON.stringify({service,sourceCommit:result.sourceCommit,bundleSha256:result.bundleSha256,runtimeBytes:result.runtime.bytes,qualified:false,providerCalled:false}));
           }

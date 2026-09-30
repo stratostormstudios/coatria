@@ -47,7 +47,7 @@ test('private decoder authorization is confined to the exact archive Blob store 
 });
 test('actual service bundles have fully enumerated inputs, no external packages and fail closed without configuration',async()=>{
  const directory=await mkdtemp(join(tmpdir(),'coatria-trusted-bundle-'));
- try{for(const service of ['archive','gateway','reference','media-qualification']){
+ try{for(const service of ['archive','gateway','reference','reference-qualification','media-qualification']){
   const result=await compileTrustedService({root:process.cwd(),service});assert.equal(result.deployable,false);
   if(['archive','gateway'].includes(service)){assert.ok(result.inputs.some((item:any)=>item.path==='forbidden:pg-native'));assert.ok(result.inputs.some((item:any)=>item.path.startsWith('node_modules/pg/')));}
   if(service==='reference'){
@@ -55,11 +55,16 @@ test('actual service bundles have fully enumerated inputs, no external packages 
    for(const source of ['src/lib/higgsfield-reference-worker.ts','src/lib/higgsfield-reference-service-client.ts','src/lib/higgsfield-media-sandbox.ts'])assert.ok(result.inputs.some((item:any)=>item.path===source));
    assert.equal(result.inputs.some((item:any)=>item.path==='forbidden:pg-native'||item.path.startsWith('node_modules/pg/')||item.path.startsWith('node_modules/@aws-sdk/')||['src/lib/db.ts','src/lib/higgsfield-reference-service.ts','src/lib/higgsfield-reference-broker-db.ts','src/lib/higgsfield-secrets.ts'].includes(item.path)),false,'Reference worker must not bundle server credentials or direct database/storage adapters');
   }
+  if(service==='reference-qualification'){
+   assert.equal(result.entry,'scripts/hosting/qualify-reference-host.mts');
+   for(const source of ['scripts/hosting/media-sandbox-linux-canary.mts','scripts/hosting/reference-worker-linux-canary.mts','src/lib/higgsfield-reference-worker.ts'])assert.ok(result.inputs.some((item:any)=>item.path===source));
+   assert.equal(result.inputs.some((item:any)=>item.path==='forbidden:pg-native'||item.path.startsWith('node_modules/pg/')||item.path.startsWith('node_modules/@aws-sdk/')||['src/lib/db.ts','src/lib/higgsfield-reference-service.ts','src/lib/higgsfield-reference-broker-db.ts','src/lib/higgsfield-secrets.ts'].includes(item.path)),false);
+  }
   assert.ok(result.inputs.some((item:any)=>item.path.startsWith('src/lib/')));assert.ok(result.runtime.length<8*1024**2);
   const path=join(directory,service+'.mjs');await writeFile(path,result.runtime);
   const environment:NodeJS.ProcessEnv={PATH:process.env.PATH,SYSTEMROOT:process.env.SYSTEMROOT,NODE_ENV:'production'};
   const syntax=spawnSync(process.execPath,['--check',path],{encoding:'utf8',timeout:15000,env:environment});assert.equal(syntax.status,0,syntax.stderr);
-  const guarded=spawnSync(process.execPath,[path,'--preflight'],{encoding:'utf8',timeout:15000,env:environment});assert.equal(guarded.status,1);assert.match(guarded.stderr,service==='reference'?/REFERENCE_RUNNER_UNAVAILABLE/:/CONFIGURATION_INVALID/);assert.doesNotMatch(guarded.stderr,/synthetic-password|Bearer/);
+  const guarded=spawnSync(process.execPath,[path,'--preflight'],{encoding:'utf8',timeout:15000,env:environment});assert.equal(guarded.status,1);assert.match(guarded.stderr,service==='reference'?/REFERENCE_RUNNER_UNAVAILABLE/:service==='reference-qualification'?/REFERENCE_HOST_QUALIFICATION_REJECTED/:/CONFIGURATION_INVALID/);assert.doesNotMatch(guarded.stderr,/synthetic-password|Bearer/);
  }}
  finally{assert.ok(resolve(directory).startsWith(resolve(tmpdir())+sep));await rm(directory,{recursive:true,force:true});}
 });

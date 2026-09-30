@@ -9,7 +9,7 @@ import {build,version as esbuildVersion} from 'esbuild';
 import {nodeImage} from './build-runpod-bootstrap.mjs';
 
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
-const entries=Object.freeze({archive:'scripts/higgsfield-remote-archive-worker.ts',gateway:'scripts/storage-gateway.ts',reference:'scripts/hosting/run-reference-worker.mts','media-qualification':'scripts/hosting/qualify-vercel-media-service.mts'});
+const entries=Object.freeze({archive:'scripts/higgsfield-remote-archive-worker.ts',gateway:'scripts/storage-gateway.ts',reference:'scripts/hosting/run-reference-worker.mts','reference-qualification':'scripts/hosting/qualify-reference-host.mts','media-qualification':'scripts/hosting/qualify-vercel-media-service.mts'});
 const compilerVersion='0.28.2',nativeStub='throw new Error("PG_NATIVE_DISABLED");';
 const within=(root,path)=>{const value=relative(root,path);return value===''||!isAbsolute(value)&&value!=='..'&&!value.startsWith('../')&&!value.startsWith('..\\');};
 function fail(){throw Error('TRUSTED_SERVICE_BUNDLE_REJECTED');}
@@ -46,4 +46,4 @@ export async function buildTrustedServiceBundle({root,commit,service,output}){
  const manifestBytes=Buffer.from(JSON.stringify(manifest,null,2)+'\n');await mkdir(target,{mode:0o755});await writeFile(join(target,'runtime.mjs'),compiled.runtime,{flag:'wx',mode:0o444});await writeFile(join(target,'bundle.json'),manifestBytes,{flag:'wx',mode:0o444});
  return {output:target,bundleSha256:hash(manifestBytes),...manifest};
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){const[root,commit,service,output,...extra]=process.argv.slice(2);if(extra.length||!output){console.error('Expected <source-root> <reviewed-commit> <archive|gateway|reference|media-qualification> <new-output-directory>.');process.exitCode=1;}else buildTrustedServiceBundle({root,commit,service,output}).then(result=>console.log(JSON.stringify({output:result.output,bundleSha256:result.bundleSha256,service,sourceCommit:commit,qualified:false,providerCalled:false}))).catch(()=>{console.error('TRUSTED_SERVICE_BUNDLE_REJECTED');process.exitCode=1;});}
+if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){const[root,commit,service,output,...extra]=process.argv.slice(2);if(extra.length||!output){console.error('Expected <source-root> <reviewed-commit> <archive|gateway|reference|reference-qualification|media-qualification> <new-output-directory>.');process.exitCode=1;}else buildTrustedServiceBundle({root,commit,service,output}).then(result=>console.log(JSON.stringify({output:result.output,bundleSha256:result.bundleSha256,service,sourceCommit:commit,qualified:false,providerCalled:false}))).catch(()=>{console.error('TRUSTED_SERVICE_BUNDLE_REJECTED');process.exitCode=1;});}

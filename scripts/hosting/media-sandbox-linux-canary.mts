@@ -18,7 +18,7 @@ import {referenceWorkerIntegrationEvidence,runReferenceWorkerLinuxCanary} from '
 import {mediaSandboxDecoderDisappeared} from './media-sandbox-cgroup-observer.mjs';
 
 type ProfilePin={profilePath:string;expectedProfileSha256:string};
-export type MediaSandboxCanaryConfig={fixtureRoot?:string;sourceRoot?:string;diagnostics?:boolean;diagnosticScope?:'archive-host-qualification';version:number;profiles:{real:ProfilePin;conformance:ProfilePin};serviceRoot:string;supervisorGroup:string;cgroupRoot:string;uid:number;gid:number;hostCanaryPath:string;hostCanarySha256:string;evidence:string};
+export type MediaSandboxCanaryConfig={compiledCrashEntrypoint?:string;fixtureRoot?:string;sourceRoot?:string;diagnostics?:boolean;diagnosticScope?:'archive-host-qualification';version:number;profiles:{real:ProfilePin;conformance:ProfilePin};serviceRoot:string;supervisorGroup:string;cgroupRoot:string;uid:number;gid:number;hostCanaryPath:string;hostCanarySha256:string;evidence:string};
 type Config=MediaSandboxCanaryConfig;
 type Observation={group:string;processes:Set<number>;controls:Record<string,string>};
 const digest=(bytes:Buffer|string)=>createHash('sha256').update(bytes).digest('hex');
@@ -133,7 +133,20 @@ async function runObserved(config:Config,sandbox:QualifiedLinuxMediaSandbox,args
 
 async function configInput(){assert.equal(process.platform,'linux');assert.equal(process.arch,'x64');assert.ok(process.getuid&&process.getuid()>0);const path=process.env.COATRIA_MEDIA_QUALIFICATION;assert.ok(path);const info=await lstat(path);assert.equal(info.uid,0);assert.equal(info.mode&0o022,0);const config=JSON.parse(await text(path)) as Config;assert.equal(config.version,1);assert.equal(process.getuid!(),config.uid);assert.equal(process.getgid!(),config.gid);assert.ok((await text('/proc/self/cgroup')).includes(config.supervisorGroup.slice('/sys/fs/cgroup'.length)));return config;}
 
-async function crashChild(config:Config){
+/** The installed reference bundle has no source loader or node_modules. Only
+ * its immutable qualifier entry may replace the existing source CLI child. */
+export function mediaSandboxCrashChildArguments(config:Config){
+ if(config.compiledCrashEntrypoint!==undefined){
+  assert.match(config.compiledCrashEntrypoint,/^\/var\/lib\/coatria-reference-releases\/[a-f0-9]{64}\/qualifier\/runtime\.mjs$/);
+  return [config.compiledCrashEntrypoint,'--supervisor-crash-child'];
+ }
+ return ['--import','tsx',source(config,'scripts/hosting/media-sandbox-linux-canary.mts'),'--supervisor-crash-child'];
+}
+export function parseMediaSandboxCrashChildInput(raw:string|undefined,uid:number|undefined,gid:number|undefined):Config{
+ assert.ok(typeof raw==='string'&&Buffer.byteLength(raw)>0&&Buffer.byteLength(raw)<=16384);
+ const config=JSON.parse(raw) as Config;assert.equal(config.version,1);assert.ok(uid&&gid);assert.equal(config.uid,uid);assert.equal(config.gid,gid);return config;
+}
+export async function runMediaSandboxCrashChild(config:Config){
  const sandbox=await createLinuxMediaSandbox({...config.profiles.conformance,cgroupRoot:config.cgroupRoot});
  const file=await open(fixture(config,'synthetic.png'),constants.O_RDONLY);process.send?.({ready:true});
  try{await sandbox.run({tool:'ffprobe',args:['timeout'],inputFd:file.fd,timeoutMs:9000,maxOutputBytes:65536,maxStderrBytes:65536});}finally{await file.close();}throw Error('The parent-death test must terminate its supervisor.');
@@ -178,7 +191,7 @@ export async function runMediaSandboxCanary(config:Config){
 
   // Kill the Node supervisor itself: no JS finally can run. PDEATHSIG plus the
   // PID namespace must leave no running decoder/setsid descendant behind.
-  checkpoint('supervisor_crash_cleanup');const crashObservations=new Map<string,Observation>();const child=spawn(process.execPath,['--import','tsx',source(config,'scripts/hosting/media-sandbox-linux-canary.mts'),'--supervisor-crash-child'],{shell:false,stdio:['ignore','ignore','ignore','ipc'],env:{PATH:'/usr/bin:/bin',LANG:'C',LC_ALL:'C',COATRIA_MEDIA_QUALIFICATION:process.env.COATRIA_MEDIA_QUALIFICATION,COATRIA_MEDIA_CANARY_CHILD:JSON.stringify(config)}});
+  checkpoint('supervisor_crash_cleanup');const crashObservations=new Map<string,Observation>();const child=spawn(process.execPath,mediaSandboxCrashChildArguments(config),{shell:false,stdio:['ignore','ignore','ignore','ipc'],env:{PATH:'/usr/bin:/bin',LANG:'C',LC_ALL:'C',COATRIA_MEDIA_QUALIFICATION:process.env.COATRIA_MEDIA_QUALIFICATION,INVOCATION_ID:process.env.INVOCATION_ID,COATRIA_MEDIA_CANARY_CHILD:JSON.stringify(config)}});
   let childClosed=false;child.once('exit',()=>{childClosed=true;});const childExit=new Promise<void>((resolve,reject)=>{child.once('error',reject);child.once('close',()=>resolve());});
   try{await new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Crash child failed to qualify.')),15000);child.once('message',()=>{clearTimeout(timer);resolve();});child.once('exit',()=>{clearTimeout(timer);reject(Error('Crash child exited before qualification.'));});});
    await waitFor(async()=>{await observe(config,crashObservations);return [...crashObservations.values()].some(item=>item.processes.size>=5);});assert.ok(child.kill('SIGKILL'));await childExit;
@@ -203,10 +216,10 @@ export async function runMediaSandboxCanary(config:Config){
  }catch(error){report.failureCode=code(error);report.failingCheck=report.activeCheck;if(startingProfile&&config.diagnostics!==false)report.startupDiagnostic=await(config.diagnosticScope==='archive-host-qualification'?diagnoseArchiveHostSandboxStartup(config,startingProfile):diagnoseMediaSandboxStartup(config,startingProfile));throw error;}finally{if(listener)await closed(listener);await writeFile(join(config.evidence,'qualification.json'),JSON.stringify(report,null,2)+'\n',{mode:0o600});}
  console.log('Isolated Linux decoder qualified: boundary/resource/cleanup checks and all seven actual media formats passed.');
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){void(async()=>{
+if(process.argv[1]&&/(?:^|[/\\])media-sandbox-linux-canary\.mts$/.test(process.argv[1])&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){void(async()=>{
  if(process.argv.length===3&&process.argv[2]==='--supervisor-crash-child'&&process.env.COATRIA_MEDIA_CANARY_CHILD){
   // Only a child of the trusted canary uses this private, bounded configuration.
   // It has no receipt authority; the actual sandbox still verifies every pin.
-  const raw=process.env.COATRIA_MEDIA_CANARY_CHILD;assert.ok(raw.length<=16384);const config=JSON.parse(raw) as Config;assert.equal(config.uid,process.getuid?.());assert.equal(config.gid,process.getgid?.());await crashChild(config);
- }else{const config=await configInput();if(process.argv.includes('--supervisor-crash-child'))await crashChild(config);else await runMediaSandboxCanary(config);}
+  assert.ok(process.connected&&process.send);const config=parseMediaSandboxCrashChildInput(process.env.COATRIA_MEDIA_CANARY_CHILD,process.getuid?.(),process.getgid?.());await runMediaSandboxCrashChild(config);
+ }else{const config=await configInput();if(process.argv.includes('--supervisor-crash-child'))await runMediaSandboxCrashChild(config);else await runMediaSandboxCanary(config);}
 })().catch(()=>{console.error('MEDIA_SANDBOX_CANARY_FAILED');process.exitCode=1;});}
