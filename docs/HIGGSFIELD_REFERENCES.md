@@ -55,9 +55,13 @@ The normal application can list services through `GET /api/companies/{companyId}
 
 The runner source is `scripts/hosting/run-reference-worker.mts`. It accepts a hash-pinned immutable configuration and a reference-specific receipt binding that complete configuration, runtime artifact, current boot/user, company/projects, decoder profile and expiry. It still loads the actual isolated Linux decoder; no production fake inspector or inherited application credentials are accepted. Its JSON client is bounded, rejects redirects, and never retries mutating requests. A lost claim stops the runner instead of claiming another image.
 
+Cancellation waits for the original local operations and inspector to settle before closing handles or removing scratch. Cleanup has a finite maximum of ten seconds; a timeout, failed cancellation, failed close or failed removal permanently stops new claims from that worker instance. Completed remote receipts are retained, and prior provider intent remains uncertain rather than being retried. Host control-group termination is still required for unresponsive native processes; a timed-out JavaScript promise is not evidence that a process was killed.
+
 The offline trusted-service builder accepts the `reference` entry and pins the standalone runtime, reviewed source/tree, compiler and all dependency inputs. CI builds it from its exact checkout. This does not permit the archive/gateway bootstrap to install or start a reference service, and the bundle remains unqualified.
 
 This is an implemented service interface, runner and offline bundle, not a completed deployment. The dedicated immutable installer, trusted reference qualification-receipt producer, enrollment workflow and actual-host end-to-end qualification are still required. Operator tables have no public registration endpoint, and no production service has been enrolled by this change. The API fixture uses synthetic enrollment and inspection evidence; the database LOGIN suite is separately gated on real PostgreSQL.
+
+The [reference deployment contract](HIGGSFIELD_REFERENCE_DEPLOYMENT.md) defines the artifact hashes, separate qualification/acceptance/enrollment steps and required activation evidence.
 
 Only prepared images use the bounded streaming broker read. Heavy originals and ordinary project downloads remain on the separate storage gateway. Vercel documents a 4.5 MB buffered response limit and streaming as the alternative; the exact deployed binary-stream path must still be exercised before activation ([Vercel guidance](https://vercel.com/kb/guide/how-to-bypass-vercel-body-size-limit-serverless-functions)).
 

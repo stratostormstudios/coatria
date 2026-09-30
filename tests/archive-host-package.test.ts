@@ -31,6 +31,7 @@ test('archive bundle pins Git bytes, runtime inputs and ordinary ESM module layo
  const f=await fixture();t.after(()=>rm(f.temp,{recursive:true,force:true}));await writeFile(join(f.repo,'src/lib/minimal.ts'),'uncommitted change');await writeFile(join(f.repo,'.env.private'),'original canary outside the allowlisted source');
  const result=await buildArchiveHostBundle({sourceRoot:f.repo,commit:f.commit,runtimeRoot:f.runtime,runtimeManifestSha256:f.runtimeHash,output:join(f.temp,'bundle')});assert.equal(result.qualified,false);assert.equal(result.servicesEnabled,false);assert.equal(result.providerCalls,false);
  const bundle=await inspectArchiveHostBundle(result.output,result.bundleSha256);assert.equal(bundle.commit,f.commit);assert.equal((await readFile(join(result.output,'app/src/lib/minimal.ts'),'utf8')),'export const fixture = true;\n');assert.ok(!bundle.files.some((file:{path:string})=>file.path.includes('.env')));
+ assert.equal(bundle.files.find((file:{path:string})=>file.path==='app/scripts/hosting/reference-worker-linux-canary.mts')?.sha256,archiveHostHash(f.files.get('scripts/hosting/reference-worker-linux-canary.mts')!));
  assert.ok(bundle.files.some((file:{path:string})=>file.path==='app/node_modules/tsx/package.json'));assert.ok(!bundle.files.some((file:{path:string})=>file.path==='runtime/node_modules/tsx/package.json'));
  const profiles=archiveHostProfiles(bundle,'/var/lib/coatria-archive-releases/'+result.bundleSha256);assert.equal(profiles.real.bubblewrap.path,'/usr/bin/bwrap');assert.equal(profiles.real.runtimeRoot,'/var/lib/coatria-archive-releases/'+result.bundleSha256+'/runtime/media/real');assert.equal(profiles.conformance.limits.memoryBytes,64*1024**2);
  const modified=structuredClone(bundle);modified.runtime.sourceHashes.launcher='b'.repeat(64);modified.runtimeManifestSha256=archiveHostHash(JSON.stringify(modified.runtime)+'\n');assert.throws(()=>parseArchiveBundle(modified),/ARCHIVE_HOST_PACKAGE_REJECTED/);
@@ -115,6 +116,13 @@ test('host startup failures preserve only static stages, known error codes and b
  assert.equal(new ArchiveHostRunError('delegation_cpu_limit',{message:'ARCHIVE_HOST_PACKAGE_REJECTED'}).diagnostic.errorCode,'CHECK_FAILED');
  assert.equal(new ArchiveHostRunError(privateText,{code:privateText,message:privateText}).diagnostic.stage,'unknown_stage');assert.equal(new ArchiveHostRunError('host_identity',{code:privateText}).diagnostic.errorCode,'UNKNOWN');
  assert.equal(archiveHostCanarySummary({qualified:false,tests:Array(11).fill({passed:true}),realFormats:[]}),null);assert.equal(archiveHostCanarySummary({qualified:true,tests:[],realFormats:[]}),null);
+});
+
+test('reference integration failure keeps its fixed checkpoint without publishing synthetic authority as qualification',()=>{
+ const summary=archiveHostCanarySummary({qualified:false,failureCode:'CANARY_ASSERTION_FAILED',failingCheck:'reference_worker_integration',tests:Array(10).fill({passed:true}),realFormats:Array(7).fill({}),referenceWorkerIntegration:{passed:false,productionQualified:false,privatePath:'synthetic-private-path'}});
+ assert.equal(summary?.failingCheck,'reference_worker_integration');assert.equal(summary?.testsPassed,10);assert.equal(summary?.formatsPassed,7);
+ const diagnostic=new ArchiveHostRunError('qualification_canary',{code:'ERR_ASSERTION'},summary).diagnostic;
+ assert.equal(diagnostic.canary?.failingCheck,'reference_worker_integration');assert.doesNotMatch(JSON.stringify(diagnostic),/synthetic-private-path|productionQualified|referenceWorkerIntegration/);
 });
 test('failed CPU threshold retains bounded measurements and exact check through host journal sanitization',()=>{
  const privateText='synthetic-private-cpu-output',cpuObservation={cpuNs:499999000,wallNs:2400000000,children:2,cgroupUsageUsec:512345,cgroupsObserved:1,elapsedMs:2444,executionCode:null,rawOutput:privateText};
