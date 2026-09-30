@@ -79,6 +79,36 @@ for(const postgres of [false,true])test(`${postgres?'PostgreSQL':'PGlite'} trust
    return transaction(db=>selectCompanyRuntimeConfiguration(db,a.member,entry.service,{clientId:randomUUID(),expectedRevision,phase:'service',expiresAt:entry.expiresAt,preset:entry,configurationHash:companyRuntimeHash(entry)}));
   }
   const revokeRuntime=(a:Awaited<ReturnType<typeof fixture>>,expectedRevision=1)=>transaction(db=>revokeCompanyRuntimeConfiguration(db,a.member,'gateway',{clientId:randomUUID(),expectedRevision}));
+  for(const service of ['gateway','archive'] as const)for(const point of ['before_reconcile','database_preflight','create','running_read'] as const)await t.test(`timestamp-only ${service} owner revocation at ${point} fences paid service lifecycle`,async()=>{
+   const a=await fixture(),p=(await a.plan(service)).provision,cloud=provider();await a.start(p);
+   const revoke=async()=>{await query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[a.companyId,a.userId]);};
+   if(point==='before_reconcile')await revoke();
+   if(point==='create')cloud.onCreate(revoke);
+   if(point==='running_read'){await reconcile(p.id,cloud);cloud.onRead(revoke);}
+   await reconcileTrustedService(p.id,{fetch:cloud.fetch,verifyDatabase:async(...args)=>{await verifiedDatabase(args[0],args[1]);if(point==='database_preflight')await revoke();}});
+   assert.equal((await query('SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2',[a.companyId,a.userId])).rows[0].role,'owner');
+   const submitted=point==='create'||point==='running_read';assert.equal(cloud.creates(),submitted?1:0);assert.equal(cloud.stops(),submitted?1:0);
+   if(submitted)await reconcile(p.id,cloud);const current=await a.get(p.id);assert.equal(current.phase,'stopped');assert.equal(current.billingVerified,false);
+   if(!submitted){assert.equal(current.submittedAt,null);assert.equal(current.podId,null);}
+   assert.equal((await query('SELECT count(*)::int n FROM trusted_service_reservations WHERE provision_id=$1',[p.id])).rows[0].n,1);assert(cloud.calls.every(call=>call.method!=='DELETE'));
+  });
+  for(const mode of ['revocation','expiry'] as const)await t.test(`real PostgreSQL final service admission observes ${mode} across an actual membership row wait`,{skip:!postgres},async()=>{
+   const a=await fixture(),p=(await a.plan('gateway')).provision,cloud=provider();await a.start(p);if(mode==='expiry')await query("UPDATE trusted_service_provisions SET expires_at=clock_timestamp()+interval '3 seconds' WHERE id=$1",[p.id]);
+   const holder=await app!.connect(),holderPid=(await holder.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;let pending:Promise<unknown>|undefined;
+   try{
+    pending=reconcileTrustedService(p.id,{fetch:cloud.fetch,verifyDatabase:async()=>{await holder.query('BEGIN');await holder.query('SELECT user_id FROM memberships WHERE company_id=$1 AND user_id=$2 FOR UPDATE',[a.companyId,a.userId]);}});let blocked=false;
+    for(let i=0;i<200;i++){const waits=await query('SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid))',[holderPid]);if(waits.rowCount){blocked=true;break;}await new Promise(resolve=>setTimeout(resolve,10));}
+    assert(blocked,'The final service admission must actually block on the current owner membership.');assert.equal(cloud.creates(),0);
+    if(mode==='revocation')await holder.query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[a.companyId,a.userId]);
+    else await holder.query('SELECT pg_sleep(GREATEST(0,extract(epoch FROM expires_at-clock_timestamp()))+0.05) FROM trusted_service_provisions WHERE id=$1',[p.id]);
+    await holder.query('COMMIT');await pending;const current=await a.get(p.id);assert.equal(cloud.creates(),0);assert.equal(current.phase,'stopped');assert.equal(current.submittedAt,null);assert.equal(current.podId,null);assert.equal((await query('SELECT count(*)::int n FROM trusted_service_reservations WHERE provision_id=$1',[p.id])).rows[0].n,1);
+   }finally{await holder.query('ROLLBACK');holder.release();await pending;}
+  });
+  await t.test('service deadline ending after private environment verification cannot cross the atomic paid submission fence',async()=>{
+   const a=await fixture(),p=(await a.plan('gateway')).provision,cloud=provider();await a.start(p);let expired=false;
+   const guarded:typeof transaction=async fn=>transaction(db=>{const wrapped=Object.create(db);wrapped.query=async(text:string,values?:unknown[])=>{if(!expired&&text.startsWith("UPDATE trusted_service_provisions SET phase='submitting'")){expired=true;await db.query("UPDATE trusted_service_provisions SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[p.id]);}return db.query(text,values);};return fn(wrapped);});
+   await reconcileTrustedService(p.id,{fetch:cloud.fetch,verifyDatabase:verifiedDatabase,transaction:guarded});assert(expired);assert.equal(cloud.creates(),0);const current=await a.get(p.id);assert.equal(current.phase,'stopped');assert.equal(current.submittedAt,null);assert.equal(current.podId,null);
+  });
   for(const service of ['gateway','archive'] as const)await t.test(`oversized complete ${service} body fails before submission without automatic retry`,async()=>{
    const a=await fixture(),p=(await a.plan(service)).provision,cloud=provider();await a.start(p);
    assert(a.entries.find(entry=>entry.service===service)!.bootstrapArgs.length<100000);

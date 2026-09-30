@@ -47,6 +47,16 @@ test('broker runs real leased API and receipt transactions against isolated prov
  const v2=(f:Awaited<ReturnType<typeof fixture>>,step=0)=>({...f.input(step),protocolVersion:2});
  function batch(...outputs:ReturnType<typeof tool>[]){const output=outputs[0];output.choices[0].message.tool_calls=outputs.flatMap(item=>item.choices[0].message.tool_calls);return output;}
  try{
+  for(const point of ['before_submit','create','running_read'] as const)await t.test(`timestamp-only sponsor revocation at ${point} fences paid inference and preserves cancellation evidence`,async()=>{
+   const f=await fixture(),p=providerFixture();p.setStatus('IN_QUEUE');const job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference,reserved=await transaction(client=>studioInferenceReserved(client,f.company));
+   const revoke=()=>query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[f.company,f.user]);
+   if(point==='before_submit')await revoke();if(point==='running_read')await reconcileStudioInferenceJob(job.id,{fetch:p.transport});let revoked=point==='before_submit';
+   const transport:typeof fetch=async(url,init)=>{const response=await p.transport(url,init);if(!revoked&&(point==='create'&&String(url).endsWith('/run')||point==='running_read'&&String(url).includes('/status/'))){revoked=true;await revoke();}return response;};
+   await reconcileStudioInferenceJob(job.id,{fetch:transport});assert(revoked);await reconcileStudioInferenceJob(job.id,{fetch:p.transport});
+   assert.equal(p.creates(),point==='before_submit'?0:1);if(point!=='before_submit')assert(p.calls.some(call=>call.url.includes('/cancel/')));
+   const row=(await query('SELECT status,output,model_calls,provider_job_id FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0];assert.equal(row.status,'cancelled');assert.equal(row.output,null);assert.deepEqual(row.model_calls,[]);assert.equal(Boolean(row.provider_job_id),point!=='before_submit');
+   await assert.rejects(readStudioInference(f.identity,f.run.id,job.id,f.lease.leaseToken));await assert.rejects(submitStudioInference(f.identity,f.run.id,f.input()));assert.equal(await transaction(client=>studioInferenceReserved(client,f.company)),reserved);
+  });
   await t.test('broker advertises exactly the grant-complete public catalog for an ordinary run',async()=>{
    const capabilities=['studio.read','studio.write','tasks.write'],f=await fixture({capabilities});
    const context=await f.call(`agent/runs/${f.run.id}/context`,'GET',undefined,'agent',200,{'X-Coatria-Run-Lease':f.lease.leaseToken}),catalog=await f.call('agent/tools','GET',undefined,'agent');

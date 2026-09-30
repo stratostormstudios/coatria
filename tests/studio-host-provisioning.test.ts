@@ -60,6 +60,61 @@ test('managed CPU saga uses actual transactions and fake Runpod transport withou
  }
  const revokeRuntime=(a:Awaited<ReturnType<typeof fixture>>,expectedRevision=1)=>transaction(db=>revokeCompanyRuntimeConfiguration(db,a.member,'managed_agent',{clientId:randomUUID(),expectedRevision}));
  try{
+  for(const point of ['before_reconcile','catalog','create','running_read'] as const)await t.test(`timestamp-only owner revocation at ${point} fences paid CPU lifecycle`,async()=>{
+   const a=await fixture(),p=(await a.plan()).provision,cloud=transportFixture();await a.start(p);
+   const revoke=()=>query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[a.companyId,a.userId]);
+   if(point==='before_reconcile')await revoke();
+   if(point==='running_read'){await reconcile(p.id,cloud);cloud.pods[0].status='RUNNING';}
+   let revoked=point==='before_reconcile';const transport:typeof fetch=async(url,init)=>{const response=await cloud.transport(url,init),path=new URL(String(url)).pathname;
+    if(!revoked&&(point==='catalog'&&path.includes('/catalog/')||point==='create'&&path==='/v2/pods'&&init?.method==='POST'||point==='running_read'&&path==='/v2/pods/'+cloud.pods[0].id)){revoked=true;await revoke();}return response;};
+   await reconcileStudioHostProvision(p.id,{fetch:transport});assert(revoked);
+   assert.equal((await query('SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2',[a.companyId,a.userId])).rows[0].role,'owner');
+   const submitted=point==='create'||point==='running_read';assert.equal(cloud.creates(),submitted?1:0);assert.equal(cloud.stops(),submitted?1:0);
+   if(submitted)await reconcile(p.id,cloud);const current=await a.get(p.id);assert.equal(current.phase,'stopped');assert.equal(current.billingVerified,false);
+   if(!submitted){assert.equal(current.submittedAt,null);assert.equal(current.podId,null);}
+   assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE provision_id=$1',[p.id])).rows[0].count),1);assert(cloud.calls.every(call=>call.method!=='DELETE'));
+  });
+  await t.test('timestamp-only separate agent sponsor revocation during preflight blocks paid CPU submission',async()=>{
+   const a=await fixture(),sponsor=await fixture();await query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'admin')",[a.companyId,sponsor.userId]);
+   await query('UPDATE agents SET created_by=$2 WHERE id=$1',[a.installation.agentId,sponsor.userId]);const p=(await a.plan()).provision,cloud=transportFixture();await a.start(p);let revoked=false;
+   const transport:typeof fetch=async(url,init)=>{const response=await cloud.transport(url,init);if(!revoked&&String(url).includes('/catalog/')){revoked=true;await query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[a.companyId,sponsor.userId]);}return response;};
+   await reconcileStudioHostProvision(p.id,{fetch:transport});const current=await a.get(p.id);assert.equal(cloud.creates(),0);assert.equal(current.phase,'stopped');assert.equal(current.submittedAt,null);assert.equal(current.podId,null);
+   assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE provision_id=$1',[p.id])).rows[0].count),1);
+  });
+  for(const point of ['catalog','create'] as const)await t.test(`timestamp-only separate host administrator revocation at ${point} fences paid CPU lifecycle`,async()=>{
+   const a=await fixture(),administrator=await fixture();await query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'admin')",[a.companyId,administrator.userId]);
+   const member={...administrator.member,companyId:a.companyId,role:'admin'} as Membership,p=(await a.plan()).provision,cloud=transportFixture();
+   await memberMutation(member,true,client=>startStudioHostProvision(client,member,p.id,{clientId:randomUUID(),revision:p.revision,planHash:p.planHash,acknowledgeCharges:true,activateAgents:true}));let revoked=false;
+   const transport:typeof fetch=async(url,init)=>{const response=await cloud.transport(url,init),path=new URL(String(url)).pathname;
+    if(!revoked&&(point==='catalog'&&path.includes('/catalog/')||point==='create'&&path==='/v2/pods'&&init?.method==='POST')){revoked=true;await query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[a.companyId,administrator.userId]);}return response;};
+   await reconcileStudioHostProvision(p.id,{fetch:transport});assert.equal(cloud.creates(),point==='create'?1:0);assert.equal(cloud.stops(),point==='create'?1:0);
+   if(point==='create')await reconcile(p.id,cloud);assert.equal((await a.get(p.id)).phase,'stopped');assert.equal((await query('SELECT access_revoked_at FROM memberships WHERE company_id=$1 AND user_id=$2',[a.companyId,a.userId])).rows[0].access_revoked_at,null);
+  });
+  await t.test('timestamp-only original requester revocation during preflight blocks CPU despite a separate live host administrator and agent sponsor',async()=>{
+   const a=await fixture(),administrator=await fixture();await query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'admin')",[a.companyId,administrator.userId]);await query('UPDATE agents SET created_by=$2 WHERE id=$1',[a.installation.agentId,administrator.userId]);
+   const member={...administrator.member,companyId:a.companyId,role:'admin'} as Membership,p=(await a.plan()).provision,cloud=transportFixture();
+   await memberMutation(member,true,client=>startStudioHostProvision(client,member,p.id,{clientId:randomUUID(),revision:p.revision,planHash:p.planHash,acknowledgeCharges:true,activateAgents:true}));let revoked=false;
+   const transport:typeof fetch=async(url,init)=>{const response=await cloud.transport(url,init);if(!revoked&&String(url).includes('/catalog/')){revoked=true;await query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[a.companyId,a.userId]);}return response;};
+   await reconcileStudioHostProvision(p.id,{fetch:transport});const current=await a.get(p.id);assert.equal(cloud.creates(),0);assert.equal(current.phase,'stopped');assert.equal(current.submittedAt,null);assert.equal(current.podId,null);
+   assert.equal((await query('SELECT access_revoked_at FROM memberships WHERE company_id=$1 AND user_id=$2',[a.companyId,administrator.userId])).rows[0].access_revoked_at,null);assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE provision_id=$1',[p.id])).rows[0].count),1);
+  });
+  await t.test('real PostgreSQL final CPU admission waits for a distinct sponsor membership and observes committed timestamp revocation',{skip:emulate},async()=>{
+   const a=await fixture(),sponsor=await fixture();await query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'admin')",[a.companyId,sponsor.userId]);await query('UPDATE agents SET created_by=$2 WHERE id=$1',[a.installation.agentId,sponsor.userId]);
+   const p=(await a.plan()).provision,cloud=transportFixture();await a.start(p);const holder=await database().connect(),holderPid=(await holder.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;let held=false,pending:Promise<unknown>|undefined;
+   try{
+    const transport:typeof fetch=async(url,init)=>{const response=await cloud.transport(url,init);if(!held&&String(url).includes('/catalog/')){held=true;await holder.query('BEGIN');await holder.query('SELECT user_id FROM memberships WHERE company_id=$1 AND user_id=$2 FOR UPDATE',[a.companyId,sponsor.userId]);}return response;};
+    pending=reconcileStudioHostProvision(p.id,{fetch:transport});let blocked=false;
+    for(let i=0;i<200;i++){const waits=await query('SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid))',[holderPid]);if(waits.rowCount){blocked=true;break;}await new Promise(resolve=>setTimeout(resolve,10));}
+    assert(blocked,'The final admission must actually block on the distinct sponsor membership row.');assert.equal(cloud.creates(),0);
+    await holder.query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[a.companyId,sponsor.userId]);await holder.query('COMMIT');await pending;
+    const current=await a.get(p.id);assert.equal(cloud.creates(),0);assert.equal(current.phase,'stopped');assert.equal(current.submittedAt,null);assert.equal(current.podId,null);assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE provision_id=$1',[p.id])).rows[0].count),1);
+   }finally{await holder.query('ROLLBACK');holder.release();await pending;}
+  });
+  await t.test('CPU deadline ending after binding reads cannot cross the atomic paid submission fence',async()=>{
+   const a=await fixture(),p=(await a.plan()).provision,cloud=transportFixture();await a.start(p);let expired=false;
+   const guarded:typeof transaction=async fn=>transaction(client=>{const wrapped=Object.create(client);wrapped.query=async(text:string,values?:unknown[])=>{const result=await client.query(text,values);if(!expired&&text.startsWith('SELECT count(*)::int AS count FROM studio_host_credentials')){expired=true;await client.query("UPDATE studio_host_provisions SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[p.id]);}return result;};return fn(wrapped);});
+   await reconcileStudioHostProvision(p.id,{fetch:cloud.transport,transaction:guarded});assert(expired);assert.equal(cloud.creates(),0);const current=await a.get(p.id);assert.equal(current.phase,'stopped');assert.equal(current.submittedAt,null);assert.equal(current.podId,null);
+  });
   await t.test('oversized complete CPU body fails before submission and is never retried after environment repair',async()=>{
    const a=await fixture(),plan=(await a.plan()).provision,cloud=transportFixture();await a.start(plan);
    assert(studioCpuPreset(a.companyId).bootstrapArgs.length<100000);
