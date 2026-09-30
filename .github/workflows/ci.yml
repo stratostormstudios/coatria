@@ -17,6 +17,22 @@ jobs:
     # prove the same user/pid/net namespace boundary as the intended worker host.
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    services:
+      postgres:
+        # Disposable local metadata only; these credentials never enter the
+        # credential-free qualifier or the installed reference worker.
+        image: postgres:17@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_USER: coatria_test
+          POSTGRES_PASSWORD: local_ci_test_only
+          POSTGRES_DB: coatria_reference_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U coatria_test -d coatria_reference_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,7 +45,7 @@ jobs:
       - name: Typecheck media qualification and diagnostic modules
         run: node node_modules/typescript/bin/tsc --noEmit --allowJs --allowImportingTsExtensions --strict --skipLibCheck --target ES2022 --module esnext --moduleResolution bundler --esModuleInterop scripts/hosting/media-sandbox-linux-canary.mts scripts/hosting/media-sandbox-startup-diagnostic.test.mts scripts/hosting/reference-worker-linux-canary.test.mts scripts/hosting/run-archive-host.mts scripts/hosting/qualify-reference-host.mts scripts/hosting/register-reference-host.mts tests/archive-host-package.test.ts tests/reference-host-package.test.ts tests/reference-host-qualification.test.ts tests/reference-host-enrollment.test.ts tests/reference-enrollment-transaction.test.ts tests/reference-enrollment-postgres.test.ts
       - name: Test bounded diagnostic classification and fail-closed invocation
-        run: node --import tsx --test scripts/hosting/media-sandbox-startup-diagnostic.test.mts scripts/hosting/reference-worker-linux-canary.test.mts scripts/hosting/media-apparmor-ci.test.mjs scripts/hosting/reference-host-ci.test.mjs
+        run: node --import tsx --test scripts/hosting/media-sandbox-startup-diagnostic.test.mts scripts/hosting/reference-worker-linux-canary.test.mts scripts/hosting/media-apparmor-ci.test.mjs scripts/hosting/reference-host-ci.test.mjs scripts/hosting/reference-enrollment-ci.test.mjs
       - name: Prepare pinned closure and one capped delegated service
         run: |
           sudo env CI=true COATRIA_TEST_UID="$(id -u)" COATRIA_TEST_GID="$(id -g)" GITHUB_ENV="$GITHUB_ENV" "$(command -v node)" scripts/hosting/prepare-media-sandbox-ci.mjs
@@ -42,6 +58,9 @@ jobs:
       - name: Qualify the exact reference-only install twice without enrollment or credentials
         run: |
           sudo env CI=true GITHUB_SHA="$GITHUB_SHA" COATRIA_MEDIA_QUALIFICATION="$COATRIA_MEDIA_QUALIFICATION" COATRIA_NPM_CACHE="$(npm config get cache)" "$(command -v node)" scripts/hosting/qualify-reference-host-ci.mjs
+      - name: Exercise the compiled registrar against installed qualification and local restricted PostgreSQL
+        run: |
+          sudo env CI=true GITHUB_SHA="$GITHUB_SHA" COATRIA_MEDIA_QUALIFICATION="$COATRIA_MEDIA_QUALIFICATION" "$(command -v node)" scripts/hosting/qualify-reference-enrollment-ci.mjs
       - name: Preserve scoped AppArmor mode and sanitized kernel denial categories
         if: always() && env.COATRIA_MEDIA_QUALIFICATION != ''
         run: |
