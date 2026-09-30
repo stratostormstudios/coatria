@@ -9,6 +9,7 @@ import {createProjectStorageConnection,bindProjectStorage} from '../src/lib/proj
 import {sealHiggsfieldSecret} from '../src/lib/higgsfield-secrets';
 import {hashToken} from '../src/lib/security';
 import {createHiggsfieldReferenceService} from '../src/lib/higgsfield-reference-service';
+import {dropFixtureDatabase} from './fixtures/postgres-teardown';
 import * as refs from '../src/lib/higgsfield-references';
 
 const integration=process.env.COATRIA_INTEGRATION_DATABASE_URL;
@@ -265,7 +266,7 @@ test('PostgreSQL independent reference broker LOGIN fences authority and execute
  }finally{
   globalThis.fetch=priorFetch;if(priorKey===undefined)delete process.env.COATRIA_HOSTING_KEYRING;else process.env.COATRIA_HOSTING_KEYRING=priorKey;
   await broker?.end();await app?.end();await owner?.end();
-  if(created)await controlClient!.query('DROP DATABASE '+dbName+' WITH (FORCE)');
+  if(created)await dropFixtureDatabase(controlClient!,dbName);
   if(roleAbsent&&(await controlClient!.query('SELECT 1 FROM pg_roles WHERE rolname=$1',[ROLE])).rowCount)await controlClient!.query('DROP ROLE '+ROLE);
   for(const role of auxiliary)await controlClient!.query('DROP ROLE '+role);
   if(controlClient){await controlClient.query('SELECT pg_advisory_unlock(739284011)');controlClient.release();}await control.end();
