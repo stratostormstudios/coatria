@@ -72,3 +72,44 @@ test('expired authority permits only a bounded failure receipt, never another cl
  await client.fail(f.lease,{code:'REFERENCE_AUTHORITY_CHANGED',uncertain:false});assert.equal(f.calls.length,1);assert.equal(f.calls[0].operation,'fail');
  await assert.rejects(client.claim(signal()),ReferenceServiceClientError);await assert.rejects(client.broker.allocate(f.lease,signal()),ReferenceServiceClientError);assert.equal(f.calls.length,1);
 });
+
+function deferred<T>(){let resolve!:(value:T)=>void,reject!:(error:unknown)=>void;const promise=new Promise<T>((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
+const turn=()=>new Promise<void>(resolve=>setTimeout(resolve,10));
+test('binary cancellation awaits the raw body and its rejection poisons only safe client state',async()=>{
+ for(const rejected of [false,true]){
+  const f=fixture(),finish=deferred<void>();let started=0,cancelSettled=false,drainSettled=false;
+  f.setHandler(()=>new Response(new ReadableStream({cancel(){started++;return finish.promise;}}),{headers:f.headers}));
+  const client=f.client(),source=await client.readProxy(f.lease,signal());
+  const cancelled=source.stream.cancel().then(()=>{cancelSettled=true;return null;},error=>{cancelSettled=true;return error;});
+  const drained=client.drain().then(()=>{drainSettled=true;return null;},error=>{drainSettled=true;return error;});
+  await turn();assert.equal(started,1);assert.equal(cancelSettled,false);assert.equal(drainSettled,false);
+  if(rejected)finish.reject(Error('private raw cancellation detail'));else finish.resolve();
+  for(const result of [await cancelled,await drained])if(rejected){assert(result instanceof ReferenceServiceClientError);assert(!String(result).includes('private'));}else assert.equal(result,null);
+  if(rejected){await assert.rejects(client.readiness!(signal()),ReferenceServiceClientError);assert.equal(f.calls.length,1,'Failed cleanup cannot be followed by another transport request');}
+ }
+});
+test('JSON deadline stays bounded while the exact raw body cancellation remains owned by drain',async()=>{
+ const f=fixture(),finish=deferred<void>();f.options.requestTimeoutMs=20;let cancelled=0,settled=false;
+ f.setHandler(()=>new Response(new ReadableStream({cancel(){cancelled++;return finish.promise;}}),{headers:{'content-type':'application/json'}}));
+ const client=f.client(),start=Date.now();await assert.rejects(client.claim(signal()),ReferenceServiceClientError);assert(Date.now()-start<1000);assert.equal(cancelled,1);
+ const drained=client.drain().then(()=>{settled=true;});await turn();assert.equal(settled,false);finish.resolve();await drained;assert.equal(f.calls.length,1);
+});
+test('client raw cancellation rejection drains local worker scratch and cannot admit another claim',async t=>{
+ const f=fixture(),entered=deferred<void>(),stop=new AbortController(),scratch=await mkdtemp(join(tmpdir(),'coatria-reference-cancel-rejected-'));t.after(()=>rm(scratch,{recursive:true,force:true}));let cancels=0;
+ f.setHandler(op=>op==='readiness'?json({readiness:f.readiness}):op==='claim'?json({lease:f.lease}):op==='authorize'?json({authorized:true}):op==='read-proxy'?(entered.resolve(),new Response(new ReadableStream({cancel(){cancels++;throw Error('private raw cancellation detail');}}),{headers:f.headers})):json({ok:true}));
+ const client=f.client(),worker=createHiggsfieldReferenceWorker({companyId:f.options.companyId,projectIds:f.options.projectIds,scratchRoot:scratch,inspectionProfileSha256:profile,cleanupTimeoutMs:100},{...client,inspectMedia:async()=>{assert.fail('Stalled source cannot be inspected');},upload:async()=>{assert.fail('Inspection cannot upload');}});
+ const attempt=worker.runNext({signal:stop.signal});await entered.promise;await turn();stop.abort();const result=await attempt;
+ assert.equal(result.status,'failed');assert(!JSON.stringify(result).includes('private'));assert.equal(cancels,1);assert.deepEqual(await readdir(scratch),[]);assert.equal((await worker.runNext()).status,'disabled');assert.equal(f.calls.filter(c=>c.operation==='claim').length,1);assert.equal(f.calls.filter(c=>['allocate','begin-put','confirm'].includes(c.operation)).length,0);await assert.rejects(client.drain(),ReferenceServiceClientError);
+});
+test('late raw fetch and cancellation stay owned after worker cleanup timeout, without retries',async t=>{
+ for(const rejected of [false,true]){
+  const f=fixture(),response=deferred<Response>(),cancelStarted=deferred<void>(),finishCancel=deferred<void>(),scratch=await mkdtemp(join(tmpdir(),'coatria-reference-late-transport-'));t.after(()=>rm(scratch,{recursive:true,force:true}));f.options.requestTimeoutMs=20;let cancels=0;
+  f.setHandler(op=>op==='readiness'?json({readiness:f.readiness}):op==='claim'?json({lease:f.lease}):op==='authorize'?json({authorized:true}):op==='read-proxy'?response.promise:json({ok:true}));
+  const client=f.client(),worker=createHiggsfieldReferenceWorker({companyId:f.options.companyId,projectIds:f.options.projectIds,scratchRoot:scratch,inspectionProfileSha256:profile,cleanupTimeoutMs:25},{...client,inspectMedia:async()=>{assert.fail('Late source cannot be inspected');},upload:async()=>{assert.fail('Inspection cannot upload');}});
+  const start=Date.now(),result=await worker.runNext();assert(Date.now()-start<1000);assert.equal(result.status,'failed');assert.equal((await worker.runNext()).status,'disabled');assert.equal((await readdir(scratch)).length,1);
+  response.resolve(new Response(new ReadableStream({cancel(){cancels++;cancelStarted.resolve();return finishCancel.promise;}}),{headers:f.headers}));await cancelStarted.promise;
+  let settled=false;const drained=client.drain().then(()=>{settled=true;return null;},error=>{settled=true;return error;});await turn();assert.equal(settled,false);assert.equal((await readdir(scratch)).length,1);
+  if(rejected)finishCancel.reject(Error('private late cancellation detail'));else finishCancel.resolve();const failure=await drained;if(rejected){assert(failure instanceof ReferenceServiceClientError);assert(!String(failure).includes('private'));}else assert.equal(failure,null);
+  for(let i=0;i<50&&(await readdir(scratch)).length;i++)await turn();assert.deepEqual(await readdir(scratch),[]);assert.equal(cancels,1);assert.equal((await worker.runNext()).status,'disabled');assert.equal(f.calls.filter(c=>c.operation==='claim').length,1);assert.equal(f.calls.filter(c=>['allocate','begin-put','confirm'].includes(c.operation)).length,0);
+ }
+});

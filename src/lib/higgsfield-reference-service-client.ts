@@ -20,7 +20,7 @@ const allocationSchema=z.object({mediaId:uuid,uploadUrl:z.string().url().max(819
 const okay=z.object({ok:z.literal(true)}).strict();
 export type ReferenceServiceClientOptions={origin:string;serviceId:string;companyId:string;projectIds:readonly string[];token:string;expiresAt:string;profileSha256:string;qualificationSha256:string;requestTimeoutMs?:number};
 type Transport={fetch?:typeof fetch};
-export type ReferenceServiceClient=Pick<HiggsfieldReferenceWorkerDependencies,'readiness'|'claim'|'authorize'|'readProxy'|'recordInspection'|'beginPut'|'completePut'|'fail'|'broker'>;
+export type ReferenceServiceClient=Pick<HiggsfieldReferenceWorkerDependencies,'readiness'|'claim'|'authorize'|'readProxy'|'recordInspection'|'beginPut'|'completePut'|'fail'|'broker'>&{drain:()=>Promise<void>};
 
 export function referenceServiceOrigin(value:string){
  let url:URL;try{url=new URL(value);}catch{return fail('REFERENCE_SERVICE_CONFIGURATION_INVALID');}
@@ -34,45 +34,57 @@ function requestScope(signal:AbortSignal|undefined,timeoutMs:number){
  const current=()=>{if(controller.signal.aborted)fail('REFERENCE_SERVICE_ABORTED');};
  return {signal:controller.signal,current,close(){clearTimeout(timer);signal?.removeEventListener('abort',abort);},bound<T>(promise:Promise<T>):Promise<T>{return new Promise((resolve,reject)=>{const stopped=()=>{controller.signal.removeEventListener('abort',stopped);reject(new ReferenceServiceClientError('REFERENCE_SERVICE_ABORTED'));};controller.signal.addEventListener('abort',stopped,{once:true});promise.then(v=>{controller.signal.removeEventListener('abort',stopped);try{current();resolve(v);}catch(e){reject(e);}},()=>{controller.signal.removeEventListener('abort',stopped);reject(new ReferenceServiceClientError('REFERENCE_SERVICE_UNAVAILABLE'));});if(controller.signal.aborted)stopped();});}};
 }
-async function boundedJson(response:Response,scope:ReturnType<typeof requestScope>){
+async function boundedJson(response:Response,scope:ReturnType<typeof requestScope>,readerFor:()=>ReadableStreamDefaultReader<Uint8Array>){
  if(!response.body||response.headers.get('content-type')?.split(';')[0].trim()!=='application/json')fail('REFERENCE_SERVICE_RESPONSE_INVALID');
  const length=response.headers.get('content-length');if(length!==null&&(!/^(0|[1-9]\d*)$/.test(length)||Number(length)>65536))fail('REFERENCE_SERVICE_RESPONSE_INVALID');
- const reader=response.body.getReader(),chunks:Uint8Array[]=[];let bytes=0;
- try{for(;;){const next=await scope.bound(reader.read());if(next.done)break;if(!(next.value instanceof Uint8Array)||(bytes+=next.value.byteLength)>65536)fail('REFERENCE_SERVICE_RESPONSE_INVALID');chunks.push(next.value);}if(length!==null&&bytes!==Number(length))fail('REFERENCE_SERVICE_RESPONSE_INVALID');try{return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;}catch{return fail('REFERENCE_SERVICE_RESPONSE_INVALID');}}
- finally{void reader.cancel().catch(()=>{});reader.releaseLock();}
+ const reader=readerFor(),chunks:Uint8Array[]=[];let bytes=0;
+ for(;;){const next=await scope.bound(reader.read());if(next.done)break;if(!(next.value instanceof Uint8Array)||(bytes+=next.value.byteLength)>65536)fail('REFERENCE_SERVICE_RESPONSE_INVALID');chunks.push(next.value);}if(length!==null&&bytes!==Number(length))fail('REFERENCE_SERVICE_RESPONSE_INVALID');try{return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;}catch{return fail('REFERENCE_SERVICE_RESPONSE_INVALID');}
 }
 export function createHiggsfieldReferenceServiceClient(options:ReferenceServiceClientOptions,transport:Transport={}):ReferenceServiceClient {
  const origin=referenceServiceOrigin(options.origin),serviceId=valid(uuid,options.serviceId),companyId=valid(uuid,options.companyId),projects=new Set(options.projectIds),expiry=Date.parse(options.expiresAt),timeout=options.requestTimeoutMs??25000;
  if(!/^rfs_[A-Za-z0-9_-]{43}$/.test(options.token)||!hash.safeParse(options.profileSha256).success||!hash.safeParse(options.qualificationSha256).success||!date.safeParse(options.expiresAt).success||!Number.isFinite(expiry)||expiry<=Date.now()||expiry-Date.now()>86400000||!projects.size||projects.size>100||projects.size!==options.projectIds.length||options.projectIds.some(id=>!uuid.safeParse(id).success)||!Number.isSafeInteger(timeout)||timeout<1||timeout>30000)fail('REFERENCE_SERVICE_CONFIGURATION_INVALID');
  const token=options.token,profileSha256=options.profileSha256,qualificationSha256=options.qualificationSha256,send=transport.fetch??fetch;
+ const pending=new Set<Promise<unknown>>();let cleanupFailed=false;
+ function track<T>(value:Promise<T>){pending.add(value);void value.then(()=>pending.delete(value),()=>pending.delete(value));return value;}
+ // RPC deadlines bound the caller's wait, not ownership of the raw transport.
+ // Worker shutdown separately drains these exact promises before new admission.
+ function own(response:Response){
+  let reader:ReadableStreamDefaultReader<Uint8Array>|undefined,cancellation:Promise<void>|undefined;
+  return {response,reader:()=>{if(!response.body)fail('REFERENCE_SERVICE_RESPONSE_INVALID');return reader??=response.body.getReader();},cancel:()=>cancellation??=track(Promise.resolve().then(async()=>{
+   try{if(reader)await reader.cancel();else await response.body?.cancel();}
+   finally{reader?.releaseLock();}
+  }).catch(()=>{cleanupFailed=true;throw new ReferenceServiceClientError('REFERENCE_SERVICE_UNAVAILABLE');}))};
+ }
  function identity(lease:HiggsfieldReferenceLease,cleanup=false){if(lease.companyId!==companyId||!projects.has(lease.projectId)||!uuid.safeParse(lease.referenceId).success||!uuid.safeParse(lease.leaseId).success||!hash.safeParse(lease.requestHash).success||!date.safeParse(lease.expiresAt).success||!cleanup&&Date.parse(lease.expiresAt)<=Date.now()||Date.parse(lease.expiresAt)>expiry)fail('REFERENCE_SERVICE_CONFIGURATION_INVALID');return {referenceId:lease.referenceId,leaseId:lease.leaseId,requestHash:lease.requestHash};}
  async function start(operation:string,body:Record<string,unknown>,signal?:AbortSignal){
   // Failure receipts alone use the server's finite cleanup grace. This cannot
   // read bytes, renew a lease, allocate media or resume a provider phase.
-  const deadline=expiry+(operation==='fail'?600000:0);if(deadline<=Date.now())fail('REFERENCE_SERVICE_ABORTED');const scope=requestScope(signal,Math.min(timeout,operation==='fail'?5000:30000,deadline-Date.now()));let response:Response|undefined;
-  try{scope.current();const pending=send(`${origin}/api/internal/reference-services/${serviceId}/${operation}`,{method:'POST',redirect:'error',cache:'no-store',credentials:'omit',headers:{authorization:'Bearer '+token,'content-type':'application/json','accept':operation==='read-proxy'?'image/png, image/jpeg, image/webp':'application/json'},body:JSON.stringify({requestId:randomUUID(),...body}),signal:scope.signal});
-   void pending.then(value=>{if(scope.signal.aborted)void value.body?.cancel().catch(()=>{});},()=>{});response=await scope.bound(pending);scope.current();
-   if(response.status!==200||response.redirected||response.headers.has('content-range')||response.headers.has('content-encoding')&&response.headers.get('content-encoding')!=='identity')fail('REFERENCE_SERVICE_RESPONSE_INVALID');return {response,scope};
-  }catch(error){scope.close();void response?.body?.cancel().catch(()=>{});throw error instanceof ReferenceServiceClientError?error:new ReferenceServiceClientError('REFERENCE_SERVICE_UNAVAILABLE');}
+  if(cleanupFailed)fail('REFERENCE_SERVICE_UNAVAILABLE');
+  const deadline=expiry+(operation==='fail'?600000:0);if(deadline<=Date.now())fail('REFERENCE_SERVICE_ABORTED');const scope=requestScope(signal,Math.min(timeout,operation==='fail'?5000:30000,deadline-Date.now()));let owned:ReturnType<typeof own>|undefined,abandoned=false;
+  try{scope.current();const request=track(Promise.resolve(send(`${origin}/api/internal/reference-services/${serviceId}/${operation}`,{method:'POST',redirect:'error',cache:'no-store',credentials:'omit',headers:{authorization:'Bearer '+token,'content-type':'application/json','accept':operation==='read-proxy'?'image/png, image/jpeg, image/webp':'application/json'},body:JSON.stringify({requestId:randomUUID(),...body}),signal:scope.signal})).then(value=>{const result=own(value);owned=result;if(scope.signal.aborted||abandoned)void result.cancel().catch(()=>{});return result;}));
+   owned=await scope.bound(request);scope.current();const response=owned.response;
+   if(response.status!==200||response.redirected||response.headers.has('content-range')||response.headers.has('content-encoding')&&response.headers.get('content-encoding')!=='identity')fail('REFERENCE_SERVICE_RESPONSE_INVALID');return {...owned,scope};
+  }catch(error){abandoned=true;scope.close();void owned?.cancel().catch(()=>{});throw error instanceof ReferenceServiceClientError?error:new ReferenceServiceClientError('REFERENCE_SERVICE_UNAVAILABLE');}
  }
- async function json<T>(operation:string,body:Record<string,unknown>,schema:z.ZodType<T>,signal?:AbortSignal){const {response,scope}=await start(operation,body,signal);try{return valid(schema,await boundedJson(response,scope));}finally{scope.close();void response.body?.cancel().catch(()=>{});}}
+ async function json<T>(operation:string,body:Record<string,unknown>,schema:z.ZodType<T>,signal?:AbortSignal){const owned=await start(operation,body,signal),{response,scope}=owned;try{const result=valid(schema,await boundedJson(response,scope,owned.reader));await scope.bound(owned.cancel());return result;}finally{scope.close();void owned.cancel().catch(()=>{});}}
  const bound=async(operation:string,lease:HiggsfieldReferenceLease,extra:Record<string,unknown>,signal?:AbortSignal)=>{await json(operation,{...identity(lease,operation==='fail'),...extra},okay,signal);};
  return {
+  drain:async()=>{while(pending.size)await Promise.allSettled([...pending]);if(cleanupFailed)fail('REFERENCE_SERVICE_UNAVAILABLE');},
   readiness:async signal=>{const {readiness}=await json('readiness',{},z.object({readiness:readinessSchema}).strict(),signal);if(readiness.profileSha256!==profileSha256||readiness.qualificationSha256!==qualificationSha256||Date.parse(readiness.expiresAt)>expiry||Date.parse(readiness.expiresAt)<=Date.now())fail('REFERENCE_SERVICE_RESPONSE_INVALID');return readiness;},
   claim:async signal=>{const {lease}=await json('claim',{},z.object({lease:leaseSchema.nullable()}).strict(),signal);if(lease)identity(lease);return lease;},
   authorize:async(lease,signal)=>(await json('authorize',identity(lease),z.object({authorized:z.literal(true)}).strict(),signal)).authorized,
   readProxy:async(lease,signal)=>{
-   const {response,scope}=await start('read-proxy',identity(lease),signal);let reader:ReadableStreamDefaultReader<Uint8Array>|undefined;
+   const owned=await start('read-proxy',identity(lease),signal),{response,scope}=owned;
    try{
     const bytes=response.headers.get('content-length'),type=response.headers.get('content-type'),etag=response.headers.get('etag'),sha=response.headers.get('x-coatria-reference-sha256');
     if(!response.body||bytes!==String(lease.proxy.bytes)||type!==lease.proxy.contentType||sha!==lease.proxy.sha256||!etag||etag.length>256||/[\r\n,]/.test(etag)||etag==='*'||etag.startsWith('W/'))fail('REFERENCE_SERVICE_RESPONSE_INVALID');
-    reader=response.body.getReader();let count=0,ended=false,output:ReadableStreamDefaultController<Uint8Array>|undefined;
-    const close=()=>{if(!ended){ended=true;scope.signal.removeEventListener('abort',aborted);scope.close();void reader!.cancel().catch(()=>{});}};
-    const aborted=()=>{close();output?.error(new ReferenceServiceClientError('REFERENCE_SERVICE_ABORTED'));};
-    const stream=new ReadableStream<Uint8Array>({start(controller){output=controller;},async pull(controller){try{scope.current();const part=await scope.bound(reader!.read());if(ended)return;if(part.done){if(count!==lease.proxy.bytes)fail('REFERENCE_SERVICE_RESPONSE_INVALID');close();controller.close();return;}if(!(part.value instanceof Uint8Array)||(count+=part.value.byteLength)>lease.proxy.bytes)fail('REFERENCE_SERVICE_RESPONSE_INVALID');controller.enqueue(part.value);}catch{if(!ended){close();controller.error(new ReferenceServiceClientError('REFERENCE_SERVICE_RESPONSE_INVALID'));}}},cancel(){close();}},{highWaterMark:0});
+    const reader=owned.reader();let count=0,ended=false,outputEnded=false,output:ReadableStreamDefaultController<Uint8Array>|undefined;
+    const close=()=>{if(!ended){ended=true;scope.signal.removeEventListener('abort',aborted);scope.close();}return owned.cancel();};
+    const aborted=()=>{void close().catch(()=>{});if(!outputEnded){outputEnded=true;output?.error(new ReferenceServiceClientError('REFERENCE_SERVICE_ABORTED'));}};
+    const stream=new ReadableStream<Uint8Array>({start(controller){output=controller;},async pull(controller){try{scope.current();const part=await scope.bound(reader.read());if(ended)return;if(part.done){if(count!==lease.proxy.bytes)fail('REFERENCE_SERVICE_RESPONSE_INVALID');await close();if(!outputEnded){outputEnded=true;controller.close();}return;}if(!(part.value instanceof Uint8Array)||(count+=part.value.byteLength)>lease.proxy.bytes)fail('REFERENCE_SERVICE_RESPONSE_INVALID');controller.enqueue(part.value);}catch{void close().catch(()=>{});if(!outputEnded){outputEnded=true;controller.error(new ReferenceServiceClientError('REFERENCE_SERVICE_RESPONSE_INVALID'));}}},cancel(){outputEnded=true;return close();}},{highWaterMark:0});
     scope.signal.addEventListener('abort',aborted,{once:true});if(scope.signal.aborted)aborted();
     return {stream,bytes:lease.proxy.bytes,totalBytes:lease.proxy.bytes,etag,contentType:type,range:null,contentRange:null};
-   }catch(error){scope.close();void (reader?reader.cancel():response.body?.cancel())?.catch(()=>{});throw error instanceof ReferenceServiceClientError?error:new ReferenceServiceClientError('REFERENCE_SERVICE_RESPONSE_INVALID');}
+   }catch(error){scope.close();void owned.cancel().catch(()=>{});throw error instanceof ReferenceServiceClientError?error:new ReferenceServiceClientError('REFERENCE_SERVICE_RESPONSE_INVALID');}
   },
   recordInspection:(lease,inspection,signal)=>bound('inspection',lease,{inspection},signal),
   beginPut:async(lease,signal)=>(await json('begin-put',identity(lease),z.object({actionId:uuid}).strict(),signal)).actionId,

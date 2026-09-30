@@ -30,6 +30,8 @@ export type HiggsfieldReferenceWorkerDependencies={
  /** Omission is disabled. Host, storage, catalog and finite runtime scope are
   * checked again during every authority renewal, not just at process startup. */
  readiness?:(signal:AbortSignal)=>Promise<HiggsfieldReferenceWorkerReadiness>;
+ /** Drain this adapter's raw transport and body cancellation promises. */
+ drain?:()=>Promise<void>;
  claim:(signal:AbortSignal)=>Promise<HiggsfieldReferenceLease|null>;
  authorize:(lease:HiggsfieldReferenceLease,signal:AbortSignal)=>Promise<unknown>;
  /** Exact version + verified ETag read via existing bounded storage adapter;
@@ -140,7 +142,7 @@ export function createHiggsfieldReferenceWorker(options:Options,dependencies:Hig
   const cleanup=(async()=>{
    let clean=true,cancelledReader:ReadableStreamDefaultReader<Uint8Array>|undefined;
    const cancelReader=async()=>{if(reader&&reader!==cancelledReader){cancelledReader=reader;try{await reader.cancel();}catch{clean=false;}}};
-   await Promise.all([scope.drain(),cancelReader()]);
+   await Promise.all([scope.drain(),cancelReader(),(async()=>{try{await dependencies.drain?.();}catch{clean=false;}})()]);
    // A read response may arrive after cancellation; its tracked callback first
    // takes ownership so this final pass cannot lose the late stream.
    await cancelReader();
