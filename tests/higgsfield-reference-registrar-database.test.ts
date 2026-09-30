@@ -102,6 +102,7 @@ test('PostgreSQL registrar LOGIN has exact enrollment grants and no other author
   await owner.query("INSERT INTO users(id,name,email,password_hash) VALUES($1,'Registrar fixture',$2,'not-a-login')",[userId,userId+'@example.invalid']);
   await owner.query("INSERT INTO companies(id,name,slug,template) VALUES($1,'Registrar fixture',$2,'blank')",[companyId,companyId]);
   await owner.query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'owner')",[companyId,userId]);
+  await owner.query("INSERT INTO studio_profiles(company_id,template_id,template_version,created_by) VALUES($1,'ai-production',1,$2)",[companyId,userId]);
   await owner.query("INSERT INTO studio_projects(id,company_id,name,client_name,brief,spec,ai_policy,status,gates,created_by,production_path) VALUES($1,$2,'Registrar fixture','Internal','Synthetic permission test','{}','allowed','production','{}',$3,'higgsfield')",[projectId,companyId,userId]);
   await owner.query("INSERT INTO higgsfield_connections(company_id,id,status,connected_by,sealed,tools,expires_at) VALUES($1,$2,'connected',$3,'{}','[]',clock_timestamp()+interval '1 hour')",[companyId,providerId,userId]);
   await owner.query("INSERT INTO project_storage_connections(id,company_id,name,region,volume_id,secret_envelope,created_by) VALUES($1,$2,'Registrar fixture','US-NC-2','fixture-only','{}',$3)",[connectionId,companyId,userId]);

@@ -190,7 +190,17 @@ test('PostgreSQL independent reference broker LOGIN fences authority and execute
    assert.equal(await claim(),null);assert.equal((await owner!.query('SELECT status FROM higgsfield_references WHERE id=$1',[r.id])).rows[0].status,'uncertain');assert.equal(await claim(),null);
   });
   await t.test('actual service API readiness, claim, authorization and inspection use the independent broker LOGIN',async()=>{
-   const r=(await proposal()).reference,serviceId=randomUUID(),token='rfs_'+randomBytes(32).toString('base64url'),profile='a'.repeat(64);
+   // The preceding broker phase tests retain their legacy v1 project. Operator
+   // enrollment serves a separate v2 project with its own exact source binding.
+   const projectId=randomUUID(),taskId=randomUUID(),workId=randomUUID(),fileId=randomUUID(),versionId=randomUUID();
+   await owner!.query("INSERT INTO studio_projects(id,company_id,name,client_name,brief,spec,ai_policy,status,gates,created_by,production_path,contract_version) VALUES($1,$2,'Reference service fixture','Internal','Exact approved prepared image',$3,'allowed','production',$4,$5,'higgsfield',2)",[projectId,companyId,JSON.stringify({kind:'image',format:'png',width:16,height:16,color:{mode:'not_required'}}),JSON.stringify(Object.fromEntries(['brief','estimate','production'].map(g=>[g,{decision:'approved',recordedBy:userId}]))),userId]);
+   await owner!.query("INSERT INTO tasks(id,company_id,title,created_by) VALUES($1,$2,'Reference service task',$3)",[taskId,companyId,userId]);
+   await owner!.query("INSERT INTO studio_work_items(id,company_id,project_id,logical_key,task_id,stage,role_key,execution) VALUES($1,$2,$3,'reference',$4,'references','comp','creative')",[workId,companyId,projectId,taskId]);
+   const binding=(await ownerTx(db=>bindProjectStorage(db,actor,projectId,{clientId:randomUUID(),revision:0,connectionId:connection.id}))).binding;
+   await owner!.query("INSERT INTO project_storage_files(id,company_id,project_id,binding_id,name,name_key,created_by) VALUES($1,$2,$3,$4,'service-proxy.png','service-proxy.png',$5)",[fileId,companyId,projectId,binding.id,userId]);
+   await owner!.query("INSERT INTO project_storage_versions(id,company_id,project_id,file_id,version,bytes,sha256,content_type,object_key,created_by) VALUES($1,$2,$3,$4,1,100,$5,'image/png',$6,$7)",[versionId,companyId,projectId,fileId,sha,'coatria/companies/'+companyId+'/projects/'+projectId+'/objects/'+versionId,userId]);
+   await owner!.query("INSERT INTO project_storage_verifications(company_id,project_id,version_id,bytes,sha256,provider_etag,gateway_receipt_id) VALUES($1,$2,$3,100,$4,'service-fixture-etag',$5)",[companyId,projectId,versionId,sha,randomUUID()]);
+   const r=(await ownerTx(db=>refs.proposeHiggsfieldReference(db,actor,{clientId:randomUUID(),projectId,projectRevision:1,workItemId:workId,proxyVersionId:versionId,proxyBytes:100,proxySha256:sha,role:'image',purpose:'Exact restricted service fixture'}))).reference,serviceId=randomUUID(),token='rfs_'+randomBytes(32).toString('base64url'),profile='a'.repeat(64);
    const provider=(await owner!.query('SELECT id,revision,tools FROM higgsfield_connections WHERE company_id=$1',[companyId])).rows[0];
    const storage=(await owner!.query('SELECT b.id,b.revision,b.connection_id,c.revision AS connection_revision FROM project_storage_bindings b JOIN project_storage_connections c ON c.company_id=b.company_id AND c.id=b.connection_id WHERE b.company_id=$1 AND b.project_id=$2',[companyId,projectId])).rows[0];
    // Owner setup enrolls only this synthetic finite service. Every handler
