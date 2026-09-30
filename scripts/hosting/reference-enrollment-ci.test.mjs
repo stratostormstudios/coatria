@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {createReferenceEnrollmentCiRegistrar,parseReferenceEnrollmentCiReply,referenceEnrollmentCiDatabaseProof} from './qualify-reference-enrollment-ci.mjs';
+import {readFile,readdir} from 'node:fs/promises';
+import {PGlite} from '@electric-sql/pglite';
+import {createReferenceEnrollmentCiRegistrar,parseReferenceEnrollmentCiReply,referenceEnrollmentCiDatabaseProof,seedReferenceEnrollmentCiDatabase} from './qualify-reference-enrollment-ci.mjs';
 import {makeReferenceEnrollmentIntent,enrollmentBytesHash as hash} from './reference-host-enrollment.mjs';
 import {deriveReferenceRunnerConfiguration,referenceRunnerConfigurationHash} from './reference-runner-identity.mjs';
 import {referenceEnrollmentServiceIdentity,referenceEnrollmentProjectIdentity} from '../../src/lib/higgsfield-reference-enrollment-contract.mjs';
@@ -17,6 +19,20 @@ function fixture(){
  const url=new URL('postgresql://127.0.0.1:5432/coatria_ref_host_ci_'+randomUUID().replaceAll('-',''));url.username='coatria_higgsfield_reference_registrar_v1';url.password='synthetic-stdin-only';
  return {host,scope,registrarSha,scopeSha,scopePath,pending,request,success,url,workerEnv:Buffer.from('COATRIA_REFERENCE_SERVICE_TOKEN='+token+'\n'),rows:{services:[{...referenceEnrollmentServiceIdentity(request),expires_at:request.expiresAt,upload_hosts:request.uploadHosts,revoked_at:null}],projects:referenceEnrollmentProjectIdentity(request),enrollments:[{service_id:serviceId,company_id:companyId,request_id:request.requestId,request_hash:intent.requestHash,identity:request}]}};
 }
+test('actual CI seed preserves installed company and project identities against the complete schema',async()=>{
+ const db=new PGlite(),f=fixture();f.host.scope.projectIds.push(randomUUID());
+ try{
+  for(const name of(await readdir('database')).filter(name=>/^\d.*\.sql$/.test(name)).sort())await db.exec(await readFile('database/'+name,'utf8'));
+  const scope=await seedReferenceEnrollmentCiDatabase(db,f.host);
+  assert.deepEqual((await db.query('SELECT id,slug FROM companies')).rows,[{id:f.host.scope.companyId,slug:f.host.scope.companyId}]);
+  assert.deepEqual(scope.projects.map(p=>p.projectId),f.host.scope.projectIds);
+  for(const project of scope.projects){
+   const row=(await db.query('SELECT p.company_id,p.revision,b.id AS binding_id,b.revision AS binding_revision,b.connection_id,c.revision AS connection_revision,c.secret_envelope FROM studio_projects p JOIN project_storage_bindings b ON b.project_id=p.id AND b.company_id=p.company_id JOIN project_storage_connections c ON c.id=b.connection_id AND c.company_id=b.company_id WHERE p.id=$1',[project.projectId])).rows[0];
+   assert.deepEqual(row,{company_id:f.host.scope.companyId,revision:project.projectRevision,binding_id:project.storageBindingId,binding_revision:project.storageBindingRevision,connection_id:project.storageConnectionId,connection_revision:project.storageConnectionRevision,secret_envelope:{}});
+  }
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM higgsfield_reference_services')).rows[0].n,0);
+ }finally{await db.close();}
+});
 test('compiled registrar command is fixed and synthetic database credential reaches stdin only',()=>{
  const f=fixture(),calls=[],invoke=createReferenceEnrollmentCiRegistrar(f.host,f.registrarSha,f.scopePath,f.scopeSha,(file,args,options)=>{calls.push({file,args,options});return {status:0,stderr:'',stdout:JSON.stringify(f.success)};});
  assert.equal(invoke('enroll',f.url.href).ok,true);const call=calls[0];assert.equal(call.file,f.host.release+'/runtime/node');assert.equal(call.args[0],'/var/lib/coatria-reference-registrars/'+f.registrarSha+'/runtime.mjs');assert.equal(call.args[1],'enroll');assert.deepEqual(call.options.env,{PATH:'/usr/bin:/bin',LANG:'C',LC_ALL:'C'});assert.equal(call.options.shell,false);assert.deepEqual(JSON.parse(call.options.input),{connectionString:f.url.href});assert(!JSON.stringify({file:call.file,args:call.args,env:call.options.env}).includes(f.url.password));

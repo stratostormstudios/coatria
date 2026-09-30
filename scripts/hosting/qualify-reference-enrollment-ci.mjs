@@ -73,10 +73,10 @@ const tools=[
  {name:'media_upload',description:'Synthetic upload schema',inputSchema:{type:'object',properties:{filename:{type:'string'},content_type:{type:'string'},method:{type:'string',enum:['upload_url']}},additionalProperties:false}},
  {name:'media_confirm',description:'Synthetic confirmation schema',inputSchema:{type:'object',properties:{media_id:{type:'string'},type:{type:'string',enum:['image','video','audio','file']}},required:['type'],additionalProperties:false}}
 ];
-async function seed(db,host){
+export async function seedReferenceEnrollmentCiDatabase(db,host){
  const companyId=host.scope.companyId,enrolledBy=randomUUID(),providerSponsor=randomUUID(),storageSponsor=randomUUID(),connectionId=randomUUID(),storageConnectionId=randomUUID();
  for(const id of[enrolledBy,providerSponsor,storageSponsor])await db.query("INSERT INTO users(id,name,email,password_hash) VALUES($1,'Installed registrar CI',$2,'not-a-login')",[id,id+'@example.invalid']);
- await db.query("INSERT INTO companies(id,name,slug,template) VALUES($1,'Installed registrar CI',$1::text,'blank')",[companyId]);
+ await db.query("INSERT INTO companies(id,name,slug,template) VALUES($1,'Installed registrar CI',$2,'blank')",[companyId,companyId]);
  for(const id of[enrolledBy,providerSponsor,storageSponsor])await db.query('INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,$3)',[companyId,id,id===enrolledBy?'owner':'admin']);
  await db.query("INSERT INTO studio_profiles(company_id,template_id,template_version,created_by) VALUES($1,'ai-production',1,$2)",[companyId,enrolledBy]);
  await db.query("INSERT INTO higgsfield_connections(company_id,id,status,connected_by,sealed,tools,expires_at) VALUES($1,$2,'connected',$3,'{}',$4,$5)",[companyId,connectionId,providerSponsor,JSON.stringify(tools),host.scope.expiresAt]);
@@ -123,7 +123,7 @@ export async function qualifyReferenceEnrollmentCi(){
   phase('disposable-postgres');const local=new URL('postgresql://127.0.0.1:5432/coatria_reference_ci');local.username='coatria_test';local.password='local_ci_test_only';control=new pg.Client({connectionString:local.href});await control.connect();
   check(!(await control.query('SELECT 1 FROM pg_roles WHERE rolname=$1',[ROLE])).rowCount);await control.query('CREATE DATABASE '+database);created=true;local.pathname='/'+database;owner=new pg.Client({connectionString:local.href});await owner.connect();
   await owner.query('CREATE TABLE schema_migrations(name text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now())');for(const name of(await readdir('database')).filter(n=>/^\d.*\.sql$/.test(n)).sort()){await owner.query(await readFile('database/'+name,'utf8'));await owner.query('INSERT INTO schema_migrations(name) VALUES($1)',[name]);}
-  const scope=await seed(owner,host),scopeBytes=json(scope),scopePath=join(base,'scope.json');await writeFile(scopePath,scopeBytes,{flag:'wx',mode:0o600});
+  const scope=await seedReferenceEnrollmentCiDatabase(owner,host),scopeBytes=json(scope),scopePath=join(base,'scope.json');await writeFile(scopePath,scopeBytes,{flag:'wx',mode:0o600});
   const password=randomBytes(32).toString('hex'),provision=await provisionReferenceRegistrarRole({connectionString:local.href,password});roleCreated=true;check(provision.ok&&provision.created&&provision.role===ROLE);const restricted=new URL(local);restricted.username=ROLE;restricted.password=password;
   const login=new pg.Client({connectionString:restricted.href});try{await login.connect();await assertHiggsfieldReferenceRegistrarDatabase(login);const identity=(await login.query('SELECT current_user,session_user')).rows[0];check(identity.current_user===ROLE&&identity.session_user===ROLE);report.login=identity;}finally{await login.end();}
   const invoke=createReferenceEnrollmentCiRegistrar(host,build.bundleSha256,scopePath,hash(scopeBytes));
