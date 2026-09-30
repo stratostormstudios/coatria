@@ -1,5 +1,6 @@
 import {sameRuntimeConfiguration} from './company-runtime-preset';
 import {observeRunpodCpuCreate} from './runpod-cpu-diagnostics';
+import {serializeRunpodCpuCreate} from './runpod-cpu-create-request';
 import {RUNPOD_CPU_CATALOG_PATH,runpodCpuCapacity} from './runpod-cpu-capacity';
 /** Bounded, server-owned archive/gateway CPU provisioning. No agent enrollment,
  * credential projection, generic container parameters or provider create retry. */
@@ -69,9 +70,9 @@ async function verifyDatabase(service:TrustedServiceKind,url:string,companyId:st
  try{if(service==='archive')await assertHiggsfieldArchiveDatabase(pool);else{const client=await pool.connect();try{await assertProjectStorageGatewayDatabase(client);}finally{client.release();}}if(!(await pool.query('SELECT id FROM companies WHERE id=$1',[companyId])).rowCount)throw Error();}
  catch{fail(503,'The dedicated service LOGIN and grants were not verified.','SERVICE_DATABASE_UNCONFIRMED');}finally{await pool.end();}
 }
-async function provider(path:string,method:string,payload:unknown,transport:typeof fetch,createProvisionId?:string){
+async function provider(path:string,method:string,body:string|undefined,transport:typeof fetch,createProvisionId?:string){
  const key=process.env.MANAGED_RUNPOD_API_KEY;if(!key)fail(503,'The server lifecycle credential is unavailable.','SERVICE_PROVIDER_UNAVAILABLE');
- const request=()=>transport('https://api.runpod.io/v2'+path,{method,headers:{Authorization:'Bearer '+key,...payload===undefined?{}:{'Content-Type':'application/json'}},...payload===undefined?{}:{body:JSON.stringify(payload)},redirect:'error',cache:'no-store',signal:AbortSignal.timeout(10000)});
+ const request=()=>transport('https://api.runpod.io/v2'+path,{method,headers:{Authorization:'Bearer '+key,...body===undefined?{}:{'Content-Type':'application/json'}},...body===undefined?{}:{body},redirect:'error',cache:'no-store',signal:AbortSignal.timeout(10000)});
  const response=await(createProvisionId?observeRunpodCpuCreate(createProvisionId,request):request());
  if(!response.ok){void response.body?.cancel().catch(()=>{});fail(503,'The provider operation was not confirmed.','SERVICE_PROVIDER_UNCONFIRMED');}
  const reader=response.body?.getReader();if(!reader)fail(503,'The provider response was empty.','SERVICE_PROVIDER_UNCONFIRMED');const chunks:Uint8Array[]=[];let size=0;
@@ -91,7 +92,7 @@ export async function reconcileTrustedService(provisionId:string,dependencies:De
  // Provider I/O does not hold database locks. Re-read durable stop intent and
  // authority after that I/O so a stop accepted during create/read is respected.
  const mustStop=()=>tx(async db=>{await control(db,row.company_id);const r=await rowFor(db,row.company_id,row.id);if(r.lease_id!==lease)fail(409,'The service reconciliation lease changed.','SERVICE_LEASE_CHANGED');const owner=(await db.query("SELECT user_id FROM memberships WHERE company_id=$1 AND user_id=$2 AND role IN ('owner','admin') FOR SHARE",[r.company_id,r.created_by])).rowCount;const stop=Boolean(r.stop_requested_at)||!owner||+new Date(r.expires_at)<=await dbNow(db)||!await currentConfiguration(db,r);if(stop)await db.query('UPDATE trusted_service_provisions SET stop_requested_at=COALESCE(stop_requested_at,clock_timestamp()) WHERE company_id=$1 AND id=$2',[r.company_id,r.id]);return stop;});
- const finishPod=async(pod:Row)=>{if(stopped.has(pod.status))return save({phase:'stopped',podId:pod.id,status:pod.status});if(await mustStop()){if(!Array.isArray(pod.actions)||!pod.actions.includes('stop'))return save({phase:'stopping',podId:pod.id,status:pod.status,error:'SERVICE_STOP_PENDING'});await provider('/pods/'+pod.id+'/action','POST',{action:'stop'},transport);return save({phase:'stopping',podId:pod.id,status:pod.status});}return save({phase:pod.status==='RUNNING'?'running':pod.status==='ERROR'?'needs_attention':'provisioning',podId:pod.id,status:pod.status,...pod.status==='ERROR'?{error:'SERVICE_PROVIDER_ERROR'}:{}});};
+ const finishPod=async(pod:Row)=>{if(stopped.has(pod.status))return save({phase:'stopped',podId:pod.id,status:pod.status});if(await mustStop()){if(!Array.isArray(pod.actions)||!pod.actions.includes('stop'))return save({phase:'stopping',podId:pod.id,status:pod.status,error:'SERVICE_STOP_PENDING'});await provider('/pods/'+pod.id+'/action','POST',JSON.stringify({action:'stop'}),transport);return save({phase:'stopping',podId:pod.id,status:pod.status});}return save({phase:pod.status==='RUNNING'?'running':pod.status==='ERROR'?'needs_attention':'provisioning',podId:pod.id,status:pod.status,...pod.status==='ERROR'?{error:'SERVICE_PROVIDER_ERROR'}:{}});};
  let submitted=Boolean(row.submitted_at);
  try{
   if(!submitted){
@@ -102,12 +103,13 @@ export async function reconcileTrustedService(provisionId:string,dependencies:De
    const capacity=runpodCpuCapacity(cpu,preset.dataCenterId);
    if(capacity==='unavailable')fail(409,'The reviewed CPU size has no current capacity in the approved region.','SERVICE_CAPACITY_UNAVAILABLE');
    if(capacity!=='available')fail(503,'Current CPU capacity in the approved region could not be verified.','SERVICE_CAPACITY_UNCONFIRMED');
-   const request={name:row.pod_name,cloud:'SECURE',image:TRUSTED_SERVICE_IMAGE,args:preset.bootstrapArgs,disk:10,cpu:{id:'cpu3c',vcpuCount:2},dataCenterIds:[preset.dataCenterId],ports:ports(row.service),startSsh:false,startJupyter:false,env};row.expected_environment_hashes=environmentHashes(env);
+   const request={name:row.pod_name,cloud:'SECURE',image:TRUSTED_SERVICE_IMAGE,args:preset.bootstrapArgs,disk:10,cpu:{id:'cpu3c',vcpuCount:2},dataCenterIds:[preset.dataCenterId],ports:ports(row.service),startSsh:false,startJupyter:false,env};
+   const requestBody=serializeRunpodCpuCreate(request,'SERVICE');row.expected_environment_hashes=environmentHashes(env);
    const allowed=await tx(async db=>{await control(db,row.company_id);const current=await rowFor(db,row.company_id,row.id),now=await dbNow(db);if(current.lease_id!==lease||current.submitted_at||current.stop_requested_at||+new Date(current.expires_at)<=now||!await currentConfiguration(db,current))return false;if(!(await db.query("SELECT user_id FROM memberships WHERE company_id=$1 AND user_id=$2 AND role IN ('owner','admin') FOR SHARE",[row.company_id,row.created_by])).rowCount)return false;
     const freshEnvironment=await companyTrustedServiceEnvironment(db,await loadTrustedServicePreset(db,row.company_id,row.service),row.id);
     if(trustedServiceHash(environmentHashes(freshEnvironment))!==trustedServiceHash(row.expected_environment_hashes))fail(409,'The private service credentials changed before submission.','SERVICE_CREDENTIAL_CHANGED');
     await db.query("UPDATE trusted_service_provisions SET phase='submitting',submitted_at=clock_timestamp(),expected_environment_hashes=$3,revision=revision+1 WHERE company_id=$1 AND id=$2",[row.company_id,row.id,JSON.stringify(row.expected_environment_hashes)]);return true;});
-   if(!allowed)return await save({phase:'stopped'});submitted=true;const pod=verifyPod(row,await provider('/pods','POST',request,transport,row.id));return await finishPod(pod);
+   if(!allowed)return await save({phase:'stopped'});submitted=true;const pod=verifyPod(row,await provider('/pods','POST',requestBody,transport,row.id));return await finishPod(pod);
   }
   const pod=row.pod_id?verifyPod(row,await provider('/pods/'+row.pod_id,'GET',undefined,transport)):await discover(row,transport);if(!pod)return await save({phase:'uncertain',error:'SERVICE_CREATE_UNCERTAIN'});
   return await finishPod(pod);

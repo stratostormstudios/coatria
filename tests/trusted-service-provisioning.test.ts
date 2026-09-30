@@ -79,6 +79,22 @@ for(const postgres of [false,true])test(`${postgres?'PostgreSQL':'PGlite'} trust
    return transaction(db=>selectCompanyRuntimeConfiguration(db,a.member,entry.service,{clientId:randomUUID(),expectedRevision,phase:'service',expiresAt:entry.expiresAt,preset:entry,configurationHash:companyRuntimeHash(entry)}));
   }
   const revokeRuntime=(a:Awaited<ReturnType<typeof fixture>>,expectedRevision=1)=>transaction(db=>revokeCompanyRuntimeConfiguration(db,a.member,'gateway',{clientId:randomUUID(),expectedRevision}));
+  for(const service of ['gateway','archive'] as const)await t.test(`oversized complete ${service} body fails before submission without automatic retry`,async()=>{
+   const a=await fixture(),p=(await a.plan(service)).provision,cloud=provider();await a.start(p);
+   assert(a.entries.find(entry=>entry.service===service)!.bootstrapArgs.length<100000);
+   const original=process.env.COATRIA_HOSTING_KEYRING!;
+   // Still a valid keyring: whitespace is part of the actual outbound env value.
+   process.env.COATRIA_HOSTING_KEYRING=original+' '.repeat(102400);
+   try{
+    assert.equal(trustedServiceReadiness(a.companyId,service).configured,true);
+    await reconcile(p.id,cloud);assert.equal(cloud.creates(),0);assert(cloud.calls.every(call=>call.method==='GET'));
+    const failed=await a.get(p.id);assert.equal(failed.phase,'failed');assert.equal(failed.errorCode,'SERVICE_CREATE_REQUEST_TOO_LARGE');
+    assert.equal(failed.submittedAt,null);assert.equal(failed.podId,null);assert(!JSON.stringify(failed).includes(original));
+    const stored=(await query('SELECT submitted_at,pod_id FROM trusted_service_provisions WHERE id=$1',[p.id])).rows[0];assert.deepEqual(stored,{submitted_at:null,pod_id:null});
+    assert.equal((await query('SELECT count(*)::int n FROM trusted_service_reservations WHERE company_id=$1',[a.companyId])).rows[0].n,1);
+   }finally{process.env.COATRIA_HOSTING_KEYRING=original;}
+   const calls=cloud.calls.length;assert.deepEqual(await reconcile(p.id,cloud),{skipped:true});assert.equal(cloud.calls.length,calls);assert.equal(cloud.creates(),0);
+  });
   await t.test('a durable selection replaces legacy readiness and binds the exact registry epoch into plans',async()=>{
    const a=await fixture(),legacy=(await a.plan('gateway')).provision,selection=await selectRuntime(a),cloud=provider();
    await assert.rejects(a.start(legacy),code('SERVICE_PRESET_CHANGED'));

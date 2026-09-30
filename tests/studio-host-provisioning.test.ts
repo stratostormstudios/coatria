@@ -60,6 +60,27 @@ test('managed CPU saga uses actual transactions and fake Runpod transport withou
  }
  const revokeRuntime=(a:Awaited<ReturnType<typeof fixture>>,expectedRevision=1)=>transaction(db=>revokeCompanyRuntimeConfiguration(db,a.member,'managed_agent',{clientId:randomUUID(),expectedRevision}));
  try{
+  await t.test('oversized complete CPU body fails before submission and is never retried after environment repair',async()=>{
+   const a=await fixture(),plan=(await a.plan()).provision,cloud=transportFixture();await a.start(plan);
+   assert(studioCpuPreset(a.companyId).bootstrapArgs.length<100000);
+   const original=process.env.COATRIA_MANAGED_RUNPOD_INFERENCE_KEY,largeValue='synthetic-private-inference-'+'é'.repeat(52000);let healthChecks=0;
+   process.env.COATRIA_MANAGED_RUNPOD_INFERENCE_KEY=largeValue;
+   const transport:typeof fetch=async(url,init)=>{
+    if(new URL(String(url)).origin==='https://api.runpod.ai'){
+     healthChecks++;assert.equal(init?.method,'GET');assert.equal((init?.headers as Record<string,string>).Authorization,'Bearer '+largeValue);
+     return Response.json({workers:{idle:0,ready:0}});
+    }
+    return cloud.transport(url,init);
+   };
+   try{
+    await reconcileStudioHostProvision(plan.id,{fetch:transport});assert.equal(healthChecks,1);assert.equal(cloud.creates(),0);
+    const failed=await a.get(plan.id);assert.equal(failed.phase,'failed');assert.equal(failed.errorCode,'CPU_CREATE_REQUEST_TOO_LARGE');
+    assert.equal(failed.submittedAt,null);assert.equal(failed.podId,null);assert(!JSON.stringify(failed).includes('synthetic-private-inference-'));
+    const stored=(await query('SELECT submitted_at,pod_id FROM studio_host_provisions WHERE id=$1',[plan.id])).rows[0];assert.deepEqual(stored,{submitted_at:null,pod_id:null});
+    assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE company_id=$1',[a.companyId])).rows[0].count),1);
+   }finally{process.env.COATRIA_MANAGED_RUNPOD_INFERENCE_KEY=original;}
+   const calls=cloud.calls.length;assert.deepEqual(await reconcile(plan.id,cloud),{skipped:true});assert.equal(cloud.calls.length,calls);assert.equal(cloud.creates(),0);
+  });
   await t.test('durable CPU configuration pins the selection epoch, works without env presets, and rejects prior approvals',async()=>{
    const a=await fixture(),legacy=(await a.plan()).provision,selected=await selectRuntime(a);
    await assert.rejects(a.start(legacy),{code:'CPU_PRESET_CHANGED'});delete process.env.COATRIA_MANAGED_CPU_PRESET;
