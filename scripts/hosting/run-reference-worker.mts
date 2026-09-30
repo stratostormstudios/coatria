@@ -2,7 +2,7 @@
  * qualification producer, immutable bundle installer and service enrollment are
  * intentionally NOT supplied here. Archive receipts cannot authorize this entry. */
 import {createHash} from 'node:crypto';
-import {lstat,readFile,realpath} from 'node:fs/promises';
+import {lstat,opendir,readFile,realpath} from 'node:fs/promises';
 import {dirname,posix,resolve} from 'node:path';
 import {pathToFileURL,fileURLToPath} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -46,6 +46,13 @@ export function referenceRunnerToken(settings:Readonly<Record<string,string|unde
  for(const [name,value]of Object.entries(settings))if(value&&name!=='COATRIA_REFERENCE_SERVICE_TOKEN'&&(/(?:DATABASE_URL|PGPASSWORD|KEYRING|API_KEY|ACCESS_KEY|SECRET|PASSWORD|TOKEN|PRIVATE_KEY)/i.test(name)||['NODE_OPTIONS','NODE_PATH','LD_PRELOAD','LD_LIBRARY_PATH'].includes(name)))bad();
  return token;
 }
+/** Emptiness only; caller must first verify the trusted directory identity.
+ * A new process must not forget an earlier attempt's unresolved local cleanup.
+ * Inspect one entry without listing names, following children or deleting them. */
+export async function assertReferenceRunnerScratchEmpty(path:string){
+ try{const directory=await opendir(path);try{if(await directory.read()!==null)bad('REFERENCE_RUNNER_UNQUALIFIED');}finally{await directory.close();}}
+ catch{bad('REFERENCE_RUNNER_UNQUALIFIED');}
+}
 /** Sequential only. A failed/unknown claim or phase stops admission; it is never
  * hidden by an automatic reconnect/retry loop. Worker cleanup is awaited. */
 export async function runReferenceWorkerLoop(worker:{runNext:(input:{signal:AbortSignal})=>Promise<HiggsfieldReferenceWorkerResult>},input:{signal:AbortSignal;onResult?:(result:HiggsfieldReferenceWorkerResult)=>void;idleMs?:number}){
@@ -65,6 +72,7 @@ export async function runReferenceWorker(args:readonly string[],settings:Readonl
  await archiveHostTrusted(c.qualification.path);const receiptBytes=await archiveHostRead(c.qualification.path,65536);if(createHash('sha256').update(receiptBytes).digest('hex')!==c.qualification.sha256)bad('REFERENCE_RUNNER_UNQUALIFIED');
  let receipt:unknown;try{receipt=JSON.parse(receiptBytes.toString('utf8'));}catch{bad('REFERENCE_RUNNER_UNQUALIFIED');}assertReferenceRunnerReceipt(receipt,c,{bootId:(await readFile('/proc/sys/kernel/random/boot_id','utf8')).trim(),uid:process.getuid!()});
  await archiveHostTrusted(dirname(c.scratchRoot),true);const info=await lstat(c.scratchRoot);if(!info.isDirectory()||info.isSymbolicLink()||await realpath(c.scratchRoot)!==c.scratchRoot||info.uid!==process.getuid!()||info.mode&0o7077)bad();archiveHostNoExtendedAcls([c.scratchRoot]);
+ await assertReferenceRunnerScratchEmpty(c.scratchRoot);
  const stop=new AbortController(),shutdown=()=>stop.abort(),timer=setTimeout(shutdown,Math.max(1,Date.parse(c.expiresAt)-Date.now()));process.once('SIGTERM',shutdown);process.once('SIGINT',shutdown);
  try{
   // Genuine immutable closure/cgroup checks and real native capability probes.

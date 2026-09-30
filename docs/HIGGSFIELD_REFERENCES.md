@@ -57,6 +57,8 @@ The runner source is `scripts/hosting/run-reference-worker.mts`. It accepts a ha
 
 Cancellation waits for the original local operations and inspector to settle before closing handles or removing scratch. Cleanup has a finite maximum of ten seconds; a timeout, failed cancellation, failed close or failed removal permanently stops new claims from that worker instance. Completed remote receipts are retained, and prior provider intent remains uncertain rather than being retried. Host control-group termination is still required for unresponsive native processes; a timed-out JavaScript promise is not evidence that a process was killed.
 
+Startup and preflight also reject any leftover scratch entry before loading the sandbox or making a service request. Restarting the process cannot silently bypass retained-file cleanup, and the check never deletes those files.
+
 The offline trusted-service builder accepts the `reference` entry and pins the standalone runtime, reviewed source/tree, compiler and all dependency inputs. CI builds it from its exact checkout. This does not permit the archive/gateway bootstrap to install or start a reference service, and the bundle remains unqualified.
 
 This is an implemented service interface, runner and offline bundle, not a completed deployment. The dedicated immutable installer, trusted reference qualification-receipt producer, enrollment workflow and actual-host end-to-end qualification are still required. Operator tables have no public registration endpoint, and no production service has been enrolled by this change. The API fixture uses synthetic enrollment and inspection evidence; the database LOGIN suite is separately gated on real PostgreSQL.

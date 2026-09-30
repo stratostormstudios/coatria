@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {parseReferenceRunnerConfiguration,assertReferenceRunnerReceipt,referenceRunnerConfigurationHash,referenceRunnerToken,runReferenceWorkerLoop,runReferenceWorker,ReferenceRunnerError} from '../scripts/hosting/run-reference-worker.mjs';
+import {mkdir,mkdtemp,readFile,readdir,rm,writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {parseReferenceRunnerConfiguration,assertReferenceRunnerReceipt,referenceRunnerConfigurationHash,referenceRunnerToken,assertReferenceRunnerScratchEmpty,runReferenceWorkerLoop,runReferenceWorker,ReferenceRunnerError} from '../scripts/hosting/run-reference-worker.mjs';
 
 function fixture(){const serviceId=randomUUID(),companyId=randomUUID(),projectIds=[randomUUID()],bootId=randomUUID(),expiresAt=new Date(Date.now()+60000).toISOString();const config={version:1 as const,serviceId,companyId,projectIds,origin:'https://coatria.example',sourceCommit:'a'.repeat(40),releaseSha256:'b'.repeat(64),runtimePath:'/opt/coatria-reference/runtime.mjs',expiresAt,scratchRoot:`/var/lib/coatria-reference-worker/${serviceId}/scratch`,profilePath:'/etc/coatria-reference/profile.json',profileSha256:'c'.repeat(64),cgroupRoot:'/sys/fs/cgroup/coatria-reference/decoders',uploadHosts:['uploads.example'],qualification:{path:'/etc/coatria-reference/qualified.json',sha256:'d'.repeat(64)}};const receipt={version:1,kind:'coatria-reference-worker-qualification',serviceId,companyId,projectIds,sourceCommit:config.sourceCommit,releaseSha256:config.releaseSha256,profileSha256:config.profileSha256,configurationSha256:referenceRunnerConfigurationHash(config),bootId,uid:1001,expiresAt,qualified:true,checks:{isolation:true,resourceLimits:true,descendantCleanup:true,preparedImages:true}};return {config,receipt,host:{bootId,uid:1001}};}
 test('configuration is finite, exact and does not authorize archive identity or caller-selected commands',()=>{
@@ -27,4 +30,14 @@ test('unknown claims, uncertain phases and blocked work stop instead of replayin
 });
 test('preflight cannot bypass immutable Linux host and actual sandbox qualification',async()=>{
  await assert.rejects(runReferenceWorker(['--config','/nonexistent/reference.json','--sha256','a'.repeat(64),'--preflight'],{COATRIA_REFERENCE_SERVICE_TOKEN:'rfs_'+'x'.repeat(43)}));
+});
+
+test('restart refuses all leftover scratch without listing or deleting private contents',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'coatria-reference-startup-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const empty=join(root,'empty'),fileScratch=join(root,'file-scratch'),attemptScratch=join(root,'attempt-scratch');for(const path of [empty,fileScratch,attemptScratch])await mkdir(path);
+ await assertReferenceRunnerScratchEmpty(empty);assert.deepEqual(await readdir(empty),[]);
+ const privateName='private-original-image.png',privateBytes=Buffer.from('original private fixture bytes');await writeFile(join(fileScratch,privateName),privateBytes);await mkdir(join(attemptScratch,'unfinished-attempt'));
+ const rejected=(error:unknown)=>error instanceof ReferenceRunnerError&&error.code==='REFERENCE_RUNNER_UNQUALIFIED'&&!String(error).includes(root)&&!String(error).includes(privateName);
+ for(const path of [fileScratch,attemptScratch,join(root,'missing'),join(fileScratch,privateName)])await assert.rejects(assertReferenceRunnerScratchEmpty(path),rejected);
+ assert.deepEqual(await readdir(fileScratch),[privateName]);assert.deepEqual(await readFile(join(fileScratch,privateName)),privateBytes);assert.deepEqual(await readdir(attemptScratch),['unfinished-attempt']);assert.deepEqual(await readdir(join(attemptScratch,'unfinished-attempt')),[]);
 });
