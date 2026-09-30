@@ -46,7 +46,7 @@ test('archive preflight audits the complete migrated ACL contract without claimi
    await pg.exec('SET ROLE '+role);try{await assert.rejects(()=>assertHiggsfieldArchiveDatabase(db),{code:'ARCHIVE_DB_IDENTITY'});}finally{await pg.exec('SET ROLE NONE');}
   });
   await t.test('missing or widened authority is denied, including PUBLIC and grant options',async()=>{
-   for(const sql of[`REVOKE UPDATE(status) ON project_storage_uploads FROM ${role}`,`GRANT SELECT(sealed) ON higgsfield_connections TO ${role}`,`GRANT UPDATE(approved_by) ON higgsfield_output_archives TO ${role}`,`GRANT SELECT(id) ON users TO ${role}`,`GRANT SELECT ON schema_migrations TO ${role} WITH GRANT OPTION`]){
+   for(const sql of[`REVOKE SELECT(access_revoked_at) ON memberships FROM ${role}`,`REVOKE UPDATE(status) ON project_storage_uploads FROM ${role}`,`GRANT SELECT(sealed) ON higgsfield_connections TO ${role}`,`GRANT UPDATE(approved_by) ON higgsfield_output_archives TO ${role}`,`GRANT SELECT(id) ON users TO ${role}`,`GRANT SELECT ON schema_migrations TO ${role} WITH GRANT OPTION`]){
     await pg.exec(sql);try{await assert.rejects(()=>asWorker(()=>assertHiggsfieldArchiveDatabase(db)),{code:'ARCHIVE_DB_PRIVILEGES'});}finally{await pg.exec(grants);}
    }
    await pg.exec('GRANT SELECT ON sessions TO PUBLIC');try{await assert.rejects(()=>asWorker(()=>assertHiggsfieldArchiveDatabase(db)),{code:'ARCHIVE_DB_PRIVILEGES'});}finally{await pg.exec('REVOKE SELECT ON sessions FROM PUBLIC');}

@@ -75,6 +75,16 @@ test('leased tools enforce authority, durable effects, review boundaries and iso
    const pos=(await tool('office_presence',{roomId:null,x:0,z:0,status:'focus'})).result;assert.equal(pos.agentId,agent);assert.equal((await query('SELECT count(*)::int AS count FROM presence WHERE company_id=$1',[company])).rows[0].count,0);
    await tool('office_presence',{roomId:null,x:20,z:20,status:'focus'},400);await tool('office_presence',{roomId:randomUUID(),x:0,z:0,status:'focus'},404);
   });
+  await t.test('pending proposals cannot be approved after requester access is revoked with its role retained',async()=>{
+   const proposal=(await tool('rooms_propose',{name:'Revoked requester proposal',kind:'focus',capacity:2})).result;
+   await query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[company,member]);
+   try{
+    const denied=await call(`companies/${company}/agent-proposals/${proposal.id}/approve`,'POST',{},'reviewer',409);
+    assert.equal(denied.code,'PROPOSAL_AUTHORITY_ENDED');
+    assert.equal((await query('SELECT status FROM agent_proposals WHERE id=$1',[proposal.id])).rows[0].status,'pending');
+    assert.equal((await query("SELECT count(*)::int AS count FROM rooms WHERE company_id=$1 AND name='Revoked requester proposal'",[company])).rows[0].count,0);
+   }finally{await query('UPDATE memberships SET access_revoked_at=NULL WHERE company_id=$1 AND user_id=$2',[company,member]);}
+  });
   await t.test('proposals do not mutate until an administrator reviews the exact change',async()=>{
    const result=(await tool('rooms_propose',{name:'Review room',kind:'meeting',capacity:12})).result;assert.equal((await query('SELECT count(*)::int AS count FROM rooms WHERE company_id=$1',[company])).rows[0].count,0);
    const endpoint=`companies/${company}/agent-proposals/${result.id}/approve`;await call(endpoint,'POST',{},'member',403);await call(endpoint,'POST',{},'outsider',404);

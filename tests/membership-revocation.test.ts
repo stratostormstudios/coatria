@@ -8,6 +8,7 @@ import { requireMembership } from '../src/lib/auth';
 import { memberMutation } from '../src/lib/company';
 import { database, query } from '../src/lib/db';
 import { ApiError, hashToken, secret } from '../src/lib/security';
+import { conversationHistory, conversationSync, sendConversationMessage, type ConversationActor } from '../src/lib/conversations';
 
 // This always uses a disposable local database; it never accepts a live URL.
 test('revoked membership blocks company reads and writes while preserving personal access', { timeout: 90000 }, async t => {
@@ -55,6 +56,8 @@ test('revoked membership blocks company reads and writes while preserving person
     for (const actor of actors.slice(1)) {
       await t.test(`revoked ${actor.role} cannot read or mutate despite its retained role`, async () => {
         const cachedMembership = await requireMembership(request(actor, taskPath), company);
+        const conversationActor: ConversationActor = { kind: 'human', companyId: company, userId: actor.id };
+        const conversationBefore = await conversationHistory(conversationActor, 'commons');
         await query('UPDATE memberships SET access_revoked_at=now() WHERE company_id=$1 AND user_id=$2', [company, actor.id]);
         assert.equal((await call(actor, taskPath)).status, 404);
         assert.equal((await call(actor, `${base}/workspace`)).status, 404);
@@ -63,6 +66,12 @@ test('revoked membership blocks company reads and writes while preserving person
         let mutationRan = false;
         await assert.rejects(memberMutation(cachedMembership, actor.role === 'admin', async () => { mutationRan = true; }), (error: unknown) => error instanceof ApiError && error.status === 403);
         assert.equal(mutationRan, false, 'A membership cached before revocation must be rechecked inside the write transaction.');
+        for (const operation of [
+          () => conversationHistory(conversationActor, 'commons'),
+          () => conversationSync(conversationActor, 'commons', { after: conversationBefore.conversation.lastSequence }),
+          () => sendConversationMessage(conversationActor, 'commons', { clientId: randomUUID(), body: 'Revoked actor must not send' }),
+        ]) await assert.rejects(operation, (error: unknown) => error instanceof ApiError && error.status === 403);
+        assert.equal(Number((await query('SELECT count(*) FROM messages WHERE company_id=$1 AND user_id=$2', [company, actor.id])).rows[0].count), 0);
         const session = await call(actor, 'session');
         assert.equal(session.status, 200);
         assert.equal(session.data.user.id, actor.id);

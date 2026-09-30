@@ -137,6 +137,7 @@ test('archive proposals and finite human authority pin the actual source and pro
   await t.test('source, account, sponsor, task role and destination semantic changes immediately end archive authority',async()=>{
    const changes:Array<(f:Awaited<ReturnType<typeof fixture>>)=>Promise<unknown>>=[
     f=>query("UPDATE memberships SET role='member' WHERE company_id=$1 AND user_id=$2",[f.company,f.admin]),
+    f=>query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[f.company,f.admin]),
     f=>query("UPDATE higgsfield_connections SET status='disconnected',sealed=NULL WHERE company_id=$1",[f.company]),
     f=>query('UPDATE higgsfield_connections SET id=$2 WHERE company_id=$1',[f.company,randomUUID()]),
     f=>query('UPDATE higgsfield_connections SET connected_by=$2 WHERE company_id=$1',[f.company,f.admin]),

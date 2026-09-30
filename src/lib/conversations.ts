@@ -25,8 +25,8 @@ async function authorized<T>(actor:ConversationActor,run:(context:Context)=>Prom
  return transaction(async client=>{
   if(!(await client.query('SELECT id FROM companies WHERE id=$1 FOR KEY SHARE',[actor.companyId])).rowCount)fail(404,'Workspace not found.');
   const authorityIds=[...new Set([actor.userId,...actor.kind==='agent'?await managedAgentAuthorityPrincipals(client,actor.companyId,actor.agentId):[]])].sort();
-  const member=(await client.query('SELECT user_id,role FROM memberships WHERE company_id=$1 AND user_id=ANY($2::uuid[]) ORDER BY user_id FOR SHARE',[actor.companyId,authorityIds])).rows.find(row=>row.user_id===actor.userId);
-  if(!member||member.role==='removed')fail(403,'Your company access has ended.');
+  const member=(await client.query('SELECT user_id,role,access_revoked_at FROM memberships WHERE company_id=$1 AND user_id=ANY($2::uuid[]) ORDER BY user_id FOR SHARE',[actor.companyId,authorityIds])).rows.find(row=>row.user_id===actor.userId);
+  if(!member||member.role==='removed'||member.access_revoked_at!==null)fail(403,'Your company access has ended.');
   let view:ConversationActorView;
   if(actor.kind==='agent'){
    if(!['owner','admin'].includes(member.role))fail(401,'Agent sponsor access ended.');

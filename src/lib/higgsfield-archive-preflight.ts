@@ -10,7 +10,7 @@ type Privilege='SELECT'|'INSERT'|'UPDATE'|'REFERENCES';
 type Contract=Partial<Record<Privilege,'*'|readonly string[]>>;
 const contract:Readonly<Record<string,Contract>>={
  schema_migrations:{SELECT:'*'},companies:{SELECT:['id'],UPDATE:['created_at']},
- memberships:{SELECT:['company_id','user_id','role'],UPDATE:['joined_at']},
+ memberships:{SELECT:['company_id','user_id','role','access_revoked_at'],UPDATE:['joined_at']},
  studio_projects:{SELECT:['id','company_id','revision','status','ai_policy','gates','production_path'],UPDATE:['updated_at']},
  studio_role_bindings:{SELECT:['company_id','role_key','agent_id','human_id'],UPDATE:['created_at']},
  studio_work_items:{SELECT:['id','company_id','project_id','task_id','role_key','stage','execution']},

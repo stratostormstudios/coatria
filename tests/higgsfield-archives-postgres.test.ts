@@ -58,7 +58,7 @@ test('PostgreSQL separates archive approval authority from the dedicated transfe
    const impersonated=await owner!.connect();try{await impersonated.query('SET ROLE '+roles.worker);await assert.rejects(()=>assertHiggsfieldArchiveDatabase(impersonated),{code:'ARCHIVE_DB_IDENTITY'});}finally{await impersonated.query('RESET ROLE');impersonated.release();}
    await control.query(`GRANT ${roles.runtime} TO ${roles.worker}`);try{await assert.rejects(()=>assertHiggsfieldArchiveDatabase(workerPool!),{code:'ARCHIVE_DB_ROLE'});}finally{await control.query(`REVOKE ${roles.runtime} FROM ${roles.worker}`);}
    const grants=await readFile('database/higgsfield-archive-worker-permissions.sql','utf8');
-   for(const sql of[`REVOKE UPDATE(status) ON project_storage_uploads FROM ${roles.worker}`,`GRANT SELECT(sealed) ON higgsfield_connections TO ${roles.worker}`,`GRANT UPDATE(role) ON memberships TO ${roles.worker}`,`GRANT SELECT ON schema_migrations TO ${roles.worker} WITH GRANT OPTION`]){
+   for(const sql of[`REVOKE SELECT(access_revoked_at) ON memberships FROM ${roles.worker}`,`REVOKE UPDATE(status) ON project_storage_uploads FROM ${roles.worker}`,`GRANT SELECT(sealed) ON higgsfield_connections TO ${roles.worker}`,`GRANT UPDATE(role) ON memberships TO ${roles.worker}`,`GRANT SELECT ON schema_migrations TO ${roles.worker} WITH GRANT OPTION`]){
     await owner!.query(sql);try{await assert.rejects(()=>assertHiggsfieldArchiveDatabase(workerPool!),{code:'ARCHIVE_DB_PRIVILEGES'});}finally{await owner!.query(grants);}
    }
    await owner!.query('GRANT SELECT ON sessions TO PUBLIC');try{await assert.rejects(()=>assertHiggsfieldArchiveDatabase(workerPool!),{code:'ARCHIVE_DB_PRIVILEGES'});}finally{await owner!.query('REVOKE SELECT ON sessions FROM PUBLIC');}
@@ -88,6 +88,19 @@ test('PostgreSQL separates archive approval authority from the dedicated transfe
    await denied(runtime!,roles.runtime,'INSERT INTO higgsfield_archive_fetches SELECT * FROM higgsfield_archive_fetches');
    for(const table of['higgsfield_output_archives','higgsfield_archive_fetches','higgsfield_archive_receipts','higgsfield_archive_requests'])await denied(runtime!,roles.runtime,`DELETE FROM ${table}`);
    for(const table of['higgsfield_archive_fetches','higgsfield_archive_receipts','higgsfield_archive_requests'])await denied(runtime!,roles.runtime,`UPDATE ${table} SET company_id=company_id`);
+  });
+
+  await t.test('restricted archive LOGIN observes timestamp-only sponsor revocation before transfer authority',async()=>{
+   use(workerPool!);await identity(workerPool!,roles.worker);
+   await transaction(db=>authorizeHiggsfieldArchive(db,companyId,proposed.id));
+   const before={...counts};
+   try{
+    await owner!.query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[companyId,userId]);
+    const member=(await workerPool!.query('SELECT role,access_revoked_at FROM memberships WHERE company_id=$1 AND user_id=$2',[companyId,userId])).rows[0];assert.equal(member.role,'owner');assert(member.access_revoked_at);
+    await assert.rejects(()=>transaction(db=>authorizeHiggsfieldArchive(db,companyId,proposed.id)),{code:'HIGGSFIELD_ARCHIVE_SPONSOR_UNAVAILABLE'});
+    assert.deepEqual(counts,before);await denied(workerPool!,roles.worker,'UPDATE memberships SET access_revoked_at=NULL');
+   }finally{await owner!.query('UPDATE memberships SET access_revoked_at=NULL WHERE company_id=$1 AND user_id=$2',[companyId,userId]);}
+   await transaction(db=>authorizeHiggsfieldArchive(db,companyId,proposed.id));
   });
 
   await t.test('database deadlines remain authoritative when the application clock is behind or ahead',async()=>{

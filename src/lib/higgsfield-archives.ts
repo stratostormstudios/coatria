@@ -29,7 +29,7 @@ async function once(db:PoolClient,actor:HiggsfieldArchiveActor,clientId:string,o
  const result=await run();await db.query('INSERT INTO higgsfield_archive_requests(company_id,actor_key,client_id,request_hash,response) VALUES($1,$2,$3,$4,$5)',[actor.companyId,key,clientId,hash,JSON.stringify(result)]);return {...result,replayed:false};
 }
 async function currentAdmin(db:PoolClient,companyId:string,userIds:string[]){
- const unique=[...new Set(userIds)].sort(),rows=(await db.query("SELECT user_id FROM memberships WHERE company_id=$1 AND user_id=ANY($2::uuid[]) AND role IN ('owner','admin') ORDER BY user_id FOR SHARE",[companyId,unique])).rows;
+ const unique=[...new Set(userIds)].sort(),rows=(await db.query("SELECT user_id FROM memberships WHERE company_id=$1 AND user_id=ANY($2::uuid[]) AND role IN ('owner','admin') AND access_revoked_at IS NULL ORDER BY user_id FOR SHARE",[companyId,unique])).rows;
  if(rows.length!==unique.length)changed('HIGGSFIELD_ARCHIVE_SPONSOR_UNAVAILABLE');
 }
 async function currentProject(db:PoolClient,companyId:string,projectId:string){
