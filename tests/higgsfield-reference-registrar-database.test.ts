@@ -143,9 +143,28 @@ test('PostgreSQL registrar LOGIN has exact enrollment grants and no other author
    }
    assert.deepEqual(await snapshot(),before);
   });
+  await t.test('exact storage tuple constraints defer standalone deletion failure until COMMIT',async()=>{
+   const constraints=(await owner!.query(`SELECT confrelid::regclass::text AS referenced_table,condeferrable,condeferred,confdeltype,confupdtype
+    FROM pg_constraint WHERE conrelid='public.higgsfield_reference_service_projects'::regclass AND contype='f'
+    AND confrelid IN ('public.project_storage_bindings'::regclass,'public.project_storage_connections'::regclass) ORDER BY referenced_table`)).rows;
+   assert.deepEqual(constraints,[
+    {referenced_table:'project_storage_bindings',condeferrable:true,condeferred:true,confdeltype:'a',confupdtype:'a'},
+    {referenced_table:'project_storage_connections',condeferrable:true,condeferred:true,confdeltype:'a',confupdtype:'a'}
+   ]);
+   for(const [table,id]of [['project_storage_bindings',bindingId],['project_storage_connections',connectionId]]){
+    const client=await owner!.connect();try{
+     await client.query('BEGIN');
+     assert.equal((await client.query('DELETE FROM '+table+' WHERE id=$1 RETURNING id',[id])).rowCount,1,'The statement succeeds; validation is deferred');
+     assert.equal((await client.query('SELECT 1 FROM higgsfield_reference_service_projects WHERE service_id=$1',[serviceId])).rowCount,1,'No referencing child is removed to permit deletion');
+     await assert.rejects(client.query('COMMIT'),{code:'23503'});
+    }finally{await client.query('ROLLBACK');client.release();}
+    assert.equal((await owner!.query('SELECT 1 FROM '+table+' WHERE id=$1',[id])).rowCount,1,'Failed COMMIT restores the referenced storage row');
+    assert.deepEqual((await owner!.query('SELECT identity FROM higgsfield_reference_service_enrollments WHERE service_id=$1',[serviceId])).rows[0].identity,identityValue);
+   }
+  });
   await t.test('enrollment immutability does not block owner-controlled company cascades',async()=>{
    await owner!.query('DELETE FROM companies WHERE id=$1',[companyId]);
-   assert.equal((await owner!.query('SELECT 1 FROM higgsfield_reference_service_enrollments WHERE service_id=$1',[serviceId])).rowCount,0);
+   for(const [table,key,id]of [['companies','id',companyId],['higgsfield_reference_services','id',serviceId],['higgsfield_reference_service_projects','service_id',serviceId],['higgsfield_reference_service_enrollments','service_id',serviceId],['project_storage_bindings','id',bindingId],['project_storage_connections','id',connectionId]])assert.equal((await owner!.query('SELECT 1 FROM '+table+' WHERE '+key+'=$1',[id])).rowCount,0);
   });
  }finally{
   await registrar?.end();for(const {pool}of auxiliary)await pool.end();await owner?.end();
