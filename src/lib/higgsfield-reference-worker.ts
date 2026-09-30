@@ -63,7 +63,15 @@ function authorityScope(check:(signal:AbortSignal)=>Promise<void>,input:{deadlin
  async function authorize(force=false){current();if(finished)return;if(!pending&&(force||Date.now()-lastCheck>=input.interval)){const timeout=setTimeout(()=>stop('REFERENCE_AUTHORITY_CHANGED'),input.checkTimeout);pending=bound(Promise.resolve().then(()=>{current();return check(controller.signal);})).then(()=>{lastCheck=Date.now();}).catch(()=>{stop('REFERENCE_AUTHORITY_CHANGED');current();}).finally(()=>{clearTimeout(timeout);pending=undefined;});}await pending;current();}
  const external=()=>stop('REFERENCE_WORKER_ABORTED');input.signal?.addEventListener('abort',external,{once:true});if(input.signal?.aborted)external();
  const deadline=setTimeout(()=>stop('REFERENCE_WORKER_DEADLINE'),input.deadline),watchdog=setInterval(()=>void authorize(true).catch(()=>{}),input.interval);
- return {signal:controller.signal,bound,track,current,authorize,async io<T>(run:()=>Promise<T>){await authorize(true);const result=await bound(Promise.resolve().then(()=>{current();return run();}));await authorize(true);return result;},async drain(){while(inFlight.size)await Promise.allSettled([...inFlight]);},close(){stop('REFERENCE_WORKER_ABORTED');finished=true;clearTimeout(deadline);clearInterval(watchdog);input.signal?.removeEventListener('abort',external);}};
+ async function terminal<T>(run:()=>Promise<T>){
+  // Join any in-flight watchdog check before handing off. The server checks
+  // authority again and clears this lease in its terminal transaction; polling
+  // that completed lease while its acknowledgement travels back is invalid.
+  // Only the watchdog stops: deadline, external cancellation and drain remain.
+  await authorize(true);clearInterval(watchdog);current();
+  return bound(Promise.resolve().then(()=>{current();return run();}));
+ }
+ return {signal:controller.signal,bound,track,current,authorize,terminal,async io<T>(run:()=>Promise<T>){await authorize(true);const result=await bound(Promise.resolve().then(()=>{current();return run();}));await authorize(true);return result;},async drain(){while(inFlight.size)await Promise.allSettled([...inFlight]);},close(){stop('REFERENCE_WORKER_ABORTED');finished=true;clearTimeout(deadline);clearInterval(watchdog);input.signal?.removeEventListener('abort',external);}};
 }
 function descriptor(value:HiggsfieldMediaDescriptor,lease:HiggsfieldReferenceLease):Image{
  if(!value||value.kind!=='image'||value.verification!=='full_decode'||value.inspectionVersion!==1||value.bytes!==lease.proxy.bytes||value.sha256!==lease.proxy.sha256||value.contentType!==lease.proxy.contentType||!positive(value.width,HIGGSFIELD_REFERENCE_POLICY.maxDimension)||!positive(value.height,HIGGSFIELD_REFERENCE_POLICY.maxDimension)||value.width*value.height>HIGGSFIELD_REFERENCE_POLICY.maxPixels||({png:'image/png',jpeg:'image/jpeg',webp:'image/webp'} as Record<string,string>)[value.format]!==value.contentType||typeof value.codec!=='string'||value.codec.length>80||!value.color||['space','primaries','transfer','range'].some(k=>{const v=(value.color as any)[k];return v!==null&&(typeof v!=='string'||v.length>80);}))return fail('REFERENCE_IMAGE_REJECTED');
@@ -109,7 +117,7 @@ export function createHiggsfieldReferenceWorker(options:Options,dependencies:Hig
    if(bytes!==lease.proxy.bytes||digest.digest('hex')!==lease.proxy.sha256)fail('REFERENCE_SOURCE_CHANGED');await scope.io(()=>file!.sync());
    const media=descriptor(await scope.io(()=>inspectMedia({path,expectedKind:'image',expectedBytes:bytes,expectedSha256:currentLease.proxy.sha256,signal:scope.signal})),lease);
    if(lease.phase==='inspect'){
-    await scope.authorize(true);await scope.bound(recordInspection(lease,{descriptor:media,profileSha256},scope.signal));return {processed:true,referenceId:lease.referenceId,status:'awaiting_approval'};
+    await scope.terminal(()=>recordInspection(currentLease,{descriptor:media,profileSha256},scope.signal));return {processed:true,referenceId:lease.referenceId,status:'awaiting_approval'};
    }
    if(!lease.inspection||lease.inspection.profileSha256!==profileSha256||!sameDescriptor(media,lease.inspection.descriptor))fail('REFERENCE_IMAGE_REJECTED');
    // Read the same private file handle after decode, never the original or an
@@ -126,7 +134,7 @@ export function createHiggsfieldReferenceWorker(options:Options,dependencies:Hig
    const uploaded=await scope.io(()=>{if(Date.parse(allocation.expiresAt)<=Date.now())fail('REFERENCE_PROVIDER_UNCERTAIN');return upload({locator:allocation.uploadUrl,body:body!,bytes,sha256:currentLease.proxy.sha256,contentType:media.contentType as HiggsfieldReferenceUpload['contentType'],deadlineMs:Math.max(1,Math.min(deadline,Date.parse(allocation.expiresAt)-Date.now())),signal:scope.signal,assertAuthority:async()=>{await scope.authorize(true);if(Date.parse(allocation.expiresAt)<=Date.now())fail('REFERENCE_AUTHORITY_CHANGED');}});});
    if(uploaded.bytes!==bytes||uploaded.sha256!==lease.proxy.sha256||uploaded.status!==200)fail('REFERENCE_PROVIDER_UNCERTAIN');
    await scope.io(()=>completePut(currentLease,actionId,{phase:'put',bytes,sha256:currentLease.proxy.sha256,httpStatus:200},scope.signal));
-   await scope.authorize(true);await scope.bound(broker.confirm(currentLease,scope.signal));return {processed:true,referenceId:lease.referenceId,status:'confirmed'};
+   await scope.terminal(()=>broker.confirm(currentLease,scope.signal));return {processed:true,referenceId:lease.referenceId,status:'confirmed'};
   }catch(error){
    const code:HiggsfieldReferenceWorkerCode=externalIntent?'REFERENCE_PROVIDER_UNCERTAIN':error instanceof HiggsfieldReferenceWorkerError?error.code:'REFERENCE_WORKER_FAILED';
    if(!lease)return {processed:false,status:'disabled',code};

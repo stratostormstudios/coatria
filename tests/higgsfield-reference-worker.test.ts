@@ -81,6 +81,29 @@ function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>
 const turn=()=>new Promise<void>(resolve=>setTimeout(resolve,10));
 async function scratchDrained(f:Fixture){for(let i=0;i<30&&(await readdir(f.scratchRoot)).length;i++)await turn();assert.deepEqual(await readdir(f.scratchRoot),[]);}
 
+test('terminal handoff retains cancellation and deadline, drains the final RPC and never retries it',async t=>{
+ for(const phase of ['inspect','transfer'] as const)for(const interruption of ['abort','deadline']){
+  const f=await fixture(t,phase),entered=deferred<void>(),aborted=deferred<void>(),release=deferred<void>(),controller=new AbortController();
+  f.options.operationDeadlineMs=1000;f.options.cleanupTimeoutMs=300;
+  let terminalCalls=0,terminalSettled=false,resultSettled=false;
+  const waitForAcknowledgement=async(signal:AbortSignal)=>{
+   terminalCalls++;entered.resolve();
+   signal.addEventListener('abort',()=>aborted.resolve(),{once:true});if(signal.aborted)aborted.resolve();
+   await release.promise;terminalSettled=true;
+  };
+  if(phase==='inspect'){const original=f.deps.recordInspection;f.deps.recordInspection=async(...args)=>{await original(...args);await waitForAcknowledgement(args[2]);};}
+  else {const original=f.deps.broker.confirm;f.deps.broker.confirm=async(...args)=>{await original(...args);await waitForAcknowledgement(args[1]);};}
+  const worker=createHiggsfieldReferenceWorker(f.options,f.deps),result=worker.runNext({signal:controller.signal}).then(value=>{resultSettled=true;return value;});
+  await Promise.race([entered.promise,result.then(()=>assert.fail('Worker finished before entering the terminal RPC'))]);
+  if(interruption==='abort')controller.abort();await aborted.promise;await turn();
+  assert.equal(resultSettled,false,'The cancelled terminal response must drain before scratch cleanup');assert.equal(terminalSettled,false);assert.equal((await readdir(f.scratchRoot)).length,1);
+  release.resolve();const outcome=await result;assert.equal(terminalSettled,true);
+  assert.equal(outcome.status,phase==='transfer'?'uncertain':'failed');
+  assert.equal(outcome.code,phase==='transfer'?'REFERENCE_PROVIDER_UNCERTAIN':interruption==='abort'?'REFERENCE_WORKER_ABORTED':'REFERENCE_WORKER_DEADLINE');
+  assert.deepEqual(await readdir(f.scratchRoot),[]);assert.equal(terminalCalls,1);assert.equal((await worker.runNext()).status,'idle');assert.equal(terminalCalls,1);
+ }
+});
+
 test('abort waits for inspector cleanup before closing scratch or reporting completion',async t=>{
  const f=await fixture(t,'inspect'),entered=deferred<void>(),drained=deferred<void>(),stop=new AbortController();let settled=false;
  f.deps.inspectMedia=async input=>{entered.resolve();await drained.promise;assert.equal(input.signal?.aborted,true);assert.deepEqual(await readFile(input.path),bytes,'Scratch remains readable until the inspector has drained');throw Error('inspection aborted after cleanup');};

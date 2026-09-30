@@ -95,18 +95,55 @@ test('finite reference service API: exact stored bytes, consent, durable mutatio
    assert.equal((await query('SELECT status FROM higgsfield_references WHERE id=$1',[l.referenceId])).rows[0].status,'failed');
    assert.equal(f.stats().allocations,0);
   });
-  await t.test('runner client and actual service API complete synthetic inspection and consented transfer, preserving uncertainty',async()=>{
+  await t.test('runner client accepts delayed terminal API acknowledgements after lease closure and preserves uncertainty',async()=>{
    for(const lost of [false,true]){
     const f=await fixture(),scratch=await mkdtemp(join(tmpdir(),'coatria-reference-api-roundtrip-'));
     try{
-     const ready=(await f.call('readiness')).readiness,client=createHiggsfieldReferenceServiceClient({origin:'https://coatria.com',serviceId:f.serviceId,companyId:f.company,projectIds:[f.project],token:f.token,expiresAt:ready.expiresAt,profileSha256:'c'.repeat(64),qualificationSha256:'b'.repeat(64)},{fetch:async(url,init)=>f.handler(new Request(String(url),init),f.serviceId,new URL(String(url)).pathname.split('/').at(-1)!)});
+     let holdingTerminalResponse=false,closedLeaseAcknowledgements=0,postCommitAuthorizations=0;
+     const ready=(await f.call('readiness')).readiness,client=createHiggsfieldReferenceServiceClient({origin:'https://coatria.com',serviceId:f.serviceId,companyId:f.company,projectIds:[f.project],token:f.token,expiresAt:ready.expiresAt,profileSha256:'c'.repeat(64),qualificationSha256:'b'.repeat(64)},{fetch:async(url,init)=>{
+      const op=new URL(String(url)).pathname.split('/').at(-1)!;
+      if(op==='authorize'&&holdingTerminalResponse)postCommitAuthorizations++;
+      const response=await f.handler(new Request(String(url),init),f.serviceId,op);
+      if(!lost&&['inspection','confirm'].includes(op)&&response.ok){
+       const row=(await query('SELECT status,lease_id FROM higgsfield_references WHERE id=$1',[f.proposal.reference.id])).rows[0];
+       assert.equal(row.status,op==='inspection'?'awaiting_approval':'confirmed');assert.equal(row.lease_id,null);
+       holdingTerminalResponse=true;closedLeaseAcknowledgements++;
+       // Hold the actual committed API response across three watchdog periods.
+       // Completion must not authorize a lease that the terminal commit cleared.
+       await new Promise(resolve=>setTimeout(resolve,150));holdingTerminalResponse=false;
+      }
+      return response;
+     }});
      let uploaded=0;
      // The worker/client/API/database are real. Inspector and provider I/O are
      // deliberately synthetic; this is not Linux or live provider qualification.
-     const worker=createHiggsfieldReferenceWorker({companyId:f.company,projectIds:[f.project],scratchRoot:scratch,inspectionProfileSha256:'c'.repeat(64)},{...client,inspectMedia:async()=>f.descriptor as Extract<HiggsfieldMediaDescriptor,{kind:'image'}>,upload:async input=>{uploaded++;assert.deepEqual(input.body,bytes);assert.equal(input.sha256,sha256);assert(!JSON.stringify(input).includes(f.token));return {bytes:bytes.length,sha256,status:200};}});
+     const worker=createHiggsfieldReferenceWorker({companyId:f.company,projectIds:[f.project],scratchRoot:scratch,inspectionProfileSha256:'c'.repeat(64),authorityIntervalMs:50},{...client,inspectMedia:async()=>f.descriptor as Extract<HiggsfieldMediaDescriptor,{kind:'image'}>,upload:async input=>{uploaded++;assert.deepEqual(input.body,bytes);assert.equal(input.sha256,sha256);assert(!JSON.stringify(input).includes(f.token));return {bytes:bytes.length,sha256,status:200};}});
      assert.equal((await worker.runNext()).status,'awaiting_approval');assert.deepEqual(f.stats(),{reads:1,closes:1,allocations:0,confirmations:0});assert.deepEqual(await readdir(scratch),[]);
      await f.approve();if(lost)f.lose();assert.equal((await worker.runNext()).status,lost?'uncertain':'confirmed');assert.deepEqual(f.stats(),{reads:2,closes:2,allocations:1,confirmations:lost?0:1});assert.equal(uploaded,lost?0:1);assert.deepEqual(await readdir(scratch),[]);
      assert.equal((await query('SELECT status FROM higgsfield_references WHERE id=$1',[f.proposal.reference.id])).rows[0].status,lost?'uncertain':'confirmed');assert.equal((await worker.runNext()).status,'idle');assert.equal(f.stats().allocations,1);
+     if(!lost){assert.equal(closedLeaseAcknowledgements,2);assert.equal(postCommitAuthorizations,0);}
+    }finally{await rm(scratch,{recursive:true,force:true});}
+   }
+  });
+  await t.test('terminal API revocation before commit and lost acknowledgements cannot become worker success or replay',async()=>{
+   for(const terminal of ['inspection','confirm'])for(const failure of ['revoke','lost-response']){
+    const f=await fixture(),scratch=await mkdtemp(join(tmpdir(),'coatria-reference-api-terminal-'));
+    try{
+     if(terminal==='confirm'){await f.inspect();await f.approve();}
+     const ready=(await f.call('readiness')).readiness;let calls=0;
+     const client=createHiggsfieldReferenceServiceClient({origin:'https://coatria.com',serviceId:f.serviceId,companyId:f.company,projectIds:[f.project],token:f.token,expiresAt:ready.expiresAt,profileSha256:'c'.repeat(64),qualificationSha256:'b'.repeat(64)},{fetch:async(url,init)=>{
+      const op=new URL(String(url)).pathname.split('/').at(-1)!;
+      if(op===terminal){calls++;if(failure==='revoke')await query('UPDATE higgsfield_reference_services SET revoked_at=clock_timestamp(),revoked_by=enrolled_by WHERE id=$1',[f.serviceId]);}
+      const response=await f.handler(new Request(String(url),init),f.serviceId,op);
+      if(op===terminal&&failure==='lost-response'){assert.equal(response.status,200);await response.body?.cancel();throw Error('Synthetic terminal acknowledgement lost');}
+      return response;
+     }});
+     const worker=createHiggsfieldReferenceWorker({companyId:f.company,projectIds:[f.project],scratchRoot:scratch,inspectionProfileSha256:'c'.repeat(64)},{...client,inspectMedia:async()=>f.descriptor as Extract<HiggsfieldMediaDescriptor,{kind:'image'}>,upload:async input=>{assert.deepEqual(input.body,bytes);return {bytes:bytes.length,sha256,status:200};}});
+     const outcome=await worker.runNext();assert.equal(outcome.status,terminal==='confirm'?'uncertain':'failed');assert.equal(calls,1);assert.deepEqual(await readdir(scratch),[]);
+     const row=(await query('SELECT status,lease_id FROM higgsfield_references WHERE id=$1',[f.proposal.reference.id])).rows[0];
+     assert.equal(row.status,failure==='lost-response'?(terminal==='confirm'?'confirmed':'awaiting_approval'):(terminal==='confirm'?'uncertain':'failed'));assert.equal(row.lease_id,null);
+     assert.equal(f.stats().confirmations,terminal==='confirm'&&failure==='lost-response'?1:0);
+     assert.equal((await worker.runNext()).status,failure==='revoke'?'disabled':'idle');assert.equal(calls,1,'Terminal mutation is never replayed');
     }finally{await rm(scratch,{recursive:true,force:true});}
    }
   });
