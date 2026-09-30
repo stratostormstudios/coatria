@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {randomBytes,randomUUID} from 'node:crypto';
 import {readFile,readdir} from 'node:fs/promises';
 import {Pool,type PoolClient} from 'pg';
+import {PGlite} from '@electric-sql/pglite';
 import {HIGGSFIELD_REFERENCE_BROKER_ROLE as ROLE,REFERENCE_BROKER_CONTRACT,REFERENCE_BROKER_STATE_GUARDS,assertHiggsfieldReferenceDatabase} from '../src/lib/higgsfield-reference-database.mjs';
 import {createHiggsfieldReferenceTransaction} from '../src/lib/higgsfield-reference-transaction';
 import {createProjectStorageConnection,bindProjectStorage} from '../src/lib/project-storage';
@@ -26,6 +27,32 @@ test('reference broker provisioning takes secrets only in validated memory input
  for(const value of[{...input,unexpected:true},{...input,password:'short'},{...input,connectionString:remote.href},{...input,connectionString:input.connectionString+'?options=unsafe'}]){
   assert.throws(()=>parseReferenceBrokerProvisionInput(value),e=>{assert(!String(e).includes('owner:synthetic'));return true;});
  }
+});
+
+test('temporary verification SET restores exact creator memberships and diagnostics omit raw errors',async()=>{
+ const {withReferenceProvisionVerificationRole,referenceProvisionDiagnostic}=await import('../scripts/provision-reference-broker-role.mjs');
+ assert.deepEqual(referenceProvisionDiagnostic('assume_role',{code:'42501',message:'synthetic secret',detail:'private SQL'}),{phase:'assume_role',code:'42501'});
+ assert.deepEqual(referenceProvisionDiagnostic('synthetic secret',{code:'private URL'}),{phase:'unknown',code:'UNCLASSIFIED'});
+ const db=new PGlite();try{
+  await db.exec('CREATE ROLE reference_fixture_owner NOLOGIN NOSUPERUSER CREATEROLE; SET SESSION AUTHORIZATION reference_fixture_owner');
+  for(const selfGrant of ['', 'inherit']){
+   await db.exec("BEGIN; SET LOCAL createrole_self_grant='"+selfGrant+"'; CREATE ROLE "+ROLE+' NOLOGIN NOINHERIT');
+   const snapshot=async()=>(await db.query('SELECT m.roleid,m.member,m.grantor,m.admin_option,m.inherit_option,m.set_option FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.roleid WHERE r.rolname=$1 ORDER BY member,grantor',[ROLE])).rows;
+   const before=await snapshot();await db.exec('SAVEPOINT denied_set');
+   await assert.rejects(db.exec('SET LOCAL ROLE '+ROLE),{code:'42501'});await db.exec('ROLLBACK TO SAVEPOINT denied_set');
+   const phases:string[]=[];await withReferenceProvisionVerificationRole(db,ROLE,async()=>{assert.deepEqual((await db.query('SELECT current_user,session_user')).rows[0],{current_user:ROLE,session_user:'reference_fixture_owner'});},(phase:string)=>phases.push(phase));
+   assert.deepEqual(await snapshot(),before);assert(phases.includes('restore_membership'));assert.equal(phases.at(-1),'verify_membership_restored');
+   assert.equal((await db.query<{allowed:boolean}>("SELECT pg_has_role(current_user,$1,'SET') AS allowed",[ROLE])).rows[0].allowed,false);
+   await db.exec('ROLLBACK');
+  }
+  await db.exec("BEGIN; SET LOCAL createrole_self_grant=''; CREATE ROLE "+ROLE+' NOLOGIN NOINHERIT');
+  const failure=Object.assign(Error('synthetic verification detail'),{code:'REFERENCE_DB_PRIVILEGES'});let failedPhase='';
+  await assert.rejects(withReferenceProvisionVerificationRole(db,ROLE,async()=>{throw failure;},(phase:string)=>{failedPhase=phase;}),error=>error===failure);
+  assert.deepEqual(referenceProvisionDiagnostic(failedPhase,failure),{phase:'verify_permissions',code:'REFERENCE_DB_PRIVILEGES'});
+  await db.exec('ROLLBACK');assert.equal((await db.query('SELECT 1 FROM pg_roles WHERE rolname=$1',[ROLE])).rows.length,0);
+  assert.equal((await db.query('SELECT 1 FROM pg_auth_members m LEFT JOIN pg_roles r ON r.oid=m.roleid WHERE r.oid IS NULL')).rows.length,0);
+  assert.equal((await db.query<{current_user:string}>('SELECT current_user')).rows[0].current_user,'reference_fixture_owner');
+ }finally{await db.close();}
 });
 test('reference broker grants deny human authority and OAuth, and bind the exact SQL allowlist',async()=>{
  const sql=await readFile('database/reference-broker-permissions.sql','utf8');
@@ -61,10 +88,10 @@ test('broker startup pins the exact reviewed migration guard bodies and function
 // substitutes PGlite. All provider/media results are synthetic local evidence.
 test('PostgreSQL independent reference broker LOGIN fences authority and executes durable phases',{skip:!local,timeout:180000},async t=>{
  const {provisionReferenceBrokerRole}=await import('../scripts/provision-reference-broker-role.mjs');
- const suffix=randomUUID().replaceAll('-',''),dbName='coatria_ref_broker_'+suffix;
+ const suffix=randomUUID().replaceAll('-',''),dbName='coatria_ref_broker_'+suffix,ownerRole='coatria_ref_owner_'+suffix,ownerPassword=randomBytes(32).toString('hex');
  const control=new Pool({connectionString:integration,max:1,connectionTimeoutMillis:10000});
- const ownerUrl=new URL(integration!);ownerUrl.pathname='/'+dbName;
- let owner:Pool|undefined,broker:Pool|undefined,app:Pool|undefined,controlClient:PoolClient|undefined,created=false,roleAbsent=false;
+ const ownerUrl=new URL(integration!);ownerUrl.pathname='/'+dbName;ownerUrl.username=ownerRole;ownerUrl.password=ownerPassword;
+ let owner:Pool|undefined,broker:Pool|undefined,app:Pool|undefined,controlClient:PoolClient|undefined,created=false,roleAbsent=false,ownerCreated=false;
  const appRole='coatria_runtime_v1',appPassword=randomBytes(32).toString('hex');
  const auxiliary:string[]=[],priorKey=process.env.COATRIA_HOSTING_KEYRING,priorFetch=globalThis.fetch;let outbound=0;
  globalThis.fetch=async()=>{outbound++;throw Error('No live provider calls are permitted');};
@@ -74,15 +101,18 @@ test('PostgreSQL independent reference broker LOGIN fences authority and execute
  try{
   controlClient=await control.connect();await controlClient.query('SELECT pg_advisory_lock(739284011)');
   assert.equal((await controlClient.query('SELECT 1 FROM pg_roles WHERE rolname=$1',[ROLE])).rowCount,0,'Dedicated fixture role must not preexist');roleAbsent=true;
-  await controlClient.query('CREATE DATABASE '+dbName);created=true;
+  await controlClient.query('CREATE ROLE '+ownerRole+" LOGIN NOSUPERUSER CREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS PASSWORD '"+ownerPassword+"'");ownerCreated=true;
+  await controlClient.query('ALTER ROLE '+ownerRole+" SET createrole_self_grant=''");
+  await controlClient.query('CREATE DATABASE '+dbName+' OWNER '+ownerRole);created=true;
   owner=new Pool({connectionString:ownerUrl.href,max:3,connectionTimeoutMillis:10000});
+  await identity(owner,ownerRole);assert.deepEqual((await owner.query("SELECT rolsuper,rolcreaterole,current_setting('createrole_self_grant') AS self_grant FROM pg_roles WHERE rolname=current_user")).rows[0],{rolsuper:false,rolcreaterole:true,self_grant:''});
   await owner.query('CREATE TABLE schema_migrations(name text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now())');
   for(const name of(await readdir('database')).filter(n=>/^\d.*\.sql$/.test(n)).sort()){await owner.query(await readFile('database/'+name,'utf8'));await owner.query('INSERT INTO schema_migrations(name) VALUES($1)',[name]);}
   // Existing principal grants must survive broker provisioning unchanged.
   for(const[kind,file]of [['runtime','runtime-permissions.sql'],['archive','higgsfield-archive-worker-permissions.sql'],['gateway','storage-gateway-permissions.sql']]){
    const role=kind==='runtime'?appRole:'coatria_ref_'+kind+'_'+suffix;
    assert.equal((await controlClient.query('SELECT 1 FROM pg_roles WHERE rolname=$1',[role])).rowCount,0,'Fixture role must not preexist');
-   await controlClient.query('CREATE ROLE '+role+(kind==='runtime'?" LOGIN PASSWORD '"+appPassword+"'":' NOLOGIN')+' NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS');auxiliary.push(role);
+   await owner.query('CREATE ROLE '+role+(kind==='runtime'?" LOGIN PASSWORD '"+appPassword+"'":' NOLOGIN')+' NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS');auxiliary.push(role);
    const original={runtime:'coatria_runtime_v1',archive:'coatria_higgsfield_archive_worker_v1',gateway:'coatria_storage_gateway_v1'}[kind]!;
    await owner.query((await readFile('database/'+file,'utf8')).replaceAll(original,role));
   }
@@ -94,17 +124,32 @@ test('PostgreSQL independent reference broker LOGIN fences authority and execute
    CROSS JOIN unnest($1::text[]) r(name) CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','REFERENCES']) p(priv)
    WHERE n.nspname='public' AND c.relkind='r' ORDER BY c.relname,a.attname,r.name,p.priv`,[auxiliary])).rows;
   const before=await grantsSnapshot(),password=randomBytes(32).toString('hex');
+  await t.test('failed provisional verification rolls back the new LOGIN and temporary SET membership',async()=>{
+   const ownerMemberships=async()=>(await controlClient!.query('SELECT roleid,member,grantor,admin_option,inherit_option,set_option FROM pg_auth_members WHERE member=(SELECT oid FROM pg_roles WHERE rolname=$1) OR grantor=(SELECT oid FROM pg_roles WHERE rolname=$1) ORDER BY roleid,member,grantor',[ownerRole])).rows;
+   const membershipsBefore=await ownerMemberships();
+   await owner!.query('GRANT SELECT(sealed) ON higgsfield_connections TO PUBLIC');
+   try{await assert.rejects(provisionReferenceBrokerRole({connectionString:ownerUrl.href,password}),error=>{
+    const failure=error as {code:string,diagnostic:unknown};assert.equal(failure.code,'PROVISION_FAILED');assert.deepEqual(failure.diagnostic,{phase:'verify_permissions',code:'REFERENCE_DB_PRIVILEGES'});
+    assert(!JSON.stringify(failure).includes(password)&&!String(error).includes(ownerPassword));return true;
+   });}finally{await owner!.query('REVOKE SELECT(sealed) ON higgsfield_connections FROM PUBLIC');}
+   assert.equal((await controlClient!.query('SELECT 1 FROM pg_roles WHERE rolname=$1',[ROLE])).rowCount,0);
+   assert.deepEqual(await ownerMemberships(),membershipsBefore);
+   assert.deepEqual(await grantsSnapshot(),before);
+  });
   const provisioned=await provisionReferenceBrokerRole({connectionString:ownerUrl.href,password});
   assert(provisioned?.verification);
   assert.equal(provisioned.verification.independentLogin,true);
   assert.deepEqual(await grantsSnapshot(),before);
+  const creatorMemberships=(await owner.query('SELECT m.admin_option,m.inherit_option,m.set_option,g.rolsuper AS bootstrap_grantor FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.roleid JOIN pg_roles member ON member.oid=m.member JOIN pg_roles g ON g.oid=m.grantor WHERE r.rolname=$1 AND member.rolname=current_user',[ROLE])).rows;
+  assert.deepEqual(creatorMemberships,[{admin_option:true,inherit_option:false,set_option:false,bootstrap_grantor:true}]);
+  await assert.rejects(owner.query('SET ROLE '+ROLE),{code:'42501'});
   const brokerUrl=new URL(ownerUrl);brokerUrl.username=ROLE;brokerUrl.password=password;
   broker=new Pool({connectionString:brokerUrl.href,max:2,connectionTimeoutMillis:10000});
   const tx=createHiggsfieldReferenceTransaction(broker),ownerTx=createHiggsfieldReferenceTransaction(owner);
   await t.test('startup requires independent LOGIN, exact privileges and enabled immutable lock guards',async()=>{
    await identity(broker!);assert.equal((await assertHiggsfieldReferenceDatabase(broker!))?.status,'passed');
    await assert.rejects(()=>assertHiggsfieldReferenceDatabase(owner!),{code:'REFERENCE_DB_IDENTITY'});
-   const impersonation=await owner!.connect();try{await impersonation.query('SET ROLE '+ROLE);await assert.rejects(()=>assertHiggsfieldReferenceDatabase(impersonation),{code:'REFERENCE_DB_IDENTITY'});}finally{await impersonation.query('RESET ROLE');impersonation.release();}
+   const superUrl=new URL(integration!);superUrl.pathname='/'+dbName;const impersonation=new Pool({connectionString:superUrl.href,max:1});try{await impersonation.query('SET ROLE '+ROLE);await assert.rejects(()=>assertHiggsfieldReferenceDatabase(impersonation),{code:'REFERENCE_DB_IDENTITY'});}finally{await impersonation.query('RESET ROLE');await impersonation.end();}
    const grants=await readFile('database/reference-broker-permissions.sql','utf8');
    for(const sql of['GRANT UPDATE(approved_by) ON higgsfield_references TO '+ROLE,'GRANT SELECT(sealed) ON higgsfield_connections TO '+ROLE,'GRANT SELECT ON schema_migrations TO '+ROLE+' WITH GRANT OPTION']){
     await owner!.query(sql);try{await assert.rejects(()=>assertHiggsfieldReferenceDatabase(broker!),{code:'REFERENCE_DB_PRIVILEGES'});}finally{await owner!.query(grants);}
@@ -281,6 +326,7 @@ test('PostgreSQL independent reference broker LOGIN fences authority and execute
   if(created)await dropFixtureDatabase(controlClient!,dbName);
   if(roleAbsent&&(await controlClient!.query('SELECT 1 FROM pg_roles WHERE rolname=$1',[ROLE])).rowCount)await controlClient!.query('DROP ROLE '+ROLE);
   for(const role of auxiliary)await controlClient!.query('DROP ROLE '+role);
+  if(ownerCreated)await controlClient!.query('DROP ROLE '+ownerRole);
   if(controlClient){await controlClient.query('SELECT pg_advisory_unlock(739284011)');controlClient.release();}await control.end();
  }
 });

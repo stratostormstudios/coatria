@@ -48,25 +48,28 @@ test('registrar preflight rejects unexpected database errors without raw databas
 // SET ROLE substitute for actual registrar/application/worker LOGIN coverage.
 test('PostgreSQL registrar LOGIN has exact enrollment grants and no other authority',{skip:!local,timeout:180000},async t=>{
  const {provisionReferenceRegistrarRole}=await import('../scripts/provision-reference-registrar-role.mjs');
- const suffix=randomUUID().replaceAll('-',''),dbName='coatria_registrar_'+suffix;
+ const suffix=randomUUID().replaceAll('-',''),dbName='coatria_registrar_'+suffix,ownerRole='coatria_rr_owner_'+suffix,ownerPassword=randomBytes(32).toString('hex');
  const control=new Pool({connectionString:integration,max:1,connectionTimeoutMillis:10000});
- const ownerUrl=new URL(integration!);ownerUrl.pathname='/'+dbName;
- let owner:Pool|undefined,registrar:Pool|undefined,controlClient:PoolClient|undefined,created=false,roleAbsent=false;
+ const ownerUrl=new URL(integration!);ownerUrl.pathname='/'+dbName;ownerUrl.username=ownerRole;ownerUrl.password=ownerPassword;
+ let owner:Pool|undefined,registrar:Pool|undefined,controlClient:PoolClient|undefined,created=false,roleAbsent=false,ownerCreated=false;
  const auxiliary:{role:string,pool:Pool}[]=[],password=randomBytes(32).toString('hex');
  const identity=async(db:Pool|PoolClient,role=ROLE)=>{assert.deepEqual((await db.query('SELECT current_user,session_user')).rows[0],{current_user:role,session_user:role});};
  const denied=async(db:Pool,sql:string,values:unknown[]=[])=>{await assert.rejects(db.query(sql,values),{code:'42501'});};
  try{
   controlClient=await control.connect();await controlClient.query('SELECT pg_advisory_lock(739284011)');
   assert.equal((await controlClient.query('SELECT 1 FROM pg_roles WHERE rolname=$1',[ROLE])).rowCount,0,'Fixture registrar role must not preexist');roleAbsent=true;
-  await controlClient.query('CREATE DATABASE '+dbName);created=true;
+  await controlClient.query('CREATE ROLE '+ownerRole+" LOGIN NOSUPERUSER CREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS PASSWORD '"+ownerPassword+"'");ownerCreated=true;
+  await controlClient.query('ALTER ROLE '+ownerRole+" SET createrole_self_grant=''");
+  await controlClient.query('CREATE DATABASE '+dbName+' OWNER '+ownerRole);created=true;
   owner=new Pool({connectionString:ownerUrl.href,max:2,connectionTimeoutMillis:10000});
+  await identity(owner,ownerRole);assert.deepEqual((await owner.query("SELECT rolsuper,rolcreaterole,current_setting('createrole_self_grant') AS self_grant FROM pg_roles WHERE rolname=current_user")).rows[0],{rolsuper:false,rolcreaterole:true,self_grant:''});
   await owner.query('CREATE TABLE schema_migrations(name text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now())');
   for(const name of(await readdir('database')).filter(n=>/^\d.*\.sql$/.test(n)).sort()){await owner.query(await readFile('database/'+name,'utf8'));await owner.query('INSERT INTO schema_migrations(name) VALUES($1)',[name]);}
   for(const[kind,file,original]of [
    ['runtime','runtime-permissions.sql','coatria_runtime_v1'],['broker','reference-broker-permissions.sql','coatria_higgsfield_reference_broker_v1'],
    ['archive','higgsfield-archive-worker-permissions.sql','coatria_higgsfield_archive_worker_v1'],['gateway','storage-gateway-permissions.sql','coatria_storage_gateway_v1']]){
    const role='coatria_rr_'+kind+'_'+suffix,secret=randomBytes(32).toString('hex');
-   await controlClient.query('CREATE ROLE '+role+" LOGIN PASSWORD '"+secret+"' NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
+   await owner.query('CREATE ROLE '+role+" LOGIN PASSWORD '"+secret+"' NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
    const login=new URL(ownerUrl);login.username=role;login.password=secret;
    const pool=new Pool({connectionString:login.href,max:1,connectionTimeoutMillis:10000});auxiliary.push({role,pool});
    await owner.query((await readFile('database/'+file,'utf8')).replaceAll(original,role));await identity(pool,role);
@@ -77,13 +80,18 @@ test('PostgreSQL registrar LOGIN has exact enrollment grants and no other author
    WHERE n.nspname='public' AND c.relkind='r' ORDER BY c.relname,a.attname,r.name,p.priv`,[auxiliary.map(v=>v.role)])).rows;
   const before=await snapshot(),provisioned=await provisionReferenceRegistrarRole({connectionString:ownerUrl.href,password});
   assert.equal(provisioned?.verification.independentLogin,true);assert.deepEqual(await snapshot(),before);
+  const creatorMemberships=(await owner.query('SELECT m.admin_option,m.inherit_option,m.set_option,g.rolsuper AS bootstrap_grantor FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.roleid JOIN pg_roles member ON member.oid=m.member JOIN pg_roles g ON g.oid=m.grantor WHERE r.rolname=$1 AND member.rolname=current_user',[ROLE])).rows;
+  assert.deepEqual(creatorMemberships,[{admin_option:true,inherit_option:false,set_option:false,bootstrap_grantor:true}]);
+  assert.equal((await owner.query("SELECT pg_has_role(current_user,$1,'SET') AS allowed",[ROLE])).rows[0].allowed,false);
+  await assert.rejects(owner.query('SET ROLE '+ROLE),{code:'42501'});
   const login=new URL(ownerUrl);login.username=ROLE;login.password=password;
   registrar=new Pool({connectionString:login.href,max:1,connectionTimeoutMillis:10000});await identity(registrar);
   const grants=await readFile('database/reference-registrar-permissions.sql','utf8');
   await t.test('independent LOGIN preflight rejects impersonation, effective grant drift and altered ALWAYS guards',async()=>{
    assert.equal((await assertHiggsfieldReferenceRegistrarDatabase(registrar!)).status,'passed');
    await assert.rejects(()=>assertHiggsfieldReferenceRegistrarDatabase(owner!),{code:'REFERENCE_REGISTRAR_DB_IDENTITY'});
-   const impersonation=await owner!.connect();try{await impersonation.query('SET ROLE '+ROLE);await assert.rejects(()=>assertHiggsfieldReferenceRegistrarDatabase(impersonation),{code:'REFERENCE_REGISTRAR_DB_IDENTITY'});}finally{await impersonation.query('RESET ROLE');impersonation.release();}
+   const superUrl=new URL(integration!);superUrl.pathname='/'+dbName;
+   const impersonation=new Pool({connectionString:superUrl.href,max:1});try{await impersonation.query('SET ROLE '+ROLE);await assert.rejects(()=>assertHiggsfieldReferenceRegistrarDatabase(impersonation),{code:'REFERENCE_REGISTRAR_DB_IDENTITY'});}finally{await impersonation.query('RESET ROLE');await impersonation.end();}
    for(const sql of['GRANT SELECT(sealed) ON higgsfield_connections TO '+ROLE,'GRANT UPDATE(token_hash) ON higgsfield_reference_services TO '+ROLE,'GRANT SELECT ON schema_migrations TO '+ROLE+' WITH GRANT OPTION']){
     await owner!.query(sql);try{await assert.rejects(()=>assertHiggsfieldReferenceRegistrarDatabase(registrar!),{code:'REFERENCE_REGISTRAR_DB_PRIVILEGES'});}finally{await owner!.query(grants);}
    }
@@ -171,6 +179,7 @@ test('PostgreSQL registrar LOGIN has exact enrollment grants and no other author
   if(created)await dropFixtureDatabase(controlClient!,dbName);
   if(roleAbsent&&(await controlClient!.query('SELECT 1 FROM pg_roles WHERE rolname=$1',[ROLE])).rowCount)await controlClient!.query('DROP ROLE '+ROLE);
   for(const {role}of auxiliary)await controlClient!.query('DROP ROLE '+role);
+  if(ownerCreated)await controlClient!.query('DROP ROLE '+ownerRole);
   if(controlClient){await controlClient.query('SELECT pg_advisory_unlock(739284011)');controlClient.release();}await control.end();
  }
 });
