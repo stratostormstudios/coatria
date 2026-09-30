@@ -108,6 +108,24 @@ export function referenceHostReceiptReplacement(previous,receipt,expectedPreviou
 
 const currentState=(host,expected)=>{const result=spawnSync('/usr/bin/systemctl',['show',host.units.qualify.name,'--property='+REFERENCE_QUALIFIER_STATE_PROPERTIES],{shell:false,env:{PATH:'/usr/bin:/bin',LANG:'C',LC_ALL:'C'},encoding:'utf8',timeout:10000,maxBuffer:16384});if(result.status!==0||result.error)fail();return referenceHostQualificationState(result.stdout,host,expected);};
 const currentJournal=(host,state,expected)=>{const result=spawnSync('/usr/bin/journalctl',['--unit='+host.units.qualify.name,'_SYSTEMD_INVOCATION_ID='+state.InvocationID,'--output=json','--no-pager','--all'],{shell:false,env:{PATH:'/usr/bin:/bin',LANG:'C',LC_ALL:'C'},encoding:'utf8',timeout:10000,maxBuffer:1024**2});if(result.status!==0||result.error)fail();return referenceHostJournalProof(result.stdout,host,state,expected);};
+/** Read-only operator prerequisite. Revalidates accepted root copies against
+ * the current boot and retained qualifier's trusted journal emission. */
+export async function readCurrentReferenceHostQualification(hostPath,bundleSha256){
+ if(process.platform!=='linux'||process.arch!=='x64'||process.getuid?.()!==0)fail();
+ const installation=await readReferenceHostConfiguration(hostPath,bundleSha256,{trusted:true}),{host,hostBytes,bundle}=installation,config=join(REFERENCE_HOST_CONFIG,host.scope.serviceId),receiptPath=join(config,'qualified.json');
+ await archiveHostTrusted(receiptPath);const receiptBytes=await archiveHostRead(receiptPath,65536),receipt=referenceHostReceiptSchema.parse(JSON.parse(receiptBytes)),qualificationSha256=referenceHostQualificationHash(receiptBytes);
+ const evidencePath=join(config,'evidence-'+receipt.evidenceSha256+'.json'),reportPath=join(config,'report-'+receipt.reportSha256+'.json');for(const path of [evidencePath,reportPath])await archiveHostTrusted(path);
+ const evidenceBytes=await archiveHostRead(evidencePath,65536),reportBytes=await archiveHostRead(reportPath,1024**2),state=currentState(host,receipt.qualifierInvocationId),bootId=(await readFile('/proc/sys/kernel/random/boot_id','utf8')).trim();
+ const expected=makeReferenceHostReceipt(host,hostBytes,bundle,evidenceBytes,reportBytes,{bootId,invocationId:state.InvocationID,uid:host.uid,gid:host.gid,serviceRoot:'/sys/fs/cgroup/system.slice/'+host.units.qualify.name},Date.parse(receipt.acceptedAt));
+ if(canonical(receipt)!==canonical(expected)||Date.parse(receipt.acceptedAt)>Date.now()||Date.parse(receipt.expiresAt)<=Date.now())fail();
+ const result=spawnSync('/usr/bin/journalctl',['--unit='+host.units.qualify.name,'_SYSTEMD_INVOCATION_ID='+state.InvocationID,'--output=json','--no-pager','--all'],{shell:false,env:{PATH:'/usr/bin:/bin',LANG:'C',LC_ALL:'C'},encoding:'utf8',timeout:10000,maxBuffer:1024**2});if(result.status!==0||result.error)fail();
+ const rows=result.stdout.trim().split('\n');if(rows.length>256)fail();let emitted;
+ for(const line of rows){let row,message;try{row=JSON.parse(line);message=typeof row.MESSAGE==='string'?JSON.parse(row.MESSAGE):null;}catch{continue;}if(message?.event==='reference-host-qualified'){if(emitted)fail();emitted=message;}}
+ const prefix=REFERENCE_HOST_STATE+'/'+host.scope.serviceId+'/evidence/qualification-';if(!emitted||!new RegExp('^'+prefix+'[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}/host-evidence\\.json$').test(emitted.evidencePath)||emitted.reportPath!==dirname(emitted.evidencePath)+'/qualification.json')fail();
+ const proof=referenceHostJournalProof(result.stdout,host,state,{evidencePath:emitted.evidencePath,evidenceSha256:receipt.evidenceSha256,reportPath:emitted.reportPath,reportSha256:receipt.reportSha256});
+ currentState(host,receipt.qualifierInvocationId);if(Date.parse(receipt.expiresAt)<=Date.now()||referenceHostQualificationHash(await archiveHostRead(receiptPath,65536))!==qualificationSha256)fail();
+ return {...installation,receipt,receiptBytes,qualificationSha256,proof};
+}
 async function retained(path,bytes){let handle;try{handle=await open(path,'wx',0o444);await handle.writeFile(bytes);await handle.sync();}catch(error){if(error.code!=='EEXIST')throw error;await archiveHostTrusted(path);if(referenceHostQualificationHash(await archiveHostRead(path,1024**2))!==referenceHostQualificationHash(bytes))fail();}finally{await handle?.close();}}
 
 /** Root-only operator action. No credential mint, enrollment, reload or start. */

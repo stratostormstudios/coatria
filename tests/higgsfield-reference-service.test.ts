@@ -14,6 +14,7 @@ import type {HiggsfieldReferenceLease} from '../src/lib/higgsfield-references-pr
 import {createHiggsfieldReferenceServiceClient} from '../src/lib/higgsfield-reference-service-client';
 import {createHiggsfieldReferenceWorker} from '../src/lib/higgsfield-reference-worker';
 import type {HiggsfieldMediaDescriptor} from '../src/lib/higgsfield-media-inspection';
+import {insertSyntheticReferenceEnrollment} from './fixtures/reference-service-enrollment';
 
 type Row=Record<string,any>;
 test('finite reference service API: exact stored bytes, consent, durable mutation fences and revocation (PGlite)',{timeout:180000},async t=>{
@@ -42,6 +43,7 @@ test('finite reference service API: exact stored bytes, consent, durable mutatio
   // Synthetic enrollment is fixture setup, not a host qualification or a public API.
   await insert('higgsfield_reference_services',{id:serviceId,company_id:company,token_hash:hashToken(token),enrolled_by:owner,release_sha256:'a'.repeat(64),qualification_sha256:'b'.repeat(64),profile_sha256:'c'.repeat(64),provider_connection_id:providerId,provider_connection_revision:1,catalog_sha256:refs.higgsfieldReferenceDigest([]),upload_hosts:JSON.stringify(['uploads.example.com']),expires_at:new Date(Date.now()+1200000)});
   await insert('higgsfield_reference_service_projects',{service_id:serviceId,company_id:company,project_id:project,storage_binding_id:binding.id,storage_binding_revision:binding.revision,storage_connection_id:connection.id,storage_connection_revision:connection.revision});
+  await insertSyntheticReferenceEnrollment({query},serviceId);
   const proposal=await transaction(db=>refs.proposeHiggsfieldReference(db,actor,{clientId:randomUUID(),projectId:project,projectRevision:1,workItemId:work,proxyVersionId:version,proxyBytes:bytes.length,proxySha256:sha256,role:'image',purpose:'Synthetic prepared image; approval still pending'}));
   let reads=0,closes=0,allocations=0,confirmations=0,loseAllocation=false;const options={availability:(db:any,c:string,p:string)=>referenceServiceAvailability(db,c,p,{brokerReady:async()=>true})},mediaId=randomUUID();
   const handler=createHiggsfieldReferenceService({transaction:trace?run=>transaction(db=>{
@@ -61,6 +63,21 @@ test('finite reference service API: exact stored bytes, consent, durable mutatio
   return {company,owner,project,serviceId,token,version,handler,request,call,scope,inspect,approve,proposal,descriptor,stats:()=>({reads,closes,allocations,confirmations}),lose:()=>{loseAllocation=true;}};
  }
  try{
+  await t.test('service rows without immutable enrollment provenance cannot claim and wrong origins cannot act',async()=>{
+   const f=await fixture();await f.call('readiness');
+   const wrong=await f.handler(new Request('https://other.example/api/internal/reference-services/'+f.serviceId+'/claim',{method:'POST',headers:{Authorization:'Bearer '+f.token,'Content-Type':'application/json'},body:JSON.stringify({requestId:randomUUID()})}),f.serviceId,'claim');
+   assert.equal(wrong.status,403);
+   await query('DELETE FROM higgsfield_reference_service_enrollments WHERE service_id=$1',[f.serviceId]);
+   await f.call('readiness',{},403);await f.call('claim',{},403);
+   assert.equal((await query('SELECT count(*)::int AS count FROM higgsfield_reference_service_calls WHERE service_id=$1',[f.serviceId])).rows[0].count,0);
+   assert.deepEqual(f.stats(),{reads:0,closes:0,allocations:0,confirmations:0});
+  });
+  await t.test('a reviewed project revision cannot silently expand to later project work',async()=>{
+   const f=await fixture();await f.call('readiness');
+   await query('UPDATE studio_projects SET revision=revision+1 WHERE company_id=$1 AND id=$2',[f.company,f.project]);
+   await f.call('readiness',{},403);await f.call('claim',{},403);
+   assert.deepEqual(f.stats(),{reads:0,closes:0,allocations:0,confirmations:0});
+  });
   await t.test('service transactions acquire the company lifecycle lock before sponsor and work locks, including revoked cleanup',async()=>{
    const trace:string[][]=[],f=await fixture(trace);
    await f.call('readiness');const l=(await f.call('claim')).lease;await f.call('authorize',f.scope(l));

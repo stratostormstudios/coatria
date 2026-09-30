@@ -11,6 +11,7 @@ import {hashToken} from '../src/lib/security';
 import {createHiggsfieldReferenceService} from '../src/lib/higgsfield-reference-service';
 import {dropFixtureDatabase} from './fixtures/postgres-teardown';
 import * as refs from '../src/lib/higgsfield-references';
+import {insertSyntheticReferenceEnrollment} from './fixtures/reference-service-enrollment';
 
 const integration=process.env.COATRIA_INTEGRATION_DATABASE_URL;
 const local=(()=>{try{return !!integration&&['127.0.0.1','localhost'].includes(new URL(integration).hostname)&&process.env.COATRIA_TEST_EMULATOR!=='1';}catch{return false;}})();
@@ -196,6 +197,7 @@ test('PostgreSQL independent reference broker LOGIN fences authority and execute
    // transaction below authenticates as the separate restricted LOGIN.
    await owner!.query("INSERT INTO higgsfield_reference_services(id,company_id,token_hash,enrolled_by,release_sha256,qualification_sha256,profile_sha256,provider_connection_id,provider_connection_revision,catalog_sha256,upload_hosts,expires_at) VALUES($1,$2,$3,$4,$5,$5,$5,$6,$7,$8,'[\"uploads.example.invalid\"]',clock_timestamp()+interval '10 minutes')",[serviceId,companyId,hashToken(token),userId,profile,provider.id,provider.revision,refs.higgsfieldReferenceDigest(provider.tools)]);
    await owner!.query('INSERT INTO higgsfield_reference_service_projects(service_id,company_id,project_id,storage_binding_id,storage_binding_revision,storage_connection_id,storage_connection_revision) VALUES($1,$2,$3,$4,$5,$6,$7)',[serviceId,companyId,projectId,storage.id,storage.revision,storage.connection_id,storage.connection_revision]);
+   await insertSyntheticReferenceEnrollment(owner!,serviceId);
    let transactions=0,providerFactories=0;
    const handler=createHiggsfieldReferenceService({transaction:run=>tx(async db=>{await identity(db);transactions++;return run(db);}),providerFactory:()=>{providerFactories++;throw Error('Synthetic inspection must not open storage');},brokerFactory:()=>{providerFactories++;throw Error('Unapproved inspection must not open a provider broker');}});
    const call=async(operation:string,payload:Record<string,unknown>={},expected=200)=>{

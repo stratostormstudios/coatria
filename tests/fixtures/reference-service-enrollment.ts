@@ -1,0 +1,11 @@
+/** Synthetic owner fixture only. This does not qualify a host or exercise the
+ * production registrar. Registrar LOGIN/transaction tests are separate. */
+import {randomUUID} from 'node:crypto';
+import {parseReferenceEnrollmentRequest,referenceEnrollmentHash} from '../../scripts/hosting/reference-enrollment-contract.mjs';
+type DB={query:(sql:string,values?:any[])=>Promise<{rows:any[]}>};
+export async function insertSyntheticReferenceEnrollment(db:DB,serviceId:string){
+ const s=(await db.query('SELECT * FROM higgsfield_reference_services WHERE id=$1',[serviceId])).rows[0];
+ const projects=(await db.query('SELECT b.*,p.revision AS project_revision FROM higgsfield_reference_service_projects b JOIN studio_projects p ON p.id=b.project_id AND p.company_id=b.company_id WHERE b.service_id=$1 ORDER BY b.project_id',[serviceId])).rows;
+ const identity=parseReferenceEnrollmentRequest({version:1,requestId:randomUUID(),serviceId,companyId:s.company_id,enrolledBy:s.enrolled_by,tokenHash:s.token_hash,origin:'https://coatria.com',releaseSha256:s.release_sha256,qualificationSha256:s.qualification_sha256,profileSha256:s.profile_sha256,expiresAt:new Date(s.expires_at).toISOString(),uploadHosts:s.upload_hosts,provider:{connectionId:s.provider_connection_id,connectionRevision:s.provider_connection_revision,catalogSha256:s.catalog_sha256},projects:projects.map(p=>({projectId:p.project_id,projectRevision:p.project_revision,storageBindingId:p.storage_binding_id,storageBindingRevision:p.storage_binding_revision,storageConnectionId:p.storage_connection_id,storageConnectionRevision:p.storage_connection_revision})),qualification:{sourceCommit:'a'.repeat(40),sourceTree:'b'.repeat(40),bundleSha256:'c'.repeat(64),hostConfigurationSha256:'d'.repeat(64),configurationSha256:'e'.repeat(64),qualifierSha256:'f'.repeat(64),conformanceProfileSha256:'a'.repeat(64),bootId:randomUUID(),uid:1000,gid:1000,qualifierInvocationId:'a'.repeat(32),evidenceSha256:'b'.repeat(64),reportSha256:'c'.repeat(64),acceptedAt:new Date().toISOString()}});
+ await db.query('INSERT INTO higgsfield_reference_service_enrollments(service_id,company_id,request_id,request_hash,identity) VALUES($1,$2,$3,$4,$5)',[serviceId,s.company_id,identity.requestId,referenceEnrollmentHash(identity),JSON.stringify(identity)]);return identity;
+}

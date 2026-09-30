@@ -288,6 +288,9 @@ export const REFERENCE_BROKER_CONTRACT={
  "higgsfield_reference_service_projects": {
   "SELECT": "*"
  },
+ "higgsfield_reference_service_enrollments": {
+  "SELECT": ["service_id","company_id","request_id","request_hash","identity"]
+ },
  "higgsfield_reference_service_leases": {
   "SELECT": "*",
   "INSERT": "*"
@@ -320,7 +323,7 @@ export const REFERENCE_BROKER_CONTRACT={
 };
 const lockTables=["companies","memberships","studio_projects","studio_role_bindings","tasks","agents","agent_runs","plugin_installations","higgsfield_connections","project_storage_connections","project_storage_bindings","higgsfield_reference_services","studio_coordination_policies"];
 export const REFERENCE_BROKER_LOCK_BODY="BEGIN\n IF current_user=TG_ARGV[0] AND NEW IS DISTINCT FROM OLD THEN\n  RAISE EXCEPTION 'Reference broker authority rows are read only' USING ERRCODE='42501';\n END IF;\n RETURN NEW;\nEND";
-const migrations=['039_higgsfield_references.sql','040_higgsfield_reference_inspection_authority.sql','041_higgsfield_model_contracts.sql','042_coordinated_reference_preparation.sql','043_higgsfield_reference_services.sql'];
+const migrations=['039_higgsfield_references.sql','040_higgsfield_reference_inspection_authority.sql','041_higgsfield_model_contracts.sql','042_coordinated_reference_preparation.sql','043_higgsfield_reference_services.sql','044_higgsfield_reference_enrollments.sql'];
 // Frozen migration 043 bodies, not loaded from a mutable migration at runtime.
 export const REFERENCE_BROKER_STATE_GUARDS=[
  {

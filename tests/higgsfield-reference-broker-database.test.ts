@@ -10,6 +10,7 @@ import {createDatabaseHiggsfieldReferenceBroker} from '../src/lib/higgsfield-ref
 import {referenceServiceAvailability} from '../src/lib/higgsfield-reference-service';
 import type {HiggsfieldTool} from '../src/lib/higgsfield-mcp';
 import * as refs from '../src/lib/higgsfield-references';
+import {insertSyntheticReferenceEnrollment} from './fixtures/reference-service-enrollment';
 
 const tools:HiggsfieldTool[]=[
  {name:'media_upload',description:'Synthetic upload catalog',inputSchema:{type:'object',properties:{filename:{type:'string'},content_type:{type:'string'},method:{type:'string',enum:['upload_url']}},additionalProperties:false}},
@@ -43,6 +44,7 @@ test('database broker locks company first in each independent phase and preserve
    // Fixture enrollment is not production host qualification or activation.
    await insert('higgsfield_reference_services',{id:service,company_id:company,token_hash:hashToken('synthetic-'+service),enrolled_by:owner,release_sha256:'b'.repeat(64),qualification_sha256:'c'.repeat(64),profile_sha256:'d'.repeat(64),provider_connection_id:provider,provider_connection_revision:1,catalog_sha256:refs.higgsfieldReferenceDigest(tools),upload_hosts:JSON.stringify(['uploads.example.com']),expires_at:new Date(Date.now()+600000)});
    await insert('higgsfield_reference_service_projects',{service_id:service,company_id:company,project_id:project,storage_binding_id:binding.id,storage_binding_revision:binding.revision,storage_connection_id:connection.id,storage_connection_revision:connection.revision});
+   await insertSyntheticReferenceEnrollment({query},service);
    const options:refs.HiggsfieldReferenceOptions={availability:(db,c,p)=>referenceServiceAvailability(db,c,p,{brokerReady:async()=>true})};
    await transaction(db=>refs.proposeHiggsfieldReference(db,actor,{clientId:randomUUID(),projectId:project,projectRevision:1,workItemId:work,proxyVersionId:version,proxyBytes:100,proxySha256:sha,role:'image',purpose:'Synthetic broker transaction test'}));
    const inspect=(await transaction(db=>refs.claimHiggsfieldReference(db,{companyId:company,projectIds:[project]},options)))!;

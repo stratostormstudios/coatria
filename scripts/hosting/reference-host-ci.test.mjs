@@ -7,21 +7,23 @@ import {createReferenceHostCiCommand,createReferenceHostCiAcceptor,ReferenceHost
 const serviceId='af3078db-f6cf-4d5c-9d5d-afb4dcb8689b';
 function fixture(){
  let active=false,invocation=0,receipt,acceptedInvocation=0,starts=0,stops=0;const preserved=new Map(),history=new Map(),events=[];
+ const hostBytes=Buffer.from('immutable-host'),source={commit:'a'.repeat(40),tree:'b'.repeat(40),bundleSha256:'c'.repeat(64),hostSha256:archiveHostHash(hostBytes)};
  const evidence=()=>({path:'/state/qualification-'+invocation+'/host-evidence.json',raw:Buffer.from('evidence-'+invocation),proof:Buffer.from('full-native-report-'+invocation),evidence:{qualifierInvocationId:String(invocation).repeat(32)}});
  const reject=()=>{throw Error('REFERENCE_HOST_QUALIFICATION_REJECTED');};
- const io={phase:name=>events.push(name),disabled:tryStart=>events.push(tryStart?'disabled-worker-start':'disabled'),start:()=>{starts++;if(!active){active=true;invocation++;}},stop:()=>{stops++;active=false;},current:async()=>evidence(),accept:async(e,previous)=>{
+ const io={source,phase:name=>events.push(name),disabled:tryStart=>events.push(tryStart?'disabled-worker-start':'disabled'),start:()=>{starts++;if(!active){active=true;invocation++;}},stop:()=>{stops++;active=false;},current:async()=>evidence(),readAccepted:async()=>{if(!active||acceptedInvocation!==invocation)reject();return {hostBytes,bundle:{commit:source.commit,tree:source.tree},receipt:JSON.parse(receipt),receiptBytes:receipt,qualificationSha256:archiveHostHash(receipt),proof:{invocationId:evidence().evidence.qualifierInvocationId}};},preserveCurrent:(label,value)=>preserved.set(label+'-current',value),accept:async(e,previous)=>{
   if(!active||e.evidence.qualifierInvocationId!==evidence().evidence.qualifierInvocationId)reject();
   if(acceptedInvocation===invocation){if(previous!==undefined&&previous!==archiveHostHash(receipt))reject();return {replayed:true,enrolled:false,workerEnabled:false};}
   if(receipt){if(previous!==archiveHostHash(receipt))reject();history.set(previous,receipt);}else if(previous!==undefined)reject();
-  receipt=Buffer.from('accepted-receipt-'+invocation);acceptedInvocation=invocation;return {replayed:false,enrolled:false,workerEnabled:false};
+  receipt=Buffer.from(JSON.stringify({sourceCommit:source.commit,sourceTree:source.tree,bundleSha256:source.bundleSha256,qualifierInvocationId:e.evidence.qualifierInvocationId,evidenceSha256:archiveHostHash(e.raw),reportSha256:archiveHostHash(e.proof)}));acceptedInvocation=invocation;return {replayed:false,enrolled:false,workerEnabled:false};
  },receipt:async()=>receipt,history:async sha=>history.get(sha),preserve:(label,e)=>preserved.set(label,e.proof),preserveReceipt:(label,bytes)=>preserved.set(label+'-receipt',bytes)};
  return {io,preserved,history,events,counts:()=>({starts,stops,invocation})};
 }
 test('two actual invocations preserve both detailed reports and receipts; retained start does not rerun',async()=>{
  const f=fixture(),result=await exerciseReferenceHostCiLifecycle(f.io);
- assert.deepEqual(f.counts(),{starts:3,stops:2,invocation:2});assert.equal(f.history.size,1);assert.deepEqual([...f.preserved.keys()],['first','first-receipt','second','second-receipt']);
+ assert.deepEqual(f.counts(),{starts:3,stops:2,invocation:2});assert.equal(f.history.size,1);assert.deepEqual([...f.preserved.keys()],['first','first-receipt','first-current','second','second-receipt','second-current']);
  assert.equal(f.preserved.get('first').toString(),'full-native-report-1');assert.equal(f.preserved.get('second').toString(),'full-native-report-2');
- for(const key of ['stoppedEvidenceRejected','priorInvocationRejected','missingCasRejected','wrongCasRejected','receiptHistoryProved','receiptReplayProved','workerRemainedInactive'])assert.equal(result[key],true);
+ for(const key of ['stoppedEvidenceRejected','priorInvocationRejected','missingCasRejected','wrongCasRejected','receiptHistoryProved','receiptReplayProved','currentQualificationReadProved','stoppedCurrentQualificationRejected','workerRemainedInactive'])assert.equal(result[key],true);
+ for(const label of ['first','second']){const proof=f.preserved.get(label+'-current');assert.equal(proof.qualificationSha256,archiveHostHash(f.preserved.get(label+'-receipt')));assert.equal(proof.sourceTree,f.io.source.tree);assert.equal(proof.receiptUnchanged,true);assert.deepEqual(Object.keys(proof),['version','kind','sourceCommit','sourceTree','bundleSha256','qualificationSha256','evidenceSha256','reportSha256','qualifierInvocationId','receiptUnchanged','journalProof']);}
  assert.equal(f.events.at(-1),'disabled-worker-start');
 });
 test('unrelated acceptance errors cannot become proof of stopped-evidence rejection',async()=>{
@@ -35,6 +37,19 @@ test('receipt bytes must remain unchanged after a negative decision',async()=>{
 test('replayed acceptance cannot mint credentials or enable work',async()=>{
  const f=fixture(),accept=f.io.accept;f.io.accept=async(...args)=>({...await accept(...args),workerEnabled:true});
  await assert.rejects(exerciseReferenceHostCiLifecycle(f.io),{message:'REFERENCE_HOST_CI_CHECK_FAILED'});assert.equal(f.counts().invocation,1);
+});
+test('current qualification reader binds original source, host bytes and exact accepted evidence',async()=>{
+ for(const alter of [value=>({...value,bundle:{...value.bundle,tree:'d'.repeat(40)}}),value=>({...value,hostBytes:Buffer.from('changed-host')}),value=>({...value,receiptBytes:Buffer.from('changed-receipt')}),value=>({...value,qualificationSha256:'0'.repeat(64)}),value=>({...value,receipt:{...value.receipt,qualifierInvocationId:'e'.repeat(32)}}),value=>({...value,receipt:{...value.receipt,evidenceSha256:'f'.repeat(64)}}),value=>({...value,receipt:{...value.receipt,reportSha256:'f'.repeat(64)}})]){
+  const f=fixture(),read=f.io.readAccepted;f.io.readAccepted=async()=>alter(await read());await assert.rejects(exerciseReferenceHostCiLifecycle(f.io),{message:'REFERENCE_HOST_CI_CHECK_FAILED'});assert.equal(f.preserved.has('first-current'),false);
+ }
+});
+test('stopped current reader must reject with the qualification error and preserve receipt bytes',async()=>{
+ for(const kind of ['accepted','unrelated','changed-receipt']){
+  const f=fixture(),read=f.io.readAccepted,receipt=f.io.receipt;let last;
+  f.io.readAccepted=async()=>{if(f.events.at(-1)==='stopped-current-qualification-rejection'){if(kind==='accepted')return last;if(kind==='unrelated')throw Error('DISK_IO_FAILED');}return last=await read();};
+  if(kind==='changed-receipt')f.io.receipt=async()=>f.events.at(-1)==='stopped-current-qualification-rejection'?Buffer.from('changed'):receipt();
+  await assert.rejects(exerciseReferenceHostCiLifecycle(f.io),{message:kind==='unrelated'?'DISK_IO_FAILED':'REFERENCE_HOST_CI_CHECK_FAILED'});
+ }
 });
 test('reference CI commands use only fixed units, binaries and clean child environment',()=>{
  const calls=[],command=createReferenceHostCiCommand(serviceId,(...args)=>{calls.push(args);return {status:0,stdout:'inactive\n'};});

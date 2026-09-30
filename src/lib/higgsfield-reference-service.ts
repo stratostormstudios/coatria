@@ -8,6 +8,7 @@ import {createDatabaseHiggsfieldReferenceBroker} from './higgsfield-reference-br
 import {openProjectStorageCredentials} from './project-storage';
 import {createRunpodProjectStorage,runpodProjectObjectKey,type RunpodProjectStorageConfig,type RunpodProjectStorage} from './project-storage-runpod';
 import {authorityReader} from './project-storage-stream';
+import {verifiedReferenceServiceEnrollment} from './higgsfield-reference-enrollment';
 import type {HiggsfieldReferenceLease,HiggsfieldReferenceAvailability} from './higgsfield-references-protocol';
 
 export type ReferenceServiceTransaction=<T>(run:(db:PoolClient)=>Promise<T>)=>Promise<T>;
@@ -40,10 +41,14 @@ async function service(db:PoolClient,serviceId:string,tokenHash?:string,cleanup=
  hosts(row.upload_hosts);
  const projects=(await db.query('SELECT * FROM higgsfield_reference_service_projects WHERE service_id=$1 AND company_id=$2 ORDER BY project_id',[row.id,row.company_id])).rows;
  if(!projects.length||projects.length>100)ended();
- return {...row,projects} as Row;
+ const enrollment=(await db.query('SELECT service_id,company_id,request_id,request_hash,identity FROM higgsfield_reference_service_enrollments WHERE service_id=$1 AND company_id=$2',[row.id,row.company_id])).rows[0];
+ let identity;try{identity=verifiedReferenceServiceEnrollment(row,projects,enrollment);}catch{return ended();}
+ return {...row,projects,enrollmentOrigin:identity.origin,enrollmentProjects:identity.projects} as Row;
 }
 async function serviceProject(db:PoolClient,s:Row,projectId:string){
  const p=s.projects.find((p:Row)=>p.project_id===projectId);if(!p)ended();
+ const approved=s.enrollmentProjects.find((p:Row)=>p.projectId===projectId),project=(await db.query('SELECT revision,status,ai_policy,production_path,contract_version,gates FROM studio_projects WHERE company_id=$1 AND id=$2',[s.company_id,projectId])).rows[0];
+ if(!approved||!project||project.revision!==approved.projectRevision||project.status==='delivered'||project.ai_policy!=='allowed'||project.production_path!=='higgsfield'||project.contract_version!==2||['brief','estimate','production'].some(g=>project.gates?.[g]?.decision!=='approved'))ended();
  const provider=(await db.query(`SELECT c.id,c.revision,c.tools,m.role,m.access_revoked_at FROM higgsfield_connections c
  JOIN memberships m ON m.company_id=c.company_id AND m.user_id=c.connected_by WHERE c.company_id=$1 AND c.status='connected'`,[s.company_id])).rows[0];
  if(!provider||provider.id!==s.provider_connection_id||provider.revision!==s.provider_connection_revision||provider.access_revoked_at||!['owner','admin'].includes(provider.role)||higgsfieldReferenceDigest(provider.tools)!==s.catalog_sha256)ended();
@@ -74,7 +79,7 @@ export function createHiggsfieldReferenceService(input:{transaction:ReferenceSer
    if(request.headers.has('cookie')||request.headers.has('origin')||new URL(request.url).search)fail(403,'Use the private service protocol.','REFERENCE_SERVICE_PROTOCOL');
    const tokenHash=hashToken(header.slice(7)),op=operation as Operation,args=await body(request,schemas[op],24000) as Row;
    const signal=AbortSignal.any([request.signal,AbortSignal.timeout(45000)]),callHash=higgsfieldReferenceDigest({operation:op,arguments:args});
-   const current=(db:PoolClient)=>service(db,serviceId,tokenHash,op==='fail');
+   const current=async(db:PoolClient)=>{const s=await service(db,serviceId,tokenHash,op==='fail');if(s.enrollmentOrigin!==new URL(request.url).origin)ended();if(op==='claim')for(const p of s.projects)await serviceProject(db,s,p.project_id);return s;};
    const options:HiggsfieldReferenceOptions={availability:async(db,companyId,projectId)=>{const s=await current(db);if(s.company_id!==companyId)ended();return serviceProject(db,s,projectId);}};
    async function lease(db:PoolClient,s:Row,authorize=true):Promise<HiggsfieldReferenceLease>{
     const row=(await db.query('SELECT * FROM higgsfield_reference_service_leases WHERE service_id=$1 AND company_id=$2 AND reference_id=$3 AND lease_id=$4 AND request_hash=$5',[serviceId,s.company_id,args.referenceId,args.leaseId,args.requestHash])).rows[0];

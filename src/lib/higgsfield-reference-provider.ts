@@ -1,14 +1,13 @@
-import {createHash} from 'node:crypto';
 import {z} from 'zod';
 import {fail} from './security';
 import type {HiggsfieldTool,HiggsfieldToolResult} from './higgsfield-mcp';
 import type {HiggsfieldReferenceAllocation,HiggsfieldReferenceLease} from './higgsfield-references-protocol';
 import {acceptsHiggsfieldReferenceSchema} from './higgsfield-reference-schema';
+import {compatibleReferenceCatalogDigest} from './higgsfield-reference-catalog';
 
 export const HIGGSFIELD_REFERENCE_TOOLS=['media_upload','media_confirm'] as const;
 type ObjectValue=Record<string,unknown>;
 const object=(v:unknown):v is ObjectValue=>!!v&&typeof v==='object'&&!Array.isArray(v);
-const canonical=(v:unknown):string=>Array.isArray(v)?'['+v.map(canonical).join(',')+']':object(v)?'{'+Object.entries(v).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>JSON.stringify(k)+':'+canonical(v)).join(',')+'}':JSON.stringify(v);
 function unsupported():never{fail(409,'The company Higgsfield catalog needs reference-transfer compatibility qualification.','HIGGSFIELD_REFERENCE_CATALOG_UNSUPPORTED');}
 function receipt():never{fail(502,'The reference provider outcome could not be verified. Do not repeat this phase.','HIGGSFIELD_REFERENCE_OUTCOME_UNCERTAIN');}
 
@@ -21,9 +20,7 @@ function requireArguments(tools:readonly HiggsfieldTool[],name:string,args:Objec
 /** This proves only adapter/schema compatibility. Runtime qualification, exact
  * company OAuth catalog provenance and storage readiness are separate requirements. */
 export function referenceCatalogDigest(tools:readonly HiggsfieldTool[]):string{
- requireArguments(tools,'media_upload',{filename:'reference-00000000-0000-4000-8000-000000000000.png',content_type:'image/png',method:'upload_url'});
- requireArguments(tools,'media_confirm',{media_id:'00000000-0000-4000-8000-000000000000',type:'image'});
- return createHash('sha256').update(canonical({adapter:'coatria-prepared-image-reference-v1',tools:HIGGSFIELD_REFERENCE_TOOLS.map(name=>{const t=tool(tools,name);return {name,inputSchema:t.inputSchema,outputSchema:t.outputSchema??null};}),confirmationStatus:'confirmed'})).digest('hex');
+ try{return compatibleReferenceCatalogDigest(tools);}catch{return unsupported();}
 }
 export function buildReferenceUploadArguments(tools:readonly HiggsfieldTool[],lease:HiggsfieldReferenceLease):ObjectValue{
  const extensions:Record<string,string>={'image/png':'png','image/jpeg':'jpg','image/webp':'webp'};
