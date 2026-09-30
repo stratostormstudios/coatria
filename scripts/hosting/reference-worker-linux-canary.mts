@@ -8,6 +8,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {isQualifiedLinuxMediaSandbox,type QualifiedLinuxMediaSandbox,type MediaSandboxExitEvidence} from '../../src/lib/higgsfield-media-sandbox';
 import {createHiggsfieldReferenceInspector,createHiggsfieldReferenceWorker,type HiggsfieldReferenceWorkerResult} from '../../src/lib/higgsfield-reference-worker';
 import type {HiggsfieldReferenceLease} from '../../src/lib/higgsfield-references-protocol';
+import {mediaSandboxDecoderDisappeared} from './media-sandbox-cgroup-observer.mjs';
 
 type CaseName='png'|'jpeg'|'webp'|'wrong-kind'|'corrupt-png'|'cancel-native';
 type CaseEvidence={name:CaseName;passed:boolean;status:HiggsfieldReferenceWorkerResult['status']|null;inspectionRecorded:boolean;nativeExecutions:number;nativeEvidence:MediaSandboxExitEvidence[];observedProcesses:number;cancelledDuringNativeRun:boolean;drainedAtReturn:boolean;scratchEmptyAtReturn:boolean;scratchHandlesClosedAtReturn:boolean;sourceUnchanged:boolean};
@@ -31,7 +32,7 @@ export async function observeReferenceWorkerAttempt<T>(run:()=>Promise<T>,io:{ob
 async function observeGroups(root:string,pids:Set<number>){
  let populated=false;
  for(const name of await readdir(root))if(/^decoder-[a-f0-9-]+$/.test(name)){
-  try{const value=await text(join(root,name,'cgroup.procs'));for(const id of value.split(/\s+/).filter(Boolean)){assert.match(id,/^[1-9]\d*$/);pids.add(Number(id));populated=true;}}catch(error){if(!missing(error))throw error;}
+  try{const value=await text(join(root,name,'cgroup.procs'));for(const id of value.split(/\s+/).filter(Boolean)){assert.match(id,/^[1-9]\d*$/);pids.add(Number(id));populated=true;}}catch(error){if(!await mediaSandboxDecoderDisappeared(error,join(root,name)))throw error;}
  }
  return populated;
 }

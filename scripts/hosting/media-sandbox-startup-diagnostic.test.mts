@@ -1,4 +1,7 @@
 import test from 'node:test';
+import {join} from 'node:path';
+import {mkdtemp,mkdir,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
 import assert from 'node:assert/strict';
 import {classifySyntheticStartupStderr,diagnoseMediaSandboxStartup,diagnoseArchiveHostSandboxStartup,archiveStartupIdentity} from './media-sandbox-startup-diagnostic.mts';
 import {assertMediaSandboxBoundary,mediaSandboxBoundaryObservation,assertMediaSandboxFileDescriptorCap,assertMediaSandboxOrphanCleanup,mediaSandboxOrphanObservation,assertMediaSandboxLabelParser,mediaSandboxLabelObservation,mediaSandboxLabelFailure,withMediaSandboxInputLifetime,observeMediaSandboxCgroups,mediaSandboxObserverFailure} from './media-sandbox-linux-canary.mts';
@@ -188,4 +191,37 @@ test('a thrown observer read remains fatal and retains its input until sandbox s
 test('diagnostic callback failure never replaces the original observer read error',async()=>{
  const original=Object.assign(Error('private-original-observer-failure'),{code:'EIO'}),secondary=Error('private-diagnostic-failure');
  for(const rootFailure of [true,false])await assert.rejects(observeMediaSandboxCgroups({cgroupRoot:'/private-root'},new Map(),()=>{throw secondary;},{list:async()=>{if(rootFailure)throw original;return ['decoder-aaaaaaaa'];},read:async()=>{throw original;}}),error=>error===original);
+});
+
+test('observer ENODEV requires fresh ENOENT proof for the exact decoder UUID directory',async()=>{
+ const root='/private-cgroup-root',child='decoder-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',path=join(root,child),original=Object.assign(Error('private read failure'),{code:'ENODEV'}),missing=Object.assign(Error('private disappeared child'),{code:'ENOENT'});
+ const probes:string[]=[],diagnostics:string[]=[];
+ await observeMediaSandboxCgroups({cgroupRoot:root},new Map(),(_error,operation)=>diagnostics.push(operation),{list:async()=>[child],read:async()=>{throw original;},stat:async directory=>{probes.push(directory);throw missing;}});
+ assert.deepEqual(probes,[path]);assert.deepEqual(diagnostics,[]);
+ for(const outcome of ['present','ENODEV','EACCES','EIO'] as const){
+  const record:Record<string,unknown>={};let probed=0;
+  await assert.rejects(observeMediaSandboxCgroups({cgroupRoot:root},new Map(),(error,operation)=>Object.assign(record,mediaSandboxObserverFailure(error,operation)),{list:async()=>[child],read:async()=>{throw original;},stat:async directory=>{probed++;assert.equal(directory,path);if(outcome==='present')return {};throw Object.assign(Error('private probe failure'),{code:outcome});}}),error=>error===original);
+  assert.equal(probed,1);assert.equal(record.errorCode,'ENODEV');assert.equal(record.observerOperation,'cgroup.procs');
+ }
+});
+
+test('root ENODEV and non-UUID child errors are never treated as vanished decoders',async()=>{
+ const original=Object.assign(Error('private observer error'),{code:'ENODEV'});let probes=0;
+ for(const rootFailure of [true,false])await assert.rejects(observeMediaSandboxCgroups({cgroupRoot:'/private-root'},new Map(),undefined,{list:async()=>{if(rootFailure)throw original;return ['decoder-aaaaaaaa'];},read:async()=>{throw original;},stat:async()=>{probes++;throw Object.assign(Error('missing'),{code:'ENOENT'});}}),error=>error===original);
+ assert.equal(probes,0);
+});
+
+test('mid-control ENODEV accepts disappearance without fabricating complete cgroup controls',async()=>{
+ const root='/private-root',child='decoder-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',observations=new Map(),original=Object.assign(Error('private controls read'),{code:'ENODEV'});let reads=0,probes=0;
+ await observeMediaSandboxCgroups({cgroupRoot:root},observations,undefined,{list:async()=>[child],read:async path=>{reads++;if(path.endsWith(join(child,'cgroup.procs')))return '123';throw original;},stat:async path=>{probes++;assert.equal(path,join(root,child));throw Object.assign(Error('missing'),{code:'ENOENT'});}});
+ assert.equal(reads,2);assert.equal(probes,1);assert.equal(observations.size,0);
+});
+
+test('default disappearance probe distinguishes a real retained child from its removed directory',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'coatria-observer-')),child='decoder-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',path=join(root,child),original=Object.assign(Error('synthetic ENODEV read'),{code:'ENODEV'});
+ t.after(()=>rm(root,{recursive:true,force:true}));await mkdir(path);
+ const input={list:async()=>[child],read:async()=>{throw original;}};
+ await assert.rejects(observeMediaSandboxCgroups({cgroupRoot:root},new Map(),undefined,input),error=>error===original);
+ await rm(path,{recursive:true});
+ await observeMediaSandboxCgroups({cgroupRoot:root},new Map(),undefined,input);
 });
