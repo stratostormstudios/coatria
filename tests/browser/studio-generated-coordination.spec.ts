@@ -6,9 +6,10 @@ test.beforeEach(({baseURL})=>{test.skip(!baseURL||!['localhost','127.0.0.1'].inc
 const coordinator=uuid(70),specialist=uuid(71),option='Allow verified generated output continuations',generationOption='Let the coordinator also handle generation';
 const review=(page:Page)=>page.getByRole('checkbox',{name:/^I reviewed the coordinator/});
 const policyWrites=(fixture:ReturnType<typeof coordinationFixture>)=>fixture.state.writes.filter(write=>write.path.endsWith('/coordination'));
-function coordinationFixture({enabled,generation,singleAgent=false,legacy=false,policy=true}:{enabled?:boolean;generation?:boolean;singleAgent?:boolean;legacy?:boolean;policy?:boolean}={}){
+function coordinationFixture({enabled,generation,singleAgent=false,legacy=false,policy=true,reference=false}:{enabled?:boolean;generation?:boolean;singleAgent?:boolean;legacy?:boolean;policy?:boolean;reference?:boolean}={}){
  const state=generatedFixture();
  for(const role of state.detail.roles){if(role.key==='producer'){role.agentId=coordinator;role.humanId=null;role.agentName='Production coordinator';}if(role.key==='comp'){role.agentId=singleAgent?coordinator:specialist;role.humanId=null;role.agentName=singleAgent?'Production coordinator':'Generation specialist';}}
+ if(reference){state.detail.workItems[0].stage='references';state.detail.workItems[0].execution='agent';}
  state.detail.workItems[0].agentId=singleAgent?coordinator:specialist;state.detail.workItems[0].humanId=null;
  const initial:StudioCoordinationPolicy={projectId:legacy?state.legacy.id:ids.project,coordinatorAgentId:coordinator,allowedRoleKeys:['comp'],status:'active',effectiveStatus:'active',blocker:null,revision:4,maxRuns:5,runsStarted:2,remainingRuns:3,maxConcurrentRuns:1,approvedBy:ids.user,expiresAt:'2027-01-01T00:00:00.000Z',updatedAt:date,profileRevision:1,...enabled!==undefined?{generatedContinuations:enabled}:{},...generation!==undefined?{coordinatorGeneration:generation}:{}};
  const snapshot:StudioCoordinationSnapshot={policy:policy?initial:null,dispatches:[],budgetUnit:'specialist_runs',budgetScope:'coordinator_dispatched_runs_only',startsWorkers:false,startsInference:false};
@@ -129,4 +130,16 @@ test('existing v2 policies keep omitted generation opt-in and explicit disable r
  await page.getByRole('button',{name:'Review policy',exact:true}).click();await toggle.check();await review(page).check();await save.click();await expect(page.getByRole('dialog')).toHaveCount(0);
  await page.getByRole('button',{name:'Review policy',exact:true}).click();await expect(toggle).toBeChecked();await toggle.uncheck();await expect(page.getByRole('checkbox',{name:/Generation specialist/})).toBeChecked();await review(page).check();await save.click();await expect(page.getByRole('dialog')).toHaveCount(0);
  expect(policyWrites(fixture)[2].body).toMatchObject({coordinatorGeneration:false,allowedRoleKeys:['comp']});expect(fixture.state.unexpected).toEqual([]);
+});
+
+
+test('prepared image policy is explicit, reviews its exact retry and preserves pause while adding no grants',async({page},testInfo)=>{
+ const fixture=coordinationFixture({policy:false,reference:true});await openCoordination(page,fixture);await expect(page.getByText(/Prepared image reference selection:/)).toContainText('Off');
+ await page.getByRole('button',{name:'Set delegation policy',exact:true}).click();const toggle=page.getByRole('checkbox',{name:'Allow prepared image reference selection',exact:true}),save=page.getByRole('button',{name:'Save reviewed policy',exact:true});await expect(toggle).not.toBeChecked();
+ await toggle.check();await review(page).check();await expect(save).toBeDisabled();await expect(page.getByRole('dialog').getByRole('alert')).toContainText('five existing reference preparation permissions');
+ await page.getByRole('checkbox',{name:/Generation specialist/}).check();await expect(review(page)).not.toBeChecked();await page.getByLabel('Policy state',{exact:true}).selectOption('active');await review(page).check();await expect(save).toBeEnabled();await expect(page.getByRole('dialog')).toContainText('not resized or stripped of metadata');
+ await page.screenshot({path:testInfo.outputPath('coordinated-prepared-references-desktop.png'),fullPage:true});await page.setViewportSize({width:390,height:844});await noOverflow(page);await page.screenshot({path:testInfo.outputPath('coordinated-prepared-references-mobile.png'),fullPage:true});
+ fixture.failOnce();await save.click();await expect(page.getByRole('dialog').getByRole('alert')).toContainText('Synthetic lost acknowledgement');await save.click();await expect(page.getByRole('dialog')).toHaveCount(0);
+ expect(policyWrites(fixture)[1].body).toEqual(policyWrites(fixture)[0].body);expect(policyWrites(fixture)[0].body).toMatchObject({referencePreparationProfile:'prepared_image_v1',allowedRoleKeys:['comp'],revision:0});
+ await page.getByRole('button',{name:'Pause delegation',exact:true}).click();expect(policyWrites(fixture)[2].body).toMatchObject({referencePreparationProfile:'prepared_image_v1',status:'paused'});expect(fixture.state.unexpected).toEqual([]);
 });

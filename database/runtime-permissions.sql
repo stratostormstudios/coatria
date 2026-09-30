@@ -67,6 +67,10 @@ GRANT UPDATE(status,revision,approved_by,approved_at,expires_at,approved_project
 -- inspection evidence. No existing archive-worker role gains reference access.
 GRANT SELECT,INSERT ON higgsfield_references,higgsfield_reference_receipts,higgsfield_reference_requests,higgsfield_reference_transports,higgsfield_reference_confirmations TO coatria_runtime_v1;
 GRANT SELECT ON higgsfield_reference_inspections TO coatria_runtime_v1;
+-- Operator-enrolled service qualification is immutable to application users.
+-- An administrator can stop an existing service, never enroll or extend it.
+GRANT SELECT ON higgsfield_reference_services,higgsfield_reference_service_projects TO coatria_runtime_v1;
+GRANT UPDATE(revoked_at,revoked_by,revision,updated_at) ON higgsfield_reference_services TO coatria_runtime_v1;
 -- Exact explicit dispatch and inspection authority are immutable once saved.
 GRANT SELECT,INSERT ON studio_reference_preparation_dispatches TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON higgsfield_model_contracts TO coatria_runtime_v1;

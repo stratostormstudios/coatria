@@ -3,6 +3,7 @@
 import type {PoolClient} from 'pg';
 import {fail,hashToken} from './security';
 import {managedAgentAuthoritySql,managedAgentAuthorityPrincipals} from './studio-hosting';
+import {referenceCoordinationAuthority} from './studio-coordination';
 import {HIGGSFIELD_REFERENCE_PREPARATION_CAPABILITIES,HIGGSFIELD_REFERENCE_INSPECTION_LIMITS,type HiggsfieldReferenceActor,type HiggsfieldReferenceInspectionAuthority} from './higgsfield-references-protocol';
 type Row=Record<string,any>;
 const canonical=(v:unknown):string=>Array.isArray(v)?'['+v.map(canonical).join(',')+']':v&&typeof v==='object'?'{'+Object.entries(v).sort(([a],[b])=>a.localeCompare(b)).map(([k,x])=>JSON.stringify(k)+':'+canonical(x)).join(',')+'}':JSON.stringify(v);
@@ -12,29 +13,37 @@ const iso=(v:Date|string)=>new Date(v).toISOString();
 
 export async function referencePreparationDispatch(db:PoolClient,actor:HiggsfieldReferenceActor,projectId:string,workItemId:string){
  if(!actor.agentId||!actor.runId)return false;
- return Boolean((await db.query('SELECT 1 FROM studio_reference_preparation_dispatches WHERE company_id=$1 AND project_id=$2 AND work_item_id=$3 AND run_id=$4 AND authority_version=1',[actor.companyId,projectId,workItemId,actor.runId])).rowCount);
+ const marker=(await db.query('SELECT coordination FROM studio_reference_preparation_dispatches WHERE company_id=$1 AND project_id=$2 AND work_item_id=$3 AND run_id=$4 AND authority_version=1',[actor.companyId,projectId,workItemId,actor.runId])).rows[0];
+ if(marker?.coordination){await lockReferenceInspectionAuthority(db,{company_id:actor.companyId,project_id:projectId,proposed_agent_id:actor.agentId,proposed_run_id:actor.runId,proposed_by:actor.userId,inspection_authority:{coordination:marker.coordination}});await referenceCoordinationAuthority(db,actor.companyId,projectId,workItemId,actor.runId,marker.coordination);}
+ return Boolean(marker);
 }
 /** Match agent-tool lock order before taking project/reference locks. Revocation
  * must still be able to lock an invalid proposal, so this acquires locks only. */
 export async function lockReferenceInspectionAuthority(db:PoolClient,r:Row){
  if(!r.inspection_authority)return;
- const a=(await db.query('SELECT created_by FROM agents WHERE company_id=$1 AND id=$2',[r.company_id,r.proposed_agent_id])).rows[0];
- const principals=[...new Set([r.proposed_by,...a?[a.created_by]:[],...await managedAgentAuthorityPrincipals(db,r.company_id,r.proposed_agent_id)])].sort();
+ const coordination=r.inspection_authority.coordination,agentIds=[...new Set([r.proposed_agent_id,...coordination?[coordination.coordinatorAgentId]:[]])].sort();
+ const agents=(await db.query('SELECT id,created_by FROM agents WHERE company_id=$1 AND id=ANY($2::uuid[]) ORDER BY id',[r.company_id,agentIds])).rows;
+ const sponsorIds=[r.proposed_by,...coordination?[coordination.approvedBy]:[]];for(const agent of agents)sponsorIds.push(agent.created_by,...await managedAgentAuthorityPrincipals(db,r.company_id,agent.id));
+ const principals=[...new Set(sponsorIds)].sort();
  await db.query('SELECT user_id FROM memberships WHERE company_id=$1 AND user_id=ANY($2::uuid[]) ORDER BY user_id FOR SHARE',[r.company_id,principals]);
- await db.query('SELECT id FROM agents WHERE company_id=$1 AND id=$2 FOR SHARE',[r.company_id,r.proposed_agent_id]);
- await db.query('SELECT id FROM agent_runs WHERE company_id=$1 AND id=$2 FOR SHARE',[r.company_id,r.proposed_run_id]);
+ await db.query('SELECT id FROM agents WHERE company_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE',[r.company_id,agentIds]);
+ await db.query('SELECT id FROM plugin_installations WHERE company_id=$1 AND agent_id=ANY($2::uuid[]) ORDER BY id FOR SHARE',[r.company_id,agentIds]);
+ await db.query('SELECT id FROM agent_runs WHERE company_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE',[r.company_id,[r.proposed_run_id,...coordination?[coordination.parentRunId]:[]].sort()]);
+ if(coordination)await db.query('SELECT project_id FROM studio_coordination_policies WHERE company_id=$1 AND project_id=$2 FOR SHARE',[r.company_id,r.project_id]);
 }
 async function source(db:PoolClient,companyId:string,agentId:string,runId:string,requestedBy:string,projectId:string,workItemId:string){
  if(!await referencePreparationDispatch(db,{companyId,agentId,runId,userId:requestedBy},projectId,workItemId))ended();
- // This first contract is a direct human dispatch. A completed delegated run
- // must not bypass a paused/expired policy via terminal-run replay semantics.
+ const marker=(await db.query('SELECT coordination FROM studio_reference_preparation_dispatches WHERE company_id=$1 AND project_id=$2 AND work_item_id=$3 AND run_id=$4',[companyId,projectId,workItemId,runId])).rows[0];
+ // Only the explicit immutable policy marker permits ordinary delegation.
+ // Follow-ups, missions and review runs never inherit inspection authority.
  if((await db.query(`SELECT 1 FROM (
-  SELECT child_run_id AS run_id FROM studio_coordination_dispatches WHERE company_id=$1
+  SELECT child_run_id AS run_id FROM studio_coordination_dispatches WHERE company_id=$1 AND $3::boolean=false
   UNION ALL SELECT child_run_id FROM studio_coordination_followups WHERE company_id=$1
   UNION ALL SELECT child_run_id FROM studio_generated_followups WHERE company_id=$1
   UNION ALL SELECT reviewer_run_id FROM studio_planning_reviews WHERE company_id=$1
   UNION ALL SELECT run_id FROM agent_mission_cycles WHERE company_id=$1
- ) nested WHERE run_id=$2 LIMIT 1`,[companyId,runId])).rowCount)ended();
+ ) nested WHERE run_id=$2 LIMIT 1`,[companyId,runId,Boolean(marker.coordination)])).rowCount)ended();
+ const coordination=marker.coordination?await referenceCoordinationAuthority(db,companyId,projectId,workItemId,runId,marker.coordination):undefined;
  const a=(await db.query(`SELECT a.created_by,a.token_hash,a.invocation_access,a.capabilities,a.expires_at,
  a.status='active' AND a.expires_at>clock_timestamp() AND ${managedAgentAuthoritySql('a')} AS live,
  r.capabilities AS run_capabilities,r.status,r.attempts,r.max_attempts,r.started_at,r.finished_at,r.result_message_id,
@@ -49,20 +58,20 @@ async function source(db:PoolClient,companyId:string,agentId:string,runId:string
   if(!a.finished_at||!a.result_message_id||!(await db.query("SELECT 1 FROM agent_run_receipts WHERE company_id=$1 AND run_id=$2 AND kind='complete' AND response#>>'{run,id}'=$2::text AND response#>>'{run,status}'='succeeded' LIMIT 1",[companyId,runId])).rowCount)ended();
  }else ended();
  const installation=(await db.query('SELECT id,revision FROM plugin_installations WHERE company_id=$1 AND agent_id=$2 FOR SHARE',[companyId,agentId])).rows[0]??null;
- return {...a,installation};
+ return {...a,installation,coordination};
 }
 export async function createReferenceInspectionAuthority(db:PoolClient,actor:HiggsfieldReferenceActor,projectId:string,workItemId:string):Promise<HiggsfieldReferenceInspectionAuthority|null>{
  if(!await referencePreparationDispatch(db,actor,projectId,workItemId))return null;
  const a=await source(db,actor.companyId,actor.agentId!,actor.runId!,actor.userId,projectId,workItemId);
  if(a.status!=='running')ended();
- const clock=(await db.query("SELECT LEAST(clock_timestamp()+make_interval(mins=>$1),$2::timestamptz) AS expires_at",[HIGGSFIELD_REFERENCE_INSPECTION_LIMITS.maxMinutes,a.expires_at])).rows[0];
- return {version:1,mode:'prepared_image_v1',companyId:actor.companyId,projectId,workItemId,runId:actor.runId!,agentId:actor.agentId!,requestedBy:actor.userId,agentSponsorId:a.created_by,credentialSha256:a.token_hash,installation:a.installation,startedAt:iso(a.started_at),attempt:1,expiresAt:iso(clock.expires_at)};
+ const clock=(await db.query("SELECT LEAST(clock_timestamp()+make_interval(mins=>$1),$2::timestamptz,$3::timestamptz) AS expires_at",[HIGGSFIELD_REFERENCE_INSPECTION_LIMITS.maxMinutes,a.expires_at,a.coordination?.expiresAt??a.expires_at])).rows[0];
+ return {version:1,mode:'prepared_image_v1',companyId:actor.companyId,projectId,workItemId,runId:actor.runId!,agentId:actor.agentId!,requestedBy:actor.userId,agentSponsorId:a.created_by,credentialSha256:a.token_hash,installation:a.installation,startedAt:iso(a.started_at),attempt:1,expiresAt:iso(clock.expires_at),...a.coordination?{coordination:a.coordination}:{}};
 }
 export async function assertReferenceInspectionAuthority(db:PoolClient,r:Row){
  const s=r.inspection_authority as HiggsfieldReferenceInspectionAuthority;
  if(!s||s.version!==1||s.mode!=='prepared_image_v1'||referenceInspectionAuthorityHash(s)!==r.inspection_authority_sha256||s.companyId!==r.company_id||s.projectId!==r.project_id||s.workItemId!==r.work_item_id||s.agentId!==r.proposed_agent_id||s.runId!==r.proposed_run_id||s.requestedBy!==r.proposed_by||s.attempt!==1||s.expiresAt!==iso(r.inspect_expires_at))ended();
  const a=await source(db,r.company_id,r.proposed_agent_id,r.proposed_run_id,r.proposed_by,r.project_id,r.work_item_id);
- if(a.created_by!==s.agentSponsorId||a.token_hash!==s.credentialSha256||iso(a.started_at)!==s.startedAt||canonical(a.installation)!==canonical(s.installation))ended();
+ if(a.created_by!==s.agentSponsorId||a.token_hash!==s.credentialSha256||iso(a.started_at)!==s.startedAt||canonical(a.installation)!==canonical(s.installation)||canonical(a.coordination??null)!==canonical(s.coordination??null))ended();
 }
 /** A submitted/accepted planning task is still the same inspection objective.
  * Only the original committed submission proves the reservation after normal

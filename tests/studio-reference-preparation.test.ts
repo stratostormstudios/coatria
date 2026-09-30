@@ -9,9 +9,9 @@ import {AGENT_TOOLS,agentToolInputSchema,executeAgentTool} from '../src/lib/agen
 import {agentRunContext,authorizeStoredAgentRun,claimAgentRun,finishAgentRun} from '../src/lib/agent-runs';
 import {installedRuntimeContext} from '../src/lib/plugin-marketplace';
 import {buildStudioInferenceRequest} from '../src/lib/studio-inference';
-import {referencePreparationToolNames,studioDispatchInferenceToolNames} from '../src/lib/studio-coordination';
+import {referencePreparationToolNames,studioDispatchInferenceToolNames,coordinationRunAuthority} from '../src/lib/studio-coordination';
 import {studioDispatchInput} from '../src/lib/studio-protocol';
-import {studioWorkDispatchInput} from '../src/lib/studio-coordination-protocol';
+import {studioWorkDispatchInput,studioCoordinationInput} from '../src/lib/studio-coordination-protocol';
 import {agentRuntimeOpenApi} from '../src/lib/agent-runtime-openapi';
 import {createProjectStorageConnection,bindProjectStorage} from '../src/lib/project-storage';
 import {sealHiggsfieldSecret} from '../src/lib/higgsfield-secrets';
@@ -26,6 +26,7 @@ test('prepared dispatch is an explicit human option, not a new default or coordi
  assert(studioDispatchInput.safeParse({...legacy,preparationProfile:'prepared_image_v1'}).success);
  assert(!studioDispatchInput.safeParse({...legacy,preparationProfile:'auto'}).success);
  assert(!studioWorkDispatchInput.safeParse({projectId:randomUUID(),workItemId:legacy.workItemId,projectRevision:1,policyRevision:1,preparationProfile:'prepared_image_v1'}).success);
+ const policy={clientId:randomUUID(),revision:0,coordinatorAgentId:randomUUID(),allowedRoleKeys:['ingest'],status:'active',maxRuns:1,maxConcurrentRuns:1,expiresAt:new Date(Date.now()+3600000).toISOString()};assert.deepEqual(studioCoordinationInput.parse(policy),policy);assert(studioCoordinationInput.safeParse({...policy,referencePreparationProfile:'prepared_image_v1'}).success);for(const value of['auto',null,false])assert(!studioCoordinationInput.safeParse({...policy,referencePreparationProfile:value}).success);
  const schema=AGENT_TOOLS.higgsfield_connection_get.schema;
  assert(schema.safeParse({modelId:'provider.model-1'}).success);
  for(const modelId of['','https://untrusted.invalid/model','a'.repeat(129)])assert(!schema.safeParse({modelId}).success);
@@ -34,16 +35,16 @@ test('prepared dispatch is an explicit human option, not a new default or coordi
  const proposal=(agentRuntimeOpenApi.paths as Row)['/api/agent/tools/higgsfield_reference_propose'].post;assert(!proposal['x-coatria-required-capabilities'].includes('creative.write'));assert.match(proposal.description,/markerless legacy proposals additionally require creative.write/);
 });
 
-test('reviewed ingest staffing executes the exact prepared-reference harness without creative.write or provider calls',{skip:process.env.COATRIA_TEST_EMULATOR!=='1',timeout:180000},async t=>{
+for(const coordinated of [false,true])test(`reviewed ingest staffing executes the ${coordinated?'policy-coordinated':'direct'} prepared-reference harness without creative.write or provider calls`,{skip:process.env.COATRIA_TEST_EMULATOR!=='1'&&!process.env.COATRIA_INTEGRATION_DATABASE_URL,timeout:180000},async t=>{
  const prior={pool:(globalThis as any).coatriaPool,url:process.env.DATABASE_URL,max:process.env.DATABASE_POOL_MAX,key:process.env.COATRIA_HOSTING_KEYRING,fetch:globalThis.fetch};
- const {PGlite}=await import('@electric-sql/pglite'),{PGLiteSocketServer}=await import('@electric-sql/pglite-socket'),pg=await PGlite.create();
- for(const file of(await readdir('database')).filter(file=>/^\d.*\.sql$/.test(file)).sort())await pg.exec(await readFile('database/'+file,'utf8'));
- const socket=new PGLiteSocketServer({db:pg,host:'127.0.0.1',port:0,maxConnections:1});await socket.start();
- delete(globalThis as any).coatriaPool;process.env.DATABASE_URL='postgresql://postgres:postgres@'+socket.getServerConn()+'/postgres';process.env.DATABASE_POOL_MAX='1';process.env.COATRIA_HOSTING_KEYRING=JSON.stringify({activeKeyId:'fixture',keys:{fixture:randomBytes(32).toString('base64')}});
+ const emulate=process.env.COATRIA_TEST_EMULATOR==='1';let stop=async()=>{},fixtureCompany:string|undefined,fixtureOwner:string|undefined;
+ if(emulate){const {PGlite}=await import('@electric-sql/pglite'),{PGLiteSocketServer}=await import('@electric-sql/pglite-socket'),pg=await PGlite.create();for(const file of(await readdir('database')).filter(file=>/^\d.*\.sql$/.test(file)).sort())await pg.exec(await readFile('database/'+file,'utf8'));const socket=new PGLiteSocketServer({db:pg,host:'127.0.0.1',port:0,maxConnections:1});await socket.start();process.env.DATABASE_URL='postgresql://postgres:postgres@'+socket.getServerConn()+'/postgres';stop=async()=>{await socket.stop();await pg.close();};}else{const url=new URL(process.env.COATRIA_INTEGRATION_DATABASE_URL!);assert(['127.0.0.1','localhost','::1'].includes(url.hostname),'Concurrency fixture requires local PostgreSQL');process.env.DATABASE_URL=url.href;}
+ delete(globalThis as any).coatriaPool;process.env.DATABASE_POOL_MAX=emulate?'1':'10';process.env.COATRIA_HOSTING_KEYRING=JSON.stringify({activeKeyId:'fixture',keys:{fixture:randomBytes(32).toString('base64')}});
  let outbound=0;globalThis.fetch=async()=>{outbound++;throw Error('Offline prepared-reference fixture prohibits network');};
  const insert=async(table:string,row:Row)=>{const keys=Object.keys(row);return(await query(`INSERT INTO ${table}(${keys.join(',')}) VALUES(${keys.map((_,i)=>'$'+(i+1)).join(',')}) RETURNING *`,Object.values(row))).rows[0];};
  try{
   const company=randomUUID(),owner=(await insert('users',{name:'Prepared reference owner',email:randomUUID()+'@example.invalid',password_hash:'not-a-login'})).id,session=randomUUID(),origin='http://localhost:4180';
+  fixtureCompany=company;fixtureOwner=owner;
   await insert('companies',{id:company,name:'Offline prepared references',slug:company,template:'blank'});await insert('memberships',{company_id:company,user_id:owner,role:'owner'});
   await query("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,clock_timestamp()+interval '1 hour')",[hashToken(session),owner]);
   const api=async(path:string,method='GET',body?:unknown,status=200)=>{const response=await handleApi(new Request(origin+'/api/'+path,{method,headers:{Origin:origin,Cookie:'coatria_session='+session,'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})}),path.split('?')[0].split('/'));const result=await response.json();assert.equal(response.status,status,JSON.stringify(result));return result;};
@@ -76,7 +77,25 @@ test('reviewed ingest staffing executes the exact prepared-reference harness wit
   const missing=await f.dispatch(base,409);assert.equal(missing.code,'STUDIO_AGENT_CAPABILITIES');assert.equal((await query('SELECT count(*)::int n FROM agent_runs WHERE company_id=$1',[company])).rows[0].n,beforeRuns);
   // Restore the reviewed original grants; dispatch itself must never change them.
   await query('UPDATE agents SET capabilities=$2 WHERE id=$1',[identity.id,JSON.stringify(originalGrants)]);
-  const dispatched=await f.dispatch(base);assert.equal(dispatched.run.maxAttempts,1);assert.equal((await f.dispatch(base,200)).run.id,dispatched.run.id);
+  let dispatched:Row,parentLease:Row|undefined,coordinatorIdentity:Row|undefined,policyBody:Row|undefined;
+  if(coordinated){
+   const coordinator=applied.specialists.find((person:Row)=>person.roleKeys.includes('coordinator')||person.roleKeys.includes('producer'));assert(coordinator);assert.notEqual(coordinator.agentId,identity.id);
+   await api(`companies/${company}/plugin-installations/${coordinator.installationId}`,'PATCH',{revision:1,status:'active'});coordinatorIdentity=(await query('SELECT * FROM agents WHERE id=$1',[coordinator.agentId])).rows[0];
+   policyBody={clientId:randomUUID(),revision:0,coordinatorAgentId:coordinator.agentId,allowedRoleKeys:['ingest'],status:'active',maxRuns:1,maxConcurrentRuns:1,expiresAt:new Date(Date.now()+1200000).toISOString(),referencePreparationProfile:'prepared_image_v1'};
+   await query('UPDATE agents SET capabilities=$2 WHERE id=$1',[identity.id,JSON.stringify(originalGrants.filter(cap=>cap!=='storage.read'))]);assert.equal((await api(projects+'/'+f.p.id+'/coordination','PUT',policyBody,409)).code,'COORDINATION_REFERENCE_CAPABILITIES');assert.equal((await query('SELECT count(*)::int n FROM studio_coordination_policies WHERE project_id=$1',[f.p.id])).rows[0].n,0);await query('UPDATE agents SET capabilities=$2 WHERE id=$1',[identity.id,JSON.stringify(originalGrants)]);
+   const policy=(await api(projects+'/'+f.p.id+'/coordination','PUT',policyBody)).policy;assert.equal(policy.referencePreparationProfile,'prepared_image_v1');
+   const parent=(await api(`companies/${company}/conversations/commons/runs`,'POST',{clientId:randomUUID(),agentId:coordinator.agentId,prompt:'Coordinate the exact reference specialist under the reviewed policy.'},201)).run;
+   parentLease=await claimAgentRun(coordinatorIdentity as any,{workerId:'coordinator-reference-fixture',claimId:randomUUID()});assert.equal(parentLease.run.id,parent.id);
+   const ordinary=await project(),ordinaryBody={...policyBody,clientId:randomUUID(),referencePreparationProfile:undefined};delete ordinaryBody.referencePreparationProfile;const ordinaryPolicy=(await api(projects+'/'+ordinary.p.id+'/coordination','PUT',ordinaryBody)).policy;assert(!Object.hasOwn(ordinaryPolicy,'referencePreparationProfile'));assert.equal((await api(projects+'/'+ordinary.p.id+'/coordination','PUT',ordinaryBody)).replayed,true);
+   const ordinaryDispatch=(await executeAgentTool(coordinatorIdentity as any,'studio_work_dispatch',{runId:parent.id,leaseToken:parentLease.leaseToken,requestId:randomUUID(),arguments:{projectId:ordinary.p.id,projectRevision:ordinary.p.revision,workItemId:ordinary.work.id,policyRevision:ordinaryPolicy.revision}})).result as Row;assert.equal((await query('SELECT count(*)::int n FROM studio_reference_preparation_dispatches WHERE run_id=$1',[ordinaryDispatch.childRunId])).rows[0].n,0);const ordinaryTools=await transaction(c=>studioDispatchInferenceToolNames(c,company,ordinaryDispatch.childRunId));assert(ordinaryTools!.includes('storage_files_list'));assert(!ordinaryTools!.includes('higgsfield_reference_propose'));await api(`companies/${company}/agent-runs/${ordinaryDispatch.childRunId}/cancel`,'POST',{});
+   const args={projectId:f.p.id,projectRevision:f.p.revision,workItemId:f.work.id,policyRevision:policy.revision},dispatch=()=>executeAgentTool(coordinatorIdentity as any,'studio_work_dispatch',{runId:parent.id,leaseToken:parentLease!.leaseToken,requestId:randomUUID(),arguments:args});
+   const delegated=(await dispatch()).result as Row;assert.equal(((await dispatch()).result as Row).childRunId,delegated.childRunId);assert.equal(delegated.policy.effectiveStatus,'exhausted');assert.equal(delegated.policy.runsStarted,1);
+   const row=(await query('SELECT * FROM agent_runs WHERE id=$1',[delegated.childRunId])).rows[0];dispatched={run:{id:row.id,maxAttempts:row.max_attempts}};
+   const marker=(await query('SELECT coordination FROM studio_reference_preparation_dispatches WHERE run_id=$1',[row.id])).rows[0].coordination;assert.equal(marker.parentRunId,parent.id);assert.equal(marker.policyRevision,1);assert.equal(marker.approvedBy,owner);
+   await transaction(async c=>{await c.query('SAVEPOINT failed_parent');try{await c.query("UPDATE agent_runs SET status='failed',worker_id=NULL,lease_token_hash=NULL,lease_expires_at=NULL,finished_at=clock_timestamp() WHERE id=$1",[parent.id]);assert.equal(await coordinationRunAuthority(c,company,row),false,'Failed parent denies a queued prepared child before inference');}finally{await c.query('ROLLBACK TO SAVEPOINT failed_parent');}});
+   await finishAgentRun(coordinatorIdentity as any,parent.id,'complete',{clientId:randomUUID(),leaseToken:parentLease.leaseToken,result:'Queued exact prepared-reference specialist. No inspection, sharing or generation claimed.'});
+  }else{dispatched=await f.dispatch(base);assert.equal((await f.dispatch(base,200)).run.id,dispatched.run.id);}
+  assert.equal(dispatched.run.maxAttempts,1);
   assert.equal((await query('SELECT count(*)::int n FROM studio_reference_preparation_dispatches WHERE run_id=$1',[dispatched.run.id])).rows[0].n,1);
   const actor={companyId:company,userId:owner},connection=(await transaction(c=>createProjectStorageConnection(c,actor,{clientId:randomUUID(),name:'Synthetic prepared images',region:'US-CA-2',volumeId:'fixture-volume',accessKeyId:'user_syntheticaccess',secretAccessKey:'rps_syntheticsecret'}))).connection,binding=(await transaction(c=>bindProjectStorage(c,actor,f.p.id,{clientId:randomUUID(),revision:0,connectionId:connection.id}))).binding;
   const file=randomUUID(),version=randomUUID(),bytes=100,sha256=hashToken(version),providerId=randomUUID();
@@ -107,13 +126,43 @@ test('reviewed ingest staffing executes the exact prepared-reference harness wit
   assert.deepEqual(executed,sequence);assert.equal(step,7);assert(saved);await finishAgentRun(identity as any,lease.run.id,'complete',{clientId:randomUUID(),leaseToken:lease.leaseToken!,result:result.result});
   assert.equal((await query('SELECT status FROM tasks WHERE id=$1',[f.work.task_id])).rows[0].status,'review');assert.equal((await query('SELECT status FROM agent_runs WHERE id=$1',[lease.run.id])).rows[0].status,'succeeded');
   const runtime:references.HiggsfieldReferenceOptions={availability:async()=>({enabled:true,code:'SYNTHETIC_ONLY',message:'Injected offline qualification, not production proof',expiresAt:new Date(Date.now()+3600000).toISOString(),qualificationSha256:'a'.repeat(64),catalogSha256:references.higgsfieldReferenceDigest([])})};
+  if(coordinated){
+   const stored=(await query('SELECT * FROM higgsfield_references WHERE id=$1',[saved.id])).rows[0];assert.equal(stored.inspection_authority.coordination.parentRunId,parentLease!.run.id);assert(new Date(stored.inspect_expires_at).getTime()<=Date.parse(policyBody!.expiresAt));
+   const mutations:[string,string,unknown[]][]=[
+    ['paused policy',"UPDATE studio_coordination_policies SET status='paused' WHERE project_id=$1",[f.p.id]],
+    ['revised policy','UPDATE studio_coordination_policies SET revision=revision+1 WHERE project_id=$1',[f.p.id]],
+    ['expired policy',"UPDATE studio_coordination_policies SET expires_at=clock_timestamp()-interval '1 second' WHERE project_id=$1",[f.p.id]],
+    ['failed parent',"UPDATE agent_runs SET status='failed' WHERE id=$1",[parentLease!.run.id]],
+    ['cancelled parent',"UPDATE agent_runs SET status='cancelled' WHERE id=$1",[parentLease!.run.id]],
+    ['unreceipted parent',"DELETE FROM agent_run_receipts WHERE run_id=$1 AND kind='complete'",[parentLease!.run.id]],
+    ['rotated coordinator','UPDATE agents SET token_hash=$2 WHERE id=$1',[coordinatorIdentity!.id,hashToken(randomUUID())]],
+    ['coordinator installation revision','UPDATE plugin_installations SET revision=revision+1 WHERE agent_id=$1',[coordinatorIdentity!.id]],
+    ['revoked sponsor','UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[company,owner]],
+   ];
+   for(const[label,sql,args]of mutations)await t.test('completed child cannot retain inspection after '+label,()=>transaction(async c=>{await c.query('SAVEPOINT denied_authority');try{await c.query(sql,args);assert.equal(await references.claimHiggsfieldReference(c,{companyId:company,projectIds:[f.p.id]},runtime),null);}finally{await c.query('ROLLBACK TO SAVEPOINT denied_authority');}}));
+   await t.test('slow runtime readiness cannot outlive a still-running parent lease',()=>transaction(async c=>{
+    await c.query('SAVEPOINT parent_lease_clock');let readyCalls=0;
+    try{await c.query("UPDATE agent_runs SET status='running',worker_id='bounded-ready-fixture',lease_token_hash=$2,lease_expires_at=clock_timestamp()+interval '1 second' WHERE id=$1",[parentLease!.run.id,hashToken(randomUUID())]);
+     const slow={availability:async()=>{readyCalls++;await new Promise(resolve=>setTimeout(resolve,1100));return runtime.availability!(c,company,f.p.id);}};
+     await assert.rejects(()=>references.claimHiggsfieldReference(c,{companyId:company,projectIds:[f.p.id]},slow),{code:'HIGGSFIELD_REFERENCE_COORDINATION_AUTHORITY_ENDED'});assert.equal(readyCalls,1);assert.equal((await c.query('SELECT lease_id FROM higgsfield_references WHERE id=$1',[saved!.id])).rows[0].lease_id,null);
+    }finally{await c.query('ROLLBACK TO SAVEPOINT parent_lease_clock');}
+   }));
+   await t.test('real PostgreSQL policy pause wins before a waiting post-run inspection',{skip:emulate},async()=>{
+    const blocker=await database().connect();let inspectionAttempt:Promise<unknown>|undefined;
+    try{await blocker.query('BEGIN');await blocker.query("UPDATE studio_coordination_policies SET status='paused' WHERE project_id=$1",[f.p.id]);inspectionAttempt=transaction(c=>references.claimHiggsfieldReference(c,{companyId:company,projectIds:[f.p.id]},runtime));
+     let waiting=false;for(let i=0;i<100;i++){const state=await blocker.query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND wait_event_type='Lock' AND query LIKE '%studio_coordination_policies%' LIMIT 1");if(state.rowCount){waiting=true;break;}await new Promise(resolve=>setTimeout(resolve,20));}assert(waiting,'Inspection actually waits on exact policy row');await blocker.query('COMMIT');assert.equal(await inspectionAttempt,null);assert.equal((await query('SELECT count(*)::int n FROM higgsfield_reference_inspections WHERE reference_id=$1',[saved!.id])).rows[0].n,0);
+    }finally{await blocker.query('ROLLBACK');blocker.release();await inspectionAttempt;}
+    // This fixture alone restores its synthetic policy/proposal for the positive case.
+    await query("UPDATE studio_coordination_policies SET status='active' WHERE project_id=$1",[f.p.id]);await query("UPDATE higgsfield_references SET status='proposed',diagnostic_code=NULL WHERE id=$1",[saved!.id]);
+   });
+  }
   const inspection=await transaction(c=>references.claimHiggsfieldReference(c,{companyId:company,projectIds:[f.p.id]},runtime));assert(inspection,'A committed successful factual plan preserves finite inspection authority');assert.equal(inspection.phase,'inspect');
   const inspected=(await transaction(c=>references.recordHiggsfieldReferenceInspection(c,inspection,{descriptor:{kind:'image',format:'png',contentType:'image/png',bytes,sha256,verification:'full_decode',inspectionVersion:1,width:16,height:16,codec:'png',color:{space:null,primaries:null,transfer:null,range:null}},profileSha256:'b'.repeat(64)},runtime))).reference;
   assert.equal(inspected.status,'awaiting_approval');assert.equal(inspected.approvedBy,null);assert.equal(inspected.providerConfirmed,false);assert.equal(inspected.metadataRemoved,false);
   assert.equal((await query('SELECT count(*)::int n FROM higgsfield_reference_receipts WHERE phase=\'intent\' AND reference_id=$1',[saved.id])).rows[0].n,0);assert.equal((await query('SELECT count(*)::int n FROM higgsfield_requests WHERE company_id=$1',[company])).rows[0].n,0);
   assert.deepEqual((await query('SELECT capabilities FROM agents WHERE id=$1',[identity.id])).rows[0].capabilities.sort(),originalGrants);assert.equal(outbound,0);t.diagnostic(JSON.stringify({preparedReferenceCatalogBytes:catalogBytes,providerCalls:outbound,qualification:'synthetic only'}));
  }finally{
-  await database().end();await socket.stop();await pg.close();(globalThis as any).coatriaPool=prior.pool;globalThis.fetch=prior.fetch;
+  if(fixtureCompany)await query('DELETE FROM companies WHERE id=$1',[fixtureCompany]);if(fixtureOwner)await query('DELETE FROM users WHERE id=$1',[fixtureOwner]);await database().end();await stop();(globalThis as any).coatriaPool=prior.pool;globalThis.fetch=prior.fetch;
   for(const[key,value]of Object.entries({DATABASE_URL:prior.url,DATABASE_POOL_MAX:prior.max,COATRIA_HOSTING_KEYRING:prior.key}))if(value===undefined)delete process.env[key];else process.env[key]=value;
  }
 });

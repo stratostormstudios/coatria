@@ -3,9 +3,10 @@ import {memberMutation} from './company';
 import {assertOrigin,body,id,json} from './security';
 import {higgsfieldReferenceProposalInput,higgsfieldReferenceApproveInput,higgsfieldReferenceRevokeInput} from './higgsfield-references-protocol';
 import {proposeHiggsfieldReference,listHiggsfieldReferences,listHiggsfieldReferenceCandidates,getHiggsfieldReference,approveHiggsfieldReference,revokeHiggsfieldReference,higgsfieldReferenceAvailability,type HiggsfieldReferenceOptions} from './higgsfield-references';
+import {referenceServiceAvailability} from './higgsfield-reference-service';
 
 /** Metadata only: credentials, worker leases and bytes have no public route. */
-export async function higgsfieldReferenceRoute(request:Request,parts:string[],method:string,options:HiggsfieldReferenceOptions={}):Promise<Response|null>{
+export async function higgsfieldReferenceRoute(request:Request,parts:string[],method:string,options:HiggsfieldReferenceOptions={availability:referenceServiceAvailability}):Promise<Response|null>{
  if(parts[0]!=='companies'||parts[2]!=='higgsfield'||parts[3]!=='references')return null;
  const companyId=id(parts[1]),decision=method==='POST'&&parts.length===6&&['approve','revoke'].includes(parts[5]);
  const member=await requireMembership(request,companyId,decision),actor={companyId,userId:member.userId};
