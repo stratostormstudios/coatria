@@ -6,7 +6,7 @@ import {constants} from 'node:fs';
 import {lstat,mkdir,open,readdir,realpath} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {archiveHostTrusted,archiveHostNoExtendedAcls} from './archive-host-package.mjs';
-import {parseReferenceEnrollmentRequest,referenceEnrollmentHash,referenceEnrollmentCanonical} from './reference-enrollment-contract.mjs';
+import {parseReferenceEnrollmentRequest,referenceEnrollmentHash,referenceEnrollmentCanonical} from '../../src/lib/higgsfield-reference-enrollment-contract.mjs';
 import {referenceHostReceiptSchema} from './reference-host-qualification.mjs';
 
 export const enrollmentBytesHash=bytes=>createHash('sha256').update(bytes).digest('hex');

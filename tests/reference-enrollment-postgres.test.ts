@@ -4,7 +4,7 @@ import {randomBytes,randomUUID,createHash} from 'node:crypto';
 import {readFile,readdir} from 'node:fs/promises';
 import {Pool,type PoolClient} from 'pg';
 import {enrollReferenceService,reconcileReferenceService} from '../scripts/hosting/reference-enrollment-transaction.mjs';
-import {referenceEnrollmentHash,referenceEnrollmentLockKey} from '../scripts/hosting/reference-enrollment-contract.mjs';
+import {referenceEnrollmentHash,referenceEnrollmentLockKey} from '../src/lib/higgsfield-reference-enrollment-contract.mjs';
 import {HIGGSFIELD_REFERENCE_REGISTRAR_ROLE as ROLE} from '../src/lib/higgsfield-reference-registrar-database.mjs';
 import {dropFixtureDatabase} from './fixtures/postgres-teardown';
 

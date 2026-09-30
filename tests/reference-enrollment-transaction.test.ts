@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {parseReferenceEnrollmentRequest,referenceEnrollmentHash} from '../scripts/hosting/reference-enrollment-contract.mjs';
+import {parseReferenceEnrollmentRequest,referenceEnrollmentHash} from '../src/lib/higgsfield-reference-enrollment-contract.mjs';
 import {enrollReferenceService,reconcileReferenceService} from '../scripts/hosting/reference-enrollment-transaction.mjs';
 
 const now=Date.now();

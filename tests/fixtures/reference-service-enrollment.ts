@@ -1,7 +1,7 @@
 /** Synthetic owner fixture only. This does not qualify a host or exercise the
  * production registrar. Registrar LOGIN/transaction tests are separate. */
 import {randomUUID} from 'node:crypto';
-import {parseReferenceEnrollmentRequest,referenceEnrollmentHash} from '../../scripts/hosting/reference-enrollment-contract.mjs';
+import {parseReferenceEnrollmentRequest,referenceEnrollmentHash} from '../../src/lib/higgsfield-reference-enrollment-contract.mjs';
 type DB={query:(sql:string,values?:any[])=>Promise<{rows:any[]}>};
 export async function insertSyntheticReferenceEnrollment(db:DB,serviceId:string){
  const s=(await db.query('SELECT * FROM higgsfield_reference_services WHERE id=$1',[serviceId])).rows[0];

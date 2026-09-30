@@ -2,9 +2,9 @@
  * worker enablement or automatic retry. The caller owns a fresh PG client. */
 import {assertHiggsfieldReferenceRegistrarDatabase} from '../../src/lib/higgsfield-reference-registrar-database.mjs';
 import {compatibleReferenceCatalogDigest} from '../../src/lib/higgsfield-reference-catalog.js';
-import {ReferenceEnrollmentError,referenceEnrollmentFailure as fail,parseReferenceEnrollmentRequest,referenceEnrollmentHash,referenceEnrollmentCanonical as canonical,referenceEnrollmentCatalogHash,referenceEnrollmentLockKey} from './reference-enrollment-contract.mjs';
+import {ReferenceEnrollmentError,referenceEnrollmentFailure as fail,parseReferenceEnrollmentRequest,referenceEnrollmentHash,referenceEnrollmentCanonical as canonical,referenceEnrollmentCatalogHash,referenceEnrollmentLockKey} from '../../src/lib/higgsfield-reference-enrollment-contract.mjs';
 
-/** @typedef {import('./reference-enrollment-contract.mjs').ReferenceEnrollmentRequest} Request */
+/** @typedef {import('../../src/lib/higgsfield-reference-enrollment-contract.mjs').ReferenceEnrollmentRequest} Request */
 /** @typedef {{query:(sql:string,values?:any[])=>Promise<{rows:any[],rowCount?:number|null}>}} Database */
 /** @typedef {{status:'committed'|'absent',serviceId:string,requestId:string,requestHash:string,active:boolean,reason?:string}} Result */
 const iso=value=>new Date(value).toISOString();

@@ -1,4 +1,4 @@
-/** Immutable operator enrollment request. No IO, credentials or activation. */
+/** Shared immutable enrollment contract. No IO, credentials or activation. */
 import {createHash} from 'node:crypto';
 import {isIP} from 'node:net';
 import {z} from 'zod';

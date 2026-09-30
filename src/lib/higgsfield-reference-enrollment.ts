@@ -1,4 +1,4 @@
-import {parseReferenceEnrollmentRequest,referenceEnrollmentHash,referenceEnrollmentCanonical,referenceEnrollmentServiceIdentity,referenceEnrollmentProjectIdentity} from '../../scripts/hosting/reference-enrollment-contract.mjs';
+import {parseReferenceEnrollmentRequest,referenceEnrollmentHash,referenceEnrollmentCanonical,referenceEnrollmentServiceIdentity,referenceEnrollmentProjectIdentity} from './higgsfield-reference-enrollment-contract.mjs';
 
 /** A hash match authenticates an immutable registrar record inside this DB trust
  * boundary. It is not a remote-host attestation or a new qualification decision. */
