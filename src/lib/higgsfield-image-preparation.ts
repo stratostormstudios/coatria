@@ -44,6 +44,21 @@ export function isAllowedPreparationDiagnostic(format:PreparationSource['format'
   return diagnosticPatterns[format].test(bytes.toString('utf8'));
 }
 
+/** The sole binary-transform command. Neither native fixtures nor a qualified
+ * sandbox accept filters, paths, protocols, tools or flags from a request. */
+export function fixedImagePreparationCommand(source:PreparationSource) {
+  if (!source || Object.keys(source).sort().join(',') !== 'format,height,orientation,width' ||
+      !['png','jpeg','webp'].includes(source.format) || !Number.isInteger(source.orientation) ||
+      source.orientation < 1 || source.orientation > 8) fail('PREPARATION_INPUT_INVALID');
+  const rotated = source.orientation >= 5;
+  const size = preparationDimensions(rotated ? source.height : source.width,rotated ? source.width : source.height);
+  const demuxer = source.format === 'jpeg' ? 'jpeg_pipe' : source.format + '_pipe';
+  const decoder = source.format === 'jpeg' ? 'mjpeg' : source.format;
+  const filter = `${filterRecipe.sideData},${orientationFilters[source.orientation]},scale=${size.width}:${size.height}:flags=${filterRecipe.scaleFlags}${source.format === 'jpeg' ? filterRecipe.jpegRange : ''},${filterRecipe.pixels},${filterRecipe.aspect},${filterRecipe.colorTags}`;
+  return Object.freeze({size:Object.freeze(size),args:Object.freeze([...inputFlags,'-format_whitelist',demuxer,'-codec_whitelist',decoder,
+    '-f',demuxer,'-fd','0','-i','fd:','-vf',filter,...outputFlags])});
+}
+
 const pathKey = (value:string) => process.platform === 'win32' ? value.toLowerCase() : value;
 async function trustedFile(path:string) {
   if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0') || /^[\\/]{2}/.test(path) ||
@@ -134,7 +149,7 @@ export async function prepareReferenceImage(input:ImagePreparationInput,options:
     stopped(signal); const binary = await pinnedExecutable(options.ffmpegPath,options.ffmpegSha256,signal);
     original = await trustedFile(input.path); const identity = await original.stat();
     const sourceBytes = await exactBytes(original,input,signal), source = inspectPreparationSource(sourceBytes);
-    const rotated = source.orientation >= 5, size = preparationDimensions(rotated ? source.height : source.width,rotated ? source.width : source.height);
+    const {size,args} = fixedImagePreparationCommand(source);
     // Feed a private snapshot, never a still-mutable caller path. Only this copy
     // reaches the process; hash/identity of the selected original is rechecked.
     directory = await mkdtemp(join(tmpdir(),'coatria-image-preparation-'));
@@ -142,11 +157,7 @@ export async function prepareReferenceImage(input:ImagePreparationInput,options:
     writer = await open(snapshotPath,'wx',0o600);
     await writer.writeFile(sourceBytes); await writer.close(); writer = undefined;
     snapshot = await open(snapshotPath,constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
-    const demuxer = source.format === 'jpeg' ? 'jpeg_pipe' : source.format + '_pipe';
-    const decoder = source.format === 'jpeg' ? 'mjpeg' : source.format;
-    const filter = `${filterRecipe.sideData},${orientationFilters[source.orientation]},scale=${size.width}:${size.height}:flags=${filterRecipe.scaleFlags}${source.format === 'jpeg' ? filterRecipe.jpegRange : ''},${filterRecipe.pixels},${filterRecipe.aspect},${filterRecipe.colorTags}`;
-    const encoded = await nativeBinaryTransform(binary,[...inputFlags,'-format_whitelist',demuxer,'-codec_whitelist',decoder,
-      '-f',demuxer,'-fd','0','-i','fd:','-vf',filter,...outputFlags],snapshot,directory,signal,source.format);
+    const encoded = await nativeBinaryTransform(binary,[...args],snapshot,directory,signal,source.format);
     stopped(signal); const bytes = validatePreparedPng(encoded,size,true);
     await exactBytes(original,input,signal); const pathInfo = await lstat(input.path);
     if (pathInfo.dev !== identity.dev || pathInfo.ino !== identity.ino || pathInfo.isSymbolicLink() || pathInfo.nlink !== 1) fail('PREPARATION_BYTES_CHANGED');

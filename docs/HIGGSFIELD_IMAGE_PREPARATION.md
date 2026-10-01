@@ -2,7 +2,7 @@
 
 ## Status and intended result
 
-This document specifies the next stage after [managed prepared-image references](HIGGSFIELD_REFERENCES.md). M1 has a native fixture implementation and real pixel tests. M2 adds the durable preparation schema, service and metadata API. M3 adds the private scoped storage worker described below. M4 adds the original picker, finite processing consent, derivative preview, explicit agent profile and authenticated handoff tools. Automatic continuation across later processing/sharing waits, M5 runtime qualification and M6 live delivery proof remain outstanding. Automatic preparation is not deployed, qualified on a live host, or enabled for a company. This work does not activate workers, provision resources, change existing agent grants, or authorize provider spending.
+This document specifies the next stage after [managed prepared-image references](HIGGSFIELD_REFERENCES.md). M1 has a native fixture implementation and real pixel tests. M2 adds the durable preparation schema, service and metadata API. M3 adds the scoped storage worker described below. M4 adds the original picker, finite processing consent, derivative preview, explicit agent profile and authenticated handoff tools. [Reference-to-generation continuation](STUDIO_REFERENCE_GENERATION.md) now supplies the separate bounded path across later inspection/sharing waits. M5 has a credential-free worker core and isolated binary-transform implementation; remote control/byte transports, dedicated enrollment and installed-host qualification are still required. M6 live delivery proof is outstanding. Automatic preparation is not deployed, qualified on a live host, or enabled for a company. This work does not activate workers, provision resources, change existing agent grants, or authorize provider spending.
 
 The intended result is: choose an exact original image already in project storage, create a bounded derivative with verified metadata removal, save it as a separate verified project-storage version, review that exact derivative, then use the existing finite Higgsfield sharing approval. The original remains unchanged. Preparing an image is not permission to share it with Higgsfield, approve its creative content, generate paid media, or accept a client delivery.
 
@@ -36,7 +36,7 @@ node --import tsx --test tests/higgsfield-image-preparation*.test.ts
 node node_modules/typescript/bin/tsc --noEmit
 ```
 
-These tests prove the local transformation and validation layer. M3 separately tests derivative storage verification. Production containment, remote binary transport, Higgsfield sharing, and a live studio delivery remain M4–M6.
+These tests prove the local transformation and validation layer. M3 separately tests derivative storage verification. The additional Linux transform canary below exercises actual containment in CI; remote binary transport, installed-host qualification, Higgsfield sharing and a live studio delivery require separate evidence.
 
 ### Implemented M2 boundary
 
@@ -212,6 +212,18 @@ A ready derivative does not make a completed planning task eligible for an ordin
 The original picker may admit the preparation policy's 32 MiB source bound; the existing 10 MiB sharing picker and preview bound remain unchanged. The UI should show original selection, processing destination/consent, preparation progress, exact derivative preview, and sharing as distinct steps. When runtime qualification is absent, expose that specific unavailable state instead of presenting a functioning processing action.
 
 ## Bounded milestones
+
+### M5 worker and native boundary
+
+`project-image-preparation-worker-core.ts` carries the existing attempt state machine through named control and byte ports. It imports no database driver, storage SDK, vault or direct service composition. The original `project-image-preparation-worker.ts` remains the trusted local DB/Runpod adapter, with unchanged public factory behavior. Credentials, physical object keys and multipart provider descriptors stay in that adapter. Control results expose only logical IDs, bounded metadata and action-bound receipts. Provider mutations still follow committed intents; missing responses never trigger replacement uploads. Cancellation remains checked inside the local publication transaction before commit.
+
+`createLinuxImagePreparationTransform` accepts only a genuine, privately branded Linux sandbox, its exact profile hash and the fixed recipe hash. A real one-pixel RGBA transform verifies binary output and alpha preservation before the callable transform is returned. Source bytes enter the decoder through a read-only descriptor for a private verified snapshot. There is no request-supplied command, filter, native executable or URL. The existing text inspection operation retains its strict diagnostic policy; the fixed image operation alone accepts the narrowly recognized format diagnostics. The native fixture adapter still rejects production mode.
+
+Normal completion, cancellation and validation failure await actual descendant cleanup, descriptor closure and private snapshot removal. Unconfirmed decoder or local cleanup retains scratch ownership, returns `PREPARATION_CLEANUP_FAILED` and disables further worker admission. A failed cleanup cannot be turned into successful publication or a released durable claim.
+
+The Linux CI canary executes real PNG/JPEG/WebP transformations plus wrong-hash, pre-abort and cancellation-during-native-execution cases. It checks binary PNG output, hashes, source preservation, drained cgroups/processes, closed source descriptors and removed private snapshots. The separate `image-preparation-transform.json` explicitly does **not** qualify or enroll an installed preparation service, exercise remote transport, or claim provider execution. Existing inspection receipts retain their inspection-only authority. A single explicit source list binds the canary, build preparation and installed receipt validator to the same files.
+
+To finish M5, the hosted composition must implement the named control operations against a dedicated restricted broker role, route exact source/output bytes through the finite storage gateway, bind trusted transport receipts to durable actions, and enroll a separately qualified preparation service with finite company/project scope. Original bytes up to 32 MiB and derivative bytes up to 10 MiB must not travel through Vercel JSON or model context. Installed execution, real restricted PostgreSQL permissions, lease expiry/revocation, uncertain transport outcomes and a full binary-to-storage canary remain release gates.
 
 | Milestone | Deliverable | Acceptance boundary |
 | --- | --- | --- |
