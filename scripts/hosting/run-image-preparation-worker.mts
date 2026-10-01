@@ -2,7 +2,7 @@
  * independently accepted current-host receipt precede any metadata request.
  * Enrollment/activation are separate; preflight never claims tenant work. */
 import {createHash} from 'node:crypto';
-import {lstat,opendir,readFile,realpath} from 'node:fs/promises';
+import {lstat,opendir,readFile,readdir,realpath} from 'node:fs/promises';
 import {dirname,resolve} from 'node:path';
 import {pathToFileURL,fileURLToPath} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -32,6 +32,25 @@ export async function drainImagePreparationRunnerClients(clients:Set<Pick<ImageP
  let failed=false;for(const client of clients)try{client.close();}catch{failed=true;}
  const results=await Promise.allSettled([...clients].map(client=>Promise.resolve().then(()=>client.drain())));
  if(failed||results.some(result=>result.status==='rejected'))bad('IMAGE_PREPARATION_RUNNER_CLEANUP_FAILED');clients.clear();
+}
+/** Local cleanup is independent of an uncertain remote transaction. Never emit
+ * its proof from a finally block until every actual resource has settled. */
+export async function assertImagePreparationRunnerDescendantsEmpty(cgroupRoot:string){
+ try{
+  const info=await lstat(cgroupRoot);
+  if(!info.isDirectory()||info.isSymbolicLink()||await realpath(cgroupRoot)!==cgroupRoot)bad('IMAGE_PREPARATION_RUNNER_CLEANUP_FAILED');
+  if((await readFile(cgroupRoot+'/cgroup.procs','utf8')).trim()!=='')bad('IMAGE_PREPARATION_RUNNER_CLEANUP_FAILED');
+  const events=(await readFile(cgroupRoot+'/cgroup.events','utf8')).trim().split('\n');
+  if(events.filter(line=>line.startsWith('populated ')).length!==1||!events.includes('populated 0'))bad('IMAGE_PREPARATION_RUNNER_CLEANUP_FAILED');
+  for(const entry of await readdir(cgroupRoot,{withFileTypes:true}))if(entry.isDirectory()||entry.isSymbolicLink())bad('IMAGE_PREPARATION_RUNNER_CLEANUP_FAILED');
+ }catch{bad('IMAGE_PREPARATION_RUNNER_CLEANUP_FAILED');}
+}
+export async function finishImagePreparationRunnerSession(input:{clients:Set<Pick<ImagePreparationServiceClient,'close'|'drain'>>;verifyScratch:()=>Promise<void>;verifyTemporary:()=>Promise<void>;verifyDescendants:()=>Promise<void>;emit:()=>void}){
+ await drainImagePreparationRunnerClients(input.clients);
+ // Check all three, without reporting success when any check fails.
+ const results=await Promise.allSettled([input.verifyScratch,input.verifyTemporary,input.verifyDescendants].map(verify=>Promise.resolve().then(verify)));
+ if(results.some(result=>result.status==='rejected'))bad('IMAGE_PREPARATION_RUNNER_CLEANUP_FAILED');
+ input.emit();
 }
 /** The same disposable readiness client is drained before preflight returns or
  * the first work client can be constructed. This path has no claim operation. */
@@ -75,17 +94,26 @@ export async function runImagePreparationWorker(args:readonly string[],settings:
  process.once('SIGTERM',shutdown);process.once('SIGINT',shutdown);process.env.TMPDIR=c.temporaryRoot;
  const current=()=>{if(Date.now()>=Date.parse(c.expiresAt))stop.abort();if(stop.signal.aborted)bad('IMAGE_PREPARATION_RUNNER_STOPPED');};
  const client=()=>{current();const value=createImagePreparationServiceClient({...c,token,processor:imagePreparationRunnerProcessor(c)});clients.add(value);return value;};
+ const evidence={serviceId:c.serviceId,sourceCommit:c.sourceCommit,configurationSha256:imagePreparationRunnerConfigurationHash(c),qualificationSha256:c.qualification.sha256};
+ let delegated:Awaited<ReturnType<typeof initializeImagePreparationHostDelegation>>|undefined,preflightPassed=false;
  try{
-  const paths=await initializeImagePreparationHostDelegation(c.serviceId,preflight?'preflight':'worker');current();
+  const paths=await initializeImagePreparationHostDelegation(c.serviceId,preflight?'preflight':'worker');delegated=paths;current();
   const sandbox=await createLinuxMediaSandbox({profilePath:c.profilePath,expectedProfileSha256:c.profileSha256,cgroupRoot:paths.cgroupRoot});current();
   const transform=await createLinuxImagePreparationTransform({sandbox,expectedProfileSha256:c.profileSha256,recipeSha256:c.recipeSha256});current();
   if(!isQualifiedLinuxImagePreparationTransform(transform))bad('IMAGE_PREPARATION_RUNNER_UNQUALIFIED');
   await preflightImagePreparationRunnerClient(client(),stop.signal);clients.clear();current();
-  if(preflight){console.log(JSON.stringify({event:'image-preparation-worker-preflight-passed',serviceId:c.serviceId,sourceCommit:c.sourceCommit,workClaimed:false,providerCalled:false}));return;}
+  if(preflight){preflightPassed=true;return;}
   const worker=createProjectImagePreparationWorkerCore({scope:{companyId:c.companyId,projectIds:c.projectIds},scratchRoot:c.scratchRoot,transform,createPorts:client});
+  console.log(JSON.stringify({event:'image-preparation-worker-ready',...evidence,workClaimed:false,providerCalled:false}));
   await runImagePreparationWorkerLoop(worker,{signal:stop.signal,afterAttempt:()=>drainImagePreparationRunnerClients(clients),onResult:r=>{if(r.processed)console.log(JSON.stringify({event:'image-preparation-worker-attempt',preparationId:r.preparationId,status:r.status}));}});
  }finally{
-  stop.abort();try{await drainImagePreparationRunnerClients(clients);}finally{clearTimeout(timer);process.removeListener('SIGTERM',shutdown);process.removeListener('SIGINT',shutdown);if(oldTmp===undefined)delete process.env.TMPDIR;else process.env.TMPDIR=oldTmp;}
+  stop.abort();try{
+   if(delegated)await finishImagePreparationRunnerSession({clients,verifyScratch:()=>privateDirectory(c.scratchRoot,c),verifyTemporary:()=>privateDirectory(c.temporaryRoot,c),verifyDescendants:()=>assertImagePreparationRunnerDescendantsEmpty(delegated!.cgroupRoot),emit:()=>{
+    if(preflight){if(preflightPassed)console.log(JSON.stringify({event:'image-preparation-worker-preflight-passed',...evidence,workClaimed:false,providerCalled:false}));}
+    else console.log(JSON.stringify({event:'image-preparation-worker-drained',...evidence,clientsDrained:true,scratchEmpty:true,temporaryEmpty:true,nativeDescendantsEmpty:true,remoteOutcomeResolved:false}));
+   }});
+   else await drainImagePreparationRunnerClients(clients);
+  }finally{clearTimeout(timer);process.removeListener('SIGTERM',shutdown);process.removeListener('SIGINT',shutdown);if(oldTmp===undefined)delete process.env.TMPDIR;else process.env.TMPDIR=oldTmp;}
  }
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)void runImagePreparationWorker(process.argv.slice(2)).catch(()=>{console.error(JSON.stringify({event:'image-preparation-worker-stopped',code:'IMAGE_PREPARATION_RUNNER_UNAVAILABLE'}));process.exitCode=1;});

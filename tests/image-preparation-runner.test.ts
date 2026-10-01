@@ -8,7 +8,7 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {IMAGE_PREPARATION_RECIPE_HASH} from '../src/lib/higgsfield-image-preparation';
 import {ImagePreparationRunnerError,parseImagePreparationHostConfiguration,parseImagePreparationRunnerConfiguration,deriveImagePreparationRunnerConfiguration,assertImagePreparationRunnerReceipt,imagePreparationRunnerConfigurationHash,parseImagePreparationRunnerToken,imagePreparationRunnerProcessor,type ImagePreparationHostConfiguration} from '../scripts/hosting/image-preparation-runner-configuration.mjs';
-import {assertImagePreparationRunnerEnvironment,assertImagePreparationRunnerActivation,assertImagePreparationRunnerScratchEmpty,drainImagePreparationRunnerClients,preflightImagePreparationRunnerClient,runImagePreparationWorkerLoop,runImagePreparationWorker} from '../scripts/hosting/run-image-preparation-worker.mjs';
+import {assertImagePreparationRunnerEnvironment,assertImagePreparationRunnerActivation,assertImagePreparationRunnerScratchEmpty,assertImagePreparationRunnerDescendantsEmpty,finishImagePreparationRunnerSession,drainImagePreparationRunnerClients,preflightImagePreparationRunnerClient,runImagePreparationWorkerLoop,runImagePreparationWorker} from '../scripts/hosting/run-image-preparation-worker.mjs';
 import {imagePreparationHostDelegatedPath,assertImagePreparationHostUnitState} from '../scripts/hosting/image-preparation-host-delegation.mjs';
 
 /** Contract fixtures are synthetic metadata only, never accepted host evidence. */
@@ -82,6 +82,30 @@ test('client cleanup failure retains ownership and still drains every other clie
  const events:string[]=[],clients=new Set([{close(){events.push('close1');throw Error('unsafe private detail');},async drain(){events.push('drain1');}},{close(){events.push('close2');},async drain(){events.push('drain2');throw Error('unsafe private detail');}}]);
  await assert.rejects(drainImagePreparationRunnerClients(clients),(e:unknown)=>e instanceof ImagePreparationRunnerError&&e.code==='IMAGE_PREPARATION_RUNNER_CLEANUP_FAILED'&&!String(e).includes('private detail'));assert.equal(clients.size,2);assert.deepEqual(events,['close1','close2','drain1','drain2']);
  const healthy=new Set([{close(){},async drain(){}}]);await drainImagePreparationRunnerClients(healthy);assert.equal(healthy.size,0);
+});
+
+test('session cleanup proof waits for actual drain and all three local resource checks',async()=>{
+ const gate=deferred(),events:string[]=[];let settled=false;
+ const completion=finishImagePreparationRunnerSession({clients:new Set([{close(){events.push('close');},async drain(){events.push('drain');await gate.promise;events.push('drained');}}]),async verifyScratch(){events.push('scratch');},async verifyTemporary(){events.push('temporary');},async verifyDescendants(){events.push('descendants');},emit(){events.push('proof');}}).then(()=>{settled=true;});
+ await new Promise(r=>setImmediate(r));assert.equal(settled,false);assert.deepEqual(events,['close','drain']);gate.resolve();await completion;assert.deepEqual(events,['close','drain','drained','scratch','temporary','descendants','proof']);
+});
+
+test('failed drain or any unconfirmed resource never emits a local cleanup proof',async()=>{
+ for(const failed of ['drain','scratch','temporary','descendants']){
+  const events:string[]=[];const verify=async(name:string)=>{events.push(name);if(name===failed)throw Error('private fixture data');};
+  await assert.rejects(finishImagePreparationRunnerSession({clients:new Set([{close(){},drain:()=>verify('drain')}]),verifyScratch:()=>verify('scratch'),verifyTemporary:()=>verify('temporary'),verifyDescendants:()=>verify('descendants'),emit(){events.push('proof');}}),ImagePreparationRunnerError);
+  assert.equal(events.includes('proof'),false);assert.deepEqual(events,failed==='drain'?['drain']:['drain','scratch','temporary','descendants']);
+ }
+});
+
+test('decoder cleanup rejects remaining processes, descendant groups and ambiguous populated state',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'image-preparation-cgroup-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const nativePath=await (await import('node:fs/promises')).realpath(root);
+ const fields=async(procs:string,events:string)=>{await writeFile(join(root,'cgroup.procs'),procs);await writeFile(join(root,'cgroup.events'),events);};
+ await fields('','populated 0\nfrozen 0\n');await assertImagePreparationRunnerDescendantsEmpty(nativePath);
+ for(const [procs,events]of [['42\n','populated 0\n'],['','populated 1\n'],['','populated 0\npopulated 1\n'],['','frozen 0\n']]){await fields(procs,events);await assert.rejects(assertImagePreparationRunnerDescendantsEmpty(nativePath),ImagePreparationRunnerError);}
+ await fields('','populated 0\nfrozen 0\n');await mkdir(join(root,'retained-attempt'));await assert.rejects(assertImagePreparationRunnerDescendantsEmpty(nativePath),ImagePreparationRunnerError);
+ assert.deepEqual((await readdir(root)).sort(),['cgroup.events','cgroup.procs','retained-attempt']);
 });
 test('restart refuses leftover bytes or directories without deleting or reflecting their names',async t=>{
  const root=await mkdtemp(join(tmpdir(),'image-preparation-runner-'));t.after(()=>rm(root,{recursive:true,force:true}));const empty=join(root,'empty'),files=join(root,'files'),attempts=join(root,'attempts');for(const path of [empty,files,attempts])await mkdir(path);
