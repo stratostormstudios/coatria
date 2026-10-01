@@ -55,11 +55,33 @@ test('host broker is origin pinned, credential private, bounded and fails closed
 });
 
 test('two agent slots are independent, bounded and give each approved specialist a turn',async()=>{
- const f=await fixture(4);const seen:string[]=[],configured:any[]=[];let active=0,maximum=0,completed=0,releaseSlots!:()=>void;const twoSlots=new Promise<void>(resolve=>releaseSlots=resolve);
+ const f=await fixture(4);const admitted:string[]=[],seen:string[]=[],configured:any[]=[],completed=new Set<string>();let active=0,maximum=0,releaseSlots!:()=>void;const twoSlots=new Promise<void>(resolve=>releaseSlots=resolve);
  try{
-  const result=await runStudioHost({...f.options,concurrency:2,clientFactory:clientFactory(f.bundles,item=>jobClient(item,{complete:async()=>{completed++;if(completed===4)f.control.abort();return{};}})),executorFactory:({settings:explicit}:any)=>{configured.push(explicit);return async({run,signal}:any)=>{active++;maximum=Math.max(maximum,active);seen.push(run.agentId);if(active===2)releaseSlots();await Promise.race([twoSlots,waitForAbort(signal)]);signal.throwIfAborted();active--;return{result:'Synthetic reviewed output'};};}});
-  assert.equal(result.cleanupComplete,true);assert.equal(maximum,2);assert.equal(new Set(seen.slice(0,4)).size,4);assert.equal(configured.length,4);assert(configured.every(value=>Object.isFrozen(value)&&value.RUNPOD_API_KEY===settings.RUNPOD_API_KEY&&!('COATRIA_AGENT_TOKEN'in value)));assert(!JSON.stringify(f.events).includes(secret));
+  const clients=clientFactory(f.bundles,item=>{const normal=jobClient(item);let claimed=false;return{...normal,autonomyTick:async()=>{admitted.push(item.agentId);},claim:async()=>{if(claimed)return{run:null};claimed=true;return normal.claim();},complete:async()=>{completed.add(item.agentId);if(completed.size===4)f.control.abort();return{};}};});
+  const result=await runStudioHost({...f.options,concurrency:2,clientFactory:clients,executorFactory:({settings:explicit}:any)=>{configured.push(explicit);return async({run,signal}:any)=>{active++;maximum=Math.max(maximum,active);seen.push(run.agentId);if(active===2)releaseSlots();try{await Promise.race([twoSlots,waitForAbort(signal)]);signal.throwIfAborted();return{result:'Synthetic reviewed output'};}finally{active--;}};}});
+  assert.equal(result.cleanupComplete,true);assert.equal(maximum,2);assert.equal(active,0);assert.deepEqual(admitted.slice(0,4),f.bundles.map(item=>item.agentId));assert.equal(completed.size,4);assert.equal(seen.length,4);assert.equal(new Set(seen).size,4);assert.equal(configured.length,4);assert(configured.every(value=>Object.isFrozen(value)&&value.RUNPOD_API_KEY===settings.RUNPOD_API_KEY&&!('COATRIA_AGENT_TOKEN'in value)));assert(!JSON.stringify(f.events).includes(secret));
  }finally{await f.remove();}
+});
+
+test('a claimed specialist waiting for context does not block the other slot or lose its turn',async()=>{
+ const f=await fixture(4),waitingId=f.bundles[3].agentId,admitted:string[]=[],seen:string[]=[],completedAgents=new Set<string>();
+ let active=0,maximum=0,completed=0,waitingForContext=false,contextHeldAtRelease=false,completedAtRelease:string[]=[],releaseContext!:()=>void,contextEntered!:()=>void,releaseSlots!:()=>void,releaseFirstThree!:()=>void;
+ const contextReady=new Promise<void>(resolve=>releaseContext=resolve),waitingContext=new Promise<void>(resolve=>contextEntered=resolve),twoSlots=new Promise<void>(resolve=>releaseSlots=resolve),firstThreeCompleted=new Promise<void>(resolve=>releaseFirstThree=resolve);
+ try{
+  const clients=clientFactory(f.bundles,item=>{
+   let normal=jobClient(item);return{...normal,autonomyTick:async()=>{admitted.push(item.agentId);},claim:async()=>{normal=jobClient(item);return normal.claim();},context:async(_run:string,_lease:string,signal:AbortSignal)=>{
+    if(item.agentId===waitingId){waitingForContext=true;contextEntered();await Promise.race([contextReady,waitForAbort(signal)]);signal.throwIfAborted();}return normal.context();
+   },complete:async()=>{completed++;completedAgents.add(item.agentId);if(completedAgents.size===3)releaseFirstThree();if(completed===4){contextHeldAtRelease=waitingForContext;completedAtRelease=[...completedAgents];releaseContext();}if(completedAgents.size===4)f.control.abort();return{};}};
+  });
+  const result=await runStudioHost({...f.options,concurrency:2,clientFactory:clients,executorFactory:()=>async({run,signal}:any)=>{
+   active++;maximum=Math.max(maximum,active);const repeated=seen.includes(run.agentId);seen.push(run.agentId);if(active===2)releaseSlots();
+   try{await Promise.race([twoSlots,waitForAbort(signal)]);if(repeated)await Promise.race([Promise.all([firstThreeCompleted,waitingContext]),waitForAbort(signal)]);signal.throwIfAborted();return{result:'Synthetic reviewed output'};}finally{active--;}
+  }});
+  // The fourth admission owns a slot while awaiting context. Independent work
+  // may finish twice before that executor starts; fairness is admission order,
+  // not the completion order of asynchronous context and durable journal I/O.
+  assert.equal(result.cleanupComplete,true);assert.equal(maximum,2);assert.equal(active,0);assert.equal(contextHeldAtRelease,true);assert.deepEqual(admitted.slice(0,4),f.bundles.map(item=>item.agentId));assert.equal(completedAtRelease.length,3);assert.equal(completedAtRelease.includes(waitingId),false);assert.equal(new Set(seen.slice(0,4)).size,3);assert.equal(completedAgents.size,4);assert(completed>=5);
+ }finally{f.control.abort();releaseContext();contextEntered();releaseSlots();releaseFirstThree();await f.remove();}
 });
 
 test('explicit inference broker mode runs a hosted specialist without forwarding provider credentials',async()=>{
