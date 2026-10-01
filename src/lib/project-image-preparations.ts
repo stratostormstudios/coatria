@@ -80,7 +80,7 @@ async function agentFacts(db:PoolClient,companyId:string,agentId:string,runId:st
  return {agentId,runId,requestedBy:userId,sponsorId:r.created_by,credentialSha256:r.token_hash,managedCredentialSha256:r.managed_token_hash??null,expiresAt:iso(r.expires_at),capabilities:[...r.capabilities].sort(),runCapabilities:[...r.run_capabilities].sort(),invocationAccess:r.invocation_access};
 }
 async function project(db:PoolClient,companyId:string,projectId:string){
- const p=(await db.query('SELECT * FROM studio_projects WHERE company_id=$1 AND id=$2 FOR UPDATE',[companyId,id(projectId)])).rows[0];
+ const p=(await db.query('SELECT * FROM studio_projects WHERE company_id=$1 AND id=$2 FOR NO KEY UPDATE',[companyId,id(projectId)])).rows[0];
  if(!p)fail(404,'Project not found.');
  if(p.status==='delivered'||p.ai_policy!=='allowed'||p.production_path!=='higgsfield'||['brief','estimate','production'].some(g=>p.gates[g]?.decision!=='approved'))changed('IMAGE_PREPARATION_PROJECT_CHANGED');
  return p;
@@ -118,7 +118,7 @@ async function source(db:PoolClient,companyId:string,projectId:string,versionId:
  if(!['image/png','image/jpeg','image/webp'].includes(v.content_type)||Number(v.bytes)<1||Number(v.bytes)>limits.sourceMaxBytes)changed('IMAGE_PREPARATION_SOURCE_UNSUPPORTED');
  return {versionId:v.id,fileId:v.file_id,name:v.name,version:v.version,bytes:Number(v.bytes),sha256:v.verified_sha256,contentType:v.content_type,objectKey:v.object_key,providerEtag:v.provider_etag};
 }
-async function destination(db:PoolClient,companyId:string,projectId:string,folderId:string|null,name:string){
+async function destination(db:PoolClient,companyId:string,projectId:string,folderId:string|null,name:string,ownedFileId:string|null=null){
  const path:Row[]=[],seen=new Set<string>();let next=folderId;
  while(next){
   if(seen.has(next)||path.length>=12)changed('IMAGE_PREPARATION_DESTINATION_CHANGED');seen.add(next);
@@ -126,7 +126,7 @@ async function destination(db:PoolClient,companyId:string,projectId:string,folde
   if(!f)fail(404,'Destination folder not found in this project.');path.push(f);next=f.parent_id;
  }
  if((await db.query(`SELECT id FROM project_storage_folders WHERE company_id=$1 AND project_id=$2 AND parent_id IS NOT DISTINCT FROM $3::uuid AND name_key=$4
- UNION ALL SELECT id FROM project_storage_files WHERE company_id=$1 AND project_id=$2 AND parent_id IS NOT DISTINCT FROM $3::uuid AND name_key=$4 LIMIT 1`,[companyId,projectId,folderId,nameKey(name)])).rowCount)fail(409,'Use a new filename for the derivative.','STORAGE_NAME_CONFLICT');
+ UNION ALL SELECT id FROM project_storage_files WHERE company_id=$1 AND project_id=$2 AND parent_id IS NOT DISTINCT FROM $3::uuid AND name_key=$4 AND ($5::uuid IS NULL OR id<>$5) LIMIT 1`,[companyId,projectId,folderId,nameKey(name),ownedFileId])).rowCount)fail(409,'Use a new filename for the derivative.','STORAGE_NAME_CONFLICT');
  return {folderId,name,path};
 }
 async function approval(db:PoolClient,r:Row){return (await db.query('SELECT * FROM project_image_preparation_approvals WHERE company_id=$1 AND preparation_id=$2',[r.company_id,r.id])).rows[0] as Row|undefined;}
@@ -139,7 +139,7 @@ async function lockedRow(db:PoolClient,companyId:string,preparationId:string,ext
   await db.query('SELECT id FROM agents WHERE company_id=$1 AND id=$2 FOR SHARE',[companyId,scope.proposed_agent_id]);
   await db.query('SELECT id FROM agent_runs WHERE company_id=$1 AND id=$2 FOR SHARE',[companyId,scope.proposed_run_id]);
  }
- await db.query('SELECT id FROM studio_projects WHERE company_id=$1 AND id=$2 FOR UPDATE',[companyId,scope.project_id]);
+ await db.query('SELECT id FROM studio_projects WHERE company_id=$1 AND id=$2 FOR NO KEY UPDATE',[companyId,scope.project_id]);
  const r=(await db.query('SELECT * FROM project_image_preparations WHERE company_id=$1 AND id=$2 FOR UPDATE',[companyId,preparationId])).rows[0];if(!r)fail(404,'Preparation not found.');return {r,a,members};
 }
 async function view(db:PoolClient,r:Row,evidence?:{a:Row|null;d:Row|null}):Promise<Preparation>{
@@ -160,13 +160,29 @@ async function once(db:PoolClient,value:Actor,clientId:string,operation:string,d
  return {preparation:await view(db,r),replayed:false};
 }
 async function receipt(db:PoolClient,r:Row,actionId:string,operation:string,phase:string,detail:Row={}){await db.query('INSERT INTO project_image_preparation_receipts(company_id,project_id,preparation_id,action_id,operation,phase,detail) VALUES($1,$2,$3,$4,$5,$6,$7)',[r.company_id,r.project_id,r.id,actionId,operation,phase,JSON.stringify(detail)]);}
+async function ownedAllocation(db:PoolClient,r:Row){
+ const allocation=(await db.query('SELECT * FROM project_image_preparation_allocations WHERE company_id=$1 AND project_id=$2 AND preparation_id=$3',[r.company_id,r.project_id,r.id])).rows[0];
+ if(!allocation)return null;
+ const output=r.transform_result?.output;
+ if(!output||allocation.binding_revision_before!==r.storage_binding_revision||allocation.binding_revision_after!==r.storage_binding_revision+1||allocation.output_sha256!==output.sha256||Number(allocation.output_bytes)!==output.bytes)changed('IMAGE_PREPARATION_ALLOCATION_CHANGED');
+ const valid=(await db.query(`SELECT 1 FROM project_storage_versions v JOIN project_storage_files f ON (f.company_id,f.project_id,f.id)=(v.company_id,v.project_id,v.file_id)
+ JOIN project_storage_uploads u ON (u.company_id,u.project_id,u.version_id)=(v.company_id,v.project_id,v.id)
+ JOIN project_image_preparation_approvals a ON a.company_id=v.company_id AND a.project_id=v.project_id AND a.preparation_id=$3
+ WHERE v.company_id=$1 AND v.project_id=$2 AND v.id=$4 AND v.file_id=$5 AND u.id=$6 AND v.version=1 AND v.file_id<>$7
+ AND f.binding_id=$8 AND f.parent_id IS NOT DISTINCT FROM $9::uuid AND f.name=$10 AND f.name_key=$11
+ AND v.bytes=$12 AND v.sha256=$13 AND v.content_type='image/png' AND u.actor_key=$14 AND u.actor_user_id=a.approved_by
+ AND u.actor_agent_id IS NULL AND u.run_id IS NULL AND u.archive_id IS NULL AND u.request_hash=$15 AND u.client_id=$3
+ AND u.part_bytes=67108864 FOR SHARE OF v,f`,[r.company_id,r.project_id,r.id,allocation.version_id,allocation.file_id,allocation.upload_id,r.source_snapshot.fileId,r.storage_binding_id,r.destination_folder_id,r.destination_name,nameKey(r.destination_name),output.bytes,output.sha256,'preparation:'+r.id,r.request_hash])).rowCount;
+ if(!valid)changed('IMAGE_PREPARATION_ALLOCATION_CHANGED');return allocation;
+}
 async function facts(db:PoolClient,r:Row,members:Row[]){
  const p=await project(db,r.company_id,r.project_id);
  if(!same(semanticProject(p),r.project_snapshot)||p.revision!==r.project_revision)changed('IMAGE_PREPARATION_PROJECT_CHANGED');
  const b=await storage(db,r.company_id,r.project_id);requireAdmin(members,b.sponsor);
- if(b.id!==r.storage_binding_id||b.revision!==r.storage_binding_revision||b.connection_id!==r.storage_connection_id||b.connection_revision!==r.storage_connection_revision||b.sponsor!==r.storage_sponsor_id)changed('IMAGE_PREPARATION_STORAGE_CHANGED');
+ const allocated=await ownedAllocation(db,r);
+ if(b.id!==r.storage_binding_id||b.revision!==(allocated?.binding_revision_after??r.storage_binding_revision)||b.connection_id!==r.storage_connection_id||b.connection_revision!==r.storage_connection_revision||b.sponsor!==r.storage_sponsor_id)changed('IMAGE_PREPARATION_STORAGE_CHANGED');
  if(!same(await source(db,r.company_id,r.project_id,r.source_version_id,b.id),r.source_snapshot))changed('IMAGE_PREPARATION_SOURCE_CHANGED');
- if(!same(await destination(db,r.company_id,r.project_id,r.destination_folder_id,r.destination_name),r.destination_snapshot))changed('IMAGE_PREPARATION_DESTINATION_CHANGED');
+ if(!same(await destination(db,r.company_id,r.project_id,r.destination_folder_id,r.destination_name,allocated?.file_id??null),r.destination_snapshot))changed('IMAGE_PREPARATION_DESTINATION_CHANGED');
  if(!same(await work(db,r.company_id,r.project_id,r.work_item_id),r.work_snapshot))changed('IMAGE_PREPARATION_WORK_CHANGED');
  const old=r.proposer_snapshot,expected=members.filter(m=>old.members.some((s:Row)=>s.userId===m.user_id)).map(memberSnapshot);
  if(!same(expected,old.members))changed();
@@ -230,7 +246,7 @@ export async function revokeProjectImagePreparation(db:PoolClient,value:Actor,pr
  const data=parse(projectImagePreparationRevokeInput,input);await actor(db,value,true);await companyLock(db,value.companyId);
  return once(db,value,data.clientId,'revoke:'+id(preparationId),data,async()=>{
   // Revocation must still work after another sponsor or source is revoked.
-  const scope=await readRow(db,value.companyId,preparationId);await db.query('SELECT id FROM studio_projects WHERE company_id=$1 AND id=$2 FOR UPDATE',[value.companyId,scope.project_id]);
+  const scope=await readRow(db,value.companyId,preparationId);await db.query('SELECT id FROM studio_projects WHERE company_id=$1 AND id=$2 FOR NO KEY UPDATE',[value.companyId,scope.project_id]);
   const r=(await db.query('SELECT * FROM project_image_preparations WHERE company_id=$1 AND id=$2 FOR UPDATE',[value.companyId,preparationId])).rows[0];
   if(r.revision!==data.revision||r.status==='revoked')changed('IMAGE_PREPARATION_REVISION_CONFLICT');
   await receipt(db,r,randomUUID(),'revoke','revoked',{revokedBy:value.userId,note:data.note});
@@ -313,7 +329,9 @@ export async function failProjectImagePreparation(db:PoolClient,lease:Lease,code
  await companyLock(db,lease.companyId);const r=(await db.query('SELECT * FROM project_image_preparations WHERE company_id=$1 AND id=$2 FOR UPDATE',[lease.companyId,id(lease.preparationId)])).rows[0];
  if(!r||r.lease_id!==id(lease.leaseId)||r.request_hash!==lease.requestHash||r.project_id!==lease.projectId)changed('IMAGE_PREPARATION_LEASE_ENDED');
  if(!['reading','transforming','validating','storing','verifying'].includes(r.status))return {preparation:await view(db,r)};
- const diagnostic=['PREPARATION_TIMEOUT','PREPARATION_ABORTED','PREPARATION_CLEANUP_FAILED','PREPARATION_DECODE_FAILED','PREPARATION_OUTPUT_INVALID','PREPARATION_BYTES_CHANGED','PREPARATION_LIMIT_EXCEEDED','PREPARATION_UNSUPPORTED'].includes(code)?code:'IMAGE_PREPARATION_FAILED';
- const uncertain=['transforming','storing','verifying'].includes(r.status);await receipt(db,r,randomUUID(),r.action_operation??'claim',uncertain?'uncertain':'failed',{code:diagnostic});
+ const diagnostic=['PREPARATION_TIMEOUT','PREPARATION_ABORTED','PREPARATION_CLEANUP_FAILED','PREPARATION_DECODE_FAILED','PREPARATION_OUTPUT_INVALID','PREPARATION_BYTES_CHANGED','PREPARATION_LIMIT_EXCEEDED','PREPARATION_UNSUPPORTED','IMAGE_PREPARATION_STORAGE_UNCERTAIN','IMAGE_PREPARATION_STORED_BYTES_CHANGED','IMAGE_PREPARATION_AUTHORITY_CHANGED','IMAGE_PREPARATION_WORKER_FAILED'].includes(code)?code:'IMAGE_PREPARATION_FAILED';
+ const uncertain=['transforming','storing','verifying'].includes(r.status),operation=r.status==='storing'?'store':r.status==='verifying'?'verify':r.action_operation??'claim';
+ await receipt(db,r,randomUUID(),operation,uncertain?'uncertain':'failed',{code:diagnostic});
+ if(['storing','verifying'].includes(r.status))await db.query("UPDATE project_storage_uploads SET status='uncertain',updated_at=clock_timestamp() WHERE company_id=$1 AND id IN (SELECT upload_id FROM project_image_preparation_allocations WHERE company_id=$1 AND preparation_id=$2) AND status<>'ready'",[r.company_id,r.id]);
  const updated=(await db.query('UPDATE project_image_preparations SET status=$3,diagnostic_code=$4,revision=revision+1,updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2 RETURNING *',[r.company_id,r.id,uncertain?'uncertain':'failed',diagnostic])).rows[0];return {preparation:await view(db,updated)};
 }

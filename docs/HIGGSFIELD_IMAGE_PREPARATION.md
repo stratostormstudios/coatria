@@ -2,7 +2,7 @@
 
 ## Status and intended result
 
-This document specifies the next stage after [managed prepared-image references](HIGGSFIELD_REFERENCES.md). M1 has a native fixture implementation and real pixel tests. M2 adds the durable preparation schema, service and metadata API described below. M3–M6 remain outstanding: automatic preparation is not deployed, qualified on a live host, or enabled for a company. Existing reference sharing remains disabled without its separately qualified runtime. This work does not activate workers, provision resources, change existing agent grants, or authorize provider spending.
+This document specifies the next stage after [managed prepared-image references](HIGGSFIELD_REFERENCES.md). M1 has a native fixture implementation and real pixel tests. M2 adds the durable preparation schema, service and metadata API. M3 adds the private scoped storage worker described below. M4–M6 remain outstanding: automatic preparation is not deployed, qualified on a live host, or enabled for a company. Existing reference sharing remains disabled without its separately qualified runtime. This work does not activate workers, provision resources, change existing agent grants, or authorize provider spending.
 
 The intended result is: choose an exact original image already in project storage, create a bounded derivative with verified metadata removal, save it as a separate verified project-storage version, review that exact derivative, then use the existing finite Higgsfield sharing approval. The original remains unchanged. Preparing an image is not permission to share it with Higgsfield, approve its creative content, generate paid media, or accept a client delivery.
 
@@ -36,7 +36,7 @@ node --import tsx --test tests/higgsfield-image-preparation*.test.ts
 node node_modules/typescript/bin/tsc --noEmit
 ```
 
-These tests prove the local transformation and validation layer. They do not establish derivative storage verification, production containment, remote binary transport, Higgsfield sharing, or a live studio delivery. Those remain M3–M6.
+These tests prove the local transformation and validation layer. M3 separately tests derivative storage verification. Production containment, remote binary transport, Higgsfield sharing, and a live studio delivery remain M4–M6.
 
 ### Implemented M2 boundary
 
@@ -70,6 +70,30 @@ node --import tsx --test tests/project-image-preparations.test.ts tests/project-
 ```
 
 Without `COATRIA_INTEGRATION_DATABASE_URL`, the tests use disposable PGlite. Native PostgreSQL tests accept only a localhost URL, create their own disposable database and never modify an existing company. Multi-connection locking checks require native PostgreSQL; emulator results are not native concurrency evidence.
+
+### Implemented M3 boundary
+
+The private [storage service](../src/lib/project-image-preparation-storage.ts) and [worker](../src/lib/project-image-preparation-worker.ts) connect the finite M2 lease to exact source reads, an explicitly supplied transform adapter, and a separately verified derivative. No public route, scheduler, agent tool, runtime enrollment, or production-native fallback starts this worker. A qualified runtime resolver and transform adapter are mandatory; missing runtime authority leaves the worker disabled. The existing M1 adapter still refuses production execution.
+
+Migration [046](../database/046_project_image_preparation_storage.sql) records one immutable allocation with the new file/version/upload identities and its exact binding-revision transition. It adds once-only multipart intents, matching returned receipts, and SQL guards tying the one output part and final derivation to that allocation. It creates no role or grant. Health readiness requires both new migrations; neither is represented as already applied to production.
+
+The supervisor receives the scoped storage credential, exact source ETag, version, length and SHA-256. The processor receives only its private bounded source file and immutable processing context. Credentials, object keys and provider capability details do not enter the processor arguments or public preparation response. The supervisor checks actual source-container facts and the returned PNG independently of the transform descriptor.
+
+Allocation creates a distinct file at version 1. It advances the storage binding exactly once and recognizes only that recorded transition during later authority checks; unrelated changes or destination collisions still stop the job. Preparation writes use their own finite human-adopted authority. They neither impersonate a Higgsfield archive nor broaden an agent's generic storage grants. Project row locking preserves semantic serialization while allowing the foreign-key key-share locks taken by ordinary storage mutations.
+
+Each multipart initiation, part upload and completion has a durable intent before provider I/O and one matching result afterward. The bounded PNG fits one part. A lost response retains its action and uncertainty; it cannot silently restart the mutation or free the company slot. After completion, the supervisor reads the entire stored object with the returned ETag and compares its byte count and SHA-256 with the validated binary output. Only a single final transaction can write the storage verification, derivation, cleanup receipt and `ready` state together.
+
+The worker serializes authority transactions and enforces its finite deadline and cancellation inside the publication transaction as well as around external work. Streaming reads remain byte-bounded and periodically recheck authority. Cleanup drains the actual provider fetch/body operations, stops the processor through its adapter contract, closes source descriptors, and verifies scratch/root identity before removing the private directory. An explicit processor cleanup failure, replaced scratch path or undrained transport poisons that worker instance and holds the job for reconciliation. Local deletion by itself never certifies that a remote processor stopped. The adapter contract still needs M5's actual containment and cleanup qualification.
+
+Focused checks are split deliberately: storage-service tests exercise synthetic metadata and SQL guards; worker tests use actual native conversion and a synthetic S3 transport for the default Runpod/AWS SDK path. They do not contact Runpod, prove its deployed behavior, or establish production isolation.
+
+```text
+COATRIA_TEST_FFMPEG_PATH=<absolute trusted FFmpeg path>
+node --import tsx --test tests/project-image-preparation-storage.test.ts tests/project-image-preparation-worker.test.ts
+node node_modules/typescript/bin/tsc --noEmit
+```
+
+Failed or uncertain claimed preparations deliberately retain their company slot until separately trusted cleanup/reconciliation is implemented. M3 does not provide a public endpoint to assert cleanup, replace an unknown upload, or release that hold. M4 must also implement an explicit task-submission handoff: changing the exact task snapshot still invalidates preparation today, even if its proposing agent run has succeeded.
 
 ## Existing foundations and limits
 
@@ -148,6 +172,16 @@ Storage allocation currently increments `project_storage_bindings.revision`. Pre
 The prepared result exposes safe internal IDs and derivation facts. The next reference proposal uses the verified derivative as `proxyVersionId` and the exact original as `sourceVersionId`. A trusted relation must establish that these IDs belong to the same recorded preparation; association alone is insufficient. The UI previews the derivative's exact verified bytes and clearly identifies the unchanged original.
 
 Retain the existing separate human review and finite sharing approval. The sharing worker continues to send the selected proxy bytes unchanged. Add truthful preparation evidence to the reference view rather than globally changing the existing `bytesSharedUnchanged:true` / `metadataRemoved:false` contract. Metadata removal does not remove visible confidential content or establish sharing rights. Generation, archive, independent QC, delivery and client acceptance remain subsequent independent operations.
+
+### M4 implementation constraints from the current workflow
+
+The existing `prepared_image_v1` dispatch explicitly promises inspection of unchanged, already-prepared bytes. It must retain that meaning. Original-image transformation needs a separately selected versioned dispatch/profile, explicit tool access and finite human adoption. Discovery and metadata operations must remain available through the same authenticated agent API as the rest of the studio; neither an ended producer run nor a frontend success flag can authorize a new operation.
+
+The current exact work snapshot intentionally rejects task submission and acceptance. Extend that through a dedicated validator rather than ignoring revisions: retain the immutable objective, role, shot and assignment; require the original run's committed `tasks_submit` receipt for the precise next revision, title, description, summary and URL; permit only its immediate review state or independently approved next revision. Reassignment, edits, return/resubmission or unrelated revisions invalidate the handoff. A succeeded run must have matching completion evidence, and a running run must still have its actual lease. The existing `assertReferenceInspectionTask` and `assertReferenceInspectionAuthority` contain the corresponding inspection-only patterns.
+
+A ready derivative does not make a completed planning task eligible for an ordinary new reference proposal: the existing reference service accepts open work. The assisted UI can select eligible downstream generation work; the autonomous path needs its own explicit, source-bound continuation dispatch with current agent authority. It must not impersonate the ended producer or reopen accepted work. Both paths must derive the exact proxy and original IDs from the server's verified preparation relation, then retain independent inspection and sharing consent.
+
+The original picker may admit the preparation policy's 32 MiB source bound; the existing 10 MiB sharing picker and preview bound remain unchanged. The UI should show original selection, processing destination/consent, preparation progress, exact derivative preview, and sharing as distinct steps. When runtime qualification is absent, expose that specific unavailable state instead of presenting a functioning processing action.
 
 ## Bounded milestones
 
