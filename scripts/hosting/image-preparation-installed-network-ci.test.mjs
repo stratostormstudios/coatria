@@ -86,3 +86,38 @@ test('partial setup remains cleanable, while live units or hosts drift retain eg
 test('teardown refuses a retained activation marker or queued unit start before restoring any network state',async()=>{
  for(const marker of [true,false]){const f=fixture();await f.controller.setup(f.input);if(marker)f.files.set('/etc/coatria-image-preparation/'+f.host.scope.serviceId+'/worker-enabled',Buffer.from('synthetic marker'));else f.setPendingJob('42');const count=f.events.length;await assert.rejects(f.controller.cleanup(),rejected);assert(f.getFirewall());assert.equal(f.getManager(),'1');assert(f.files.get('/etc/hosts').equals(imagePreparationNetworkCiHosts(f.hosts,f.plan)));assert(!f.events.slice(count).some(event=>event[0]==='exec'&&['delete','unset-environment','set-environment'].includes(event[2][0])));}
 });
+
+test('diagnostic identifies pre-mutation validation without exposing retained bytes and keeps first failure',async()=>{
+ const f=fixture(),initial=f.controller.diagnostic();assert.equal(initial.phase,'idle');assert.equal(initial.failure,null);assert.equal(initial.lastCommand,null);assert.deepEqual(initial.attempted,{firewall:false,hosts:false,ca:false,environment:false});
+ f.files.set(f.plan.markerPath,json({...f.plan.marker,privateField:'PRIVATE_MARKER_BYTES'}));await assert.rejects(f.controller.setup(f.input),rejected);
+ const before=f.controller.diagnostic();assert.equal(before.failure.phase,'setup-marker');assert.equal(before.failure.lastCommand,null);assert.equal(before.initialized,false);assert.deepEqual(before.attempted,initial.attempted);
+ await f.controller.cleanup();const after=f.controller.diagnostic();assert.equal(after.phase,'cleanup-complete');assert.equal(after.finished,true);assert.deepEqual(after.failure,before.failure);
+ for(const text of ['PRIVATE_MARKER_BYTES',f.host.scope.serviceId,f.plan.base])assert(!JSON.stringify(after).includes(text));
+ before.failure.phase='caller-change';assert.equal(f.controller.diagnostic().failure.phase,'setup-marker');
+});
+
+test('diagnostic fixes command category/status and first failure through failed and successful cleanup',async()=>{
+ const f=fixture();f.failCommand((program,args)=>program==='/usr/bin/openssl'&&args[0]==='req');await assert.rejects(f.controller.setup(f.input),rejected);
+ const before=f.controller.diagnostic();assert.equal(before.failure.phase,'setup-ca-generate');assert.deepEqual(before.failure.lastCommand,{phase:'setup-ca-generate',category:'tls-openssl',status:1,signal:null,errno:null});assert.deepEqual(before.attempted,{firewall:true,hosts:false,ca:false,environment:false});assert.equal(before.firewall.counterValid,true);
+ f.failCommand(null);f.setPendingJob('PRIVATE_QUEUED_JOB');await assert.rejects(f.controller.cleanup(),rejected);const blocked=f.controller.diagnostic();assert.equal(blocked.phase,'cleanup-units');assert(blocked.units.some(unit=>unit.jobPresent));assert.deepEqual(blocked.failure,before.failure);assert(f.getFirewall());
+ f.setPendingJob('');await f.controller.cleanup();const after=f.controller.diagnostic();assert.equal(after.finished,true);assert.deepEqual(after.failure,before.failure);assert(after.units.every(unit=>!unit.jobPresent));assert.equal(after.lastCommand.category,'firewall-list-tables');
+ const serialized=JSON.stringify([before,blocked,after]);for(const text of ['PRIVATE_QUEUED_JOB','private synthetic diagnostic','not-returned','synthetic-test-key',f.plan.table,f.host.node.path])assert(!serialized.includes(text));assert(serialized.length<10000);
+});
+
+test('diagnostic limits thrown and returned exec errors to safe errno/signal values',async()=>{
+ for(const kind of ['thrown','returned','unknown']){const f=fixture(),normal=f.options.exec;const controller=createImagePreparationInstalledNetworkCi({...f.options,exec:(program,args,options)=>{
+  if(program==='/usr/sbin/nft'&&args[0]==='-f'){const error=Object.assign(Error('PRIVATE_EXEC_MESSAGE'),{code:kind==='unknown'?'PRIVATE_CODE':'ETIMEDOUT'});if(kind==='thrown')throw error;return {status:null,signal:kind==='unknown'?'PRIVATE_SIGNAL':'SIGKILL',error,stdout:'PRIVATE_STDOUT',stderr:'PRIVATE_STDERR'};}return normal(program,args,options);
+ }});await assert.rejects(controller.setup(f.input),rejected);const value=controller.diagnostic();assert.equal(value.failure.phase,'setup-firewall-install');assert.equal(value.failure.errno,kind==='unknown'?'OTHER':'ETIMEDOUT');assert.equal(value.failure.lastCommand.category,'firewall-install');assert.equal(value.failure.lastCommand.errno,kind==='unknown'?'OTHER':'ETIMEDOUT');assert.equal(value.failure.lastCommand.signal,kind==='thrown'?null:kind==='unknown'?'OTHER':'SIGKILL');assert(!JSON.stringify(value).includes('PRIVATE'));assert(value.attempted.firewall);await controller.cleanup();assert.deepEqual(controller.diagnostic().failure,value.failure);}
+});
+
+test('diagnostic projects kernel mismatches as fixed booleans without relaxing firewall validation',async()=>{
+ const f=fixture(),normal=f.options.exec;let malformed=true;
+ const controller=createImagePreparationInstalledNetworkCi({...f.options,exec:(program,args,options)=>{const result=normal(program,args,options);if(malformed&&program==='/usr/sbin/nft'&&args.includes('table')&&args.includes('list')){const value=kernelTable(f.plan);value.nftables[3].rule.expr[0]={match:{op:'==',left:{meta:{key:'skuid'}},right:'PRIVATE_UID_TEXT'}};value.nftables[3].rule.comment='PRIVATE_RULE_COMMENT';return {...result,stdout:JSON.stringify(value)};}return result;}});
+ await assert.rejects(controller.setup(f.input),rejected);const value=controller.diagnostic();assert.equal(value.failure.phase,'setup-firewall-verify');assert.equal(value.firewall.jsonValid,true);assert.equal(value.firewall.ruleCount,2);assert.equal(value.firewall.allowOwnerMatch,false);assert.equal(value.firewall.denyOwnerMatch,true);assert.equal(value.firewall.rejectCode,'admin-prohibited');assert(!JSON.stringify(value).includes('PRIVATE'));assert(f.getFirewall());assert(f.files.get('/etc/hosts').equals(f.hosts));malformed=false;await controller.cleanup();assert.deepEqual(controller.diagnostic().failure,value.failure);
+});
+
+test('successful pgrep no-match is not a failure and unavailable unit fields project safely',async()=>{
+ const f=fixture(),normal=f.options.exec;const controller=createImagePreparationInstalledNetworkCi({...f.options,exec:(program,args,options)=>{const result=normal(program,args,options);if(program==='/usr/bin/systemctl'&&args[0]==='show')return {...result,stdout:'ActiveState=PRIVATE_ACTIVE\nSubState=PRIVATE_SUB\nMainPID=PRIVATE_PID\nControlPID=0\nJob=PRIVATE_JOB\n'};return result;}});
+ await assert.rejects(controller.setup(f.input),rejected);const rejectedState=controller.diagnostic();assert.equal(rejectedState.failure.phase,'setup-units');assert.deepEqual(rejectedState.units,[{mode:'preflight',activeState:'other',subState:'other',mainPidZero:false,controlPidZero:true,jobPresent:true}]);assert(!JSON.stringify(rejectedState).includes('PRIVATE'));
+ const good=fixture();await good.controller.setup(good.input);assert.equal(good.controller.diagnostic().failure,null);assert.equal(good.controller.diagnostic().phase,'setup-complete');await good.controller.cleanup();assert.equal(good.controller.diagnostic().failure,null);
+});

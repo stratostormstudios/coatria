@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {mkdtemp,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {basename,dirname,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import test from 'node:test';
 import pg from 'pg';
@@ -43,7 +43,7 @@ test('source control entrypoint reports an unconfirmed outcome with one sanitize
 test('compiled controller executes only its own entrypoint and carries no registrar command side effects',async t=>{
  const root=fileURLToPath(new URL('..',import.meta.url)),compiled=await compileTrustedService({root,service:'image-preparation-control'});
  assert.equal(compiled.deployable,false);assert.equal(compiled.service,'image-preparation-control');
- const temporary=await mkdtemp(join(tmpdir(),'coatria-control-entry-'));t.after(()=>rm(temporary,{recursive:true,force:true}));
+ const temporary=await mkdtemp(join(tmpdir(),'coatria-control-entry-'));t.after(async()=>{assert.equal(dirname(resolve(temporary)),resolve(tmpdir()));assert(basename(temporary).startsWith('coatria-control-entry-'));await rm(resolve(temporary),{recursive:true,force:true});});
  const entry=join(temporary,'runtime.mjs');await writeFile(entry,compiled.runtime,{flag:'wx'});
  const result=spawnSync(process.execPath,[entry],{encoding:'utf8',timeout:15000,maxBuffer:16384,windowsHide:true});
  assert.ifError(result.error);assert.equal(result.status,1);assert.equal(result.stdout,'');

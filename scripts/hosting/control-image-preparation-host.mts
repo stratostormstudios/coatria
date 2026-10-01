@@ -8,7 +8,7 @@ import {inspectImagePreparationHostBundle} from './image-preparation-host-packag
 import {readCurrentImagePreparationHostQualification} from './image-preparation-host-qualification.mjs';
 import {createImagePreparationEnrollmentStore,withImagePreparationEnrollmentLock,assertImagePreparationEnrollmentPending,enrollmentBytesHash} from './image-preparation-host-enrollment.mjs';
 import {assertImagePreparationRegistrarEnvironment,readImagePreparationRegistrarConnectionInput,imagePreparationRegistrarLogin} from './image-preparation-registrar-connection.mjs';
-import {reconcileImagePreparationService} from './image-preparation-enrollment-transaction.mjs';
+import {reconcileImagePreparationService,observeImagePreparationServicePostStart} from './image-preparation-enrollment-transaction.mjs';
 import {deriveImagePreparationRunnerConfiguration,parseImagePreparationRunnerToken} from './image-preparation-runner-configuration.mjs';
 import {createImagePreparationHostControlStore,assertImagePreparationHostControlIdentity,executeImagePreparationHostControl} from './image-preparation-host-control.mjs';
 import {createImagePreparationHostSystemdControl} from './image-preparation-host-control-systemd.mjs';
@@ -79,7 +79,12 @@ export async function controlImagePreparationHost(argv:readonly string[]){
    const result=await imagePreparationRegistrarLogin(connection,reconcileImagePreparationService,request);
    return imagePreparationControlAuthority(result,{serviceId:request.serviceId,requestId:request.requestId,requestHash:pending.intent.requestHash});
   };
-  return executeImagePreparationHostControl({mode:args.mode,store:createImagePreparationHostControlStore(installed.configRoot),identity,verifyLocal,verifyAuthority,units});
+  const verifyPostStartAuthority=async()=>{
+   if(!connection)fail();
+   const result=await imagePreparationRegistrarLogin(connection,observeImagePreparationServicePostStart,request);
+   return imagePreparationControlAuthority(result,{serviceId:request.serviceId,requestId:request.requestId,requestHash:pending.intent.requestHash});
+  };
+  return executeImagePreparationHostControl({mode:args.mode,store:createImagePreparationHostControlStore(installed.configRoot),identity,verifyLocal,verifyAuthority,verifyPostStartAuthority,units});
  });}finally{if(connection)connection.password='';}
 }
 

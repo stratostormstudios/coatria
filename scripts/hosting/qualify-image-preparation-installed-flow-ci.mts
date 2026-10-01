@@ -105,19 +105,20 @@ async function exerciseInstalledWorker(context:any,storageKeyring:string){
   await owner.query('UPDATE trusted_service_provisions SET last_reconciled_at=clock_timestamp() WHERE id=$1',[work.project.gateway.provisionId]);
   const processor=await resolveProjectImagePreparationProcessor(owner,host.scope.companyId,work.project.projectId,host.scope.serviceId);check(processor);
   fixture=await createImagePreparationInstalledFixture({controlTransaction:run=>transaction(pools[0],run),gatewayTransaction:run=>transaction(pools[1],run),identity:{serviceId:host.scope.serviceId,companyId:host.scope.companyId,projectIds:host.scope.projectIds,origin:host.scope.origin,expiresAt:host.scope.expiresAt,processor,token:pending.token},gateway:{origin:work.project.gateway.origin,provisionId:work.project.gateway.provisionId,configurationHash:work.project.gateway.configurationSha256,sourceCommit:host.commit,expiresAt:work.project.gateway.expiresAt},storageKeyring,sources:[{projectId:work.project.projectId,versionId:work.versionId,bytes:original,etag:'synthetic-source-etag'}]});restore=fixture.installSyntheticS3Fetch();
-  phase('isolated-network');await writeFile(join(base,'installed-network-authority.json'),json({version:1,kind:'coatria-image-preparation-disposable-network-ci',candidate:host.commit,serviceId:host.scope.serviceId,disposableHost:true}),{flag:'wx',mode:0o600});
+  phase('isolated-network-marker');await writeFile(join(base,'installed-network-authority.json'),json({version:1,kind:'coatria-image-preparation-disposable-network-ci',candidate:host.commit,serviceId:host.scope.serviceId,disposableHost:true}),{flag:'wx',mode:0o600});
+  phase('isolated-network');
   const tls=await network.setup({host,base,candidate:host.commit});report.network=tls.proof;
   await fixture.startServer({tls:{key:await readFile(tls.keyPath),cert:await readFile(tls.certPath)},port:443,host:'127.0.0.1'});
-  phase('compiled-start-idle');await owner.query('UPDATE trusted_service_provisions SET last_reconciled_at=clock_timestamp() WHERE id=$1',[work.project.gateway.provisionId]);
-  const started=await invoke('start',context.registrarConnectionString);report.start=started;check(['running-ready','running-unready'].includes(started.status)&&started.invocationId&&started.bootId&&started.workerEnabled);
-  const ready=await eventually(async()=>{const value=await invoke!('reconcile');report.lastObservation=value;check(value.invocationId===started.invocationId&&value.bootId===started.bootId&&['running-ready','running-unready'].includes(value.status));return value.runningReady?value:undefined;},90000);report.ready=ready;
-  // Start idle so the controller completes its exact enrollment authority
-  // checks before any legitimate derivative allocation advances the catalog.
-  check((await owner.query('SELECT count(*)::int AS n FROM project_image_preparations')).rows[0].n===0);
   phase('approve-one-synthetic-image');await owner.query('UPDATE trusted_service_provisions SET last_reconciled_at=clock_timestamp() WHERE id=$1',[work.project.gateway.provisionId]);await owner.query('BEGIN');let preparation;
   try{preparation=(await proposeProjectImagePreparation(owner,work.actor,{clientId:randomUUID(),projectId:work.project.projectId,projectRevision:1,workItemId:work.workItemId,sourceVersionId:work.versionId,sourceSha256:work.sourceSha256,sourceBytes:work.sourceBytes,destinationFolderId:null,destinationName:'prepared.png',purpose:'Disposable installed worker acceptance'})).preparation;
    await approveProjectImagePreparation(owner,work.actor,preparation.id,{clientId:randomUUID(),revision:preparation.revision,requestHash:preparation.requestHash,processorId:host.scope.serviceId,qualificationSha256:qualified.qualificationSha256,expiresInMinutes:5,maxCostMicrousd:0,processingConsent:true,derivativeWriteConsent:true,adoptionConsent:true},{runtime:resolveProjectImagePreparationProcessor});await owner.query('COMMIT');
   }catch(error){await owner.query('ROLLBACK');throw error;}
+  const queued=(await owner.query('SELECT status,attempt FROM project_image_preparations WHERE id=$1',[preparation.id])).rows[0];check(queued.status==='queued'&&queued.attempt===0);report.workApprovedBeforeStart=true;
+  // Real queued-work startup complements the deterministic transaction/control
+  // race tests. It does not claim that Linux scheduled the allocation ahead of
+  // this particular controller's post-start observation.
+  phase('compiled-start-with-queued-work');const started=await invoke('start',context.registrarConnectionString);report.start=started;check(['running-ready','running-unready'].includes(started.status)&&started.invocationId&&started.bootId&&started.workerEnabled);
+  const ready=await eventually(async()=>{const value=await invoke!('reconcile');report.lastObservation=value;check(value.invocationId===started.invocationId&&value.bootId===started.bootId&&['running-ready','running-unready'].includes(value.status));return value.runningReady?value:undefined;},90000);report.ready=ready;
   phase('installed-processing');const result=await eventually(async()=>{
    const row=(await owner.query('SELECT status,attempt,cleanup_confirmed_at,diagnostic_code FROM project_image_preparations WHERE id=$1',[preparation!.id])).rows[0];
    if(row)report.lastPreparationState={status:row.status,attempt:row.attempt,cleanupConfirmed:Boolean(row.cleanup_confirmed_at),diagnosticCode:typeof row.diagnostic_code==='string'&&/^[A-Z0-9_]{1,120}$/.test(row.diagnostic_code)?row.diagnostic_code:null};
@@ -134,13 +135,16 @@ async function exerciseInstalledWorker(context:any,storageKeyring:string){
  }catch{failed=true;report.passed=false;report.failureCode='IMAGE_PREPARATION_INSTALLED_FLOW_CI_FAILED';}
  finally{
   const cleanupFailure=()=>{failed=true;report.passed=false;report.cleanupFailed=true;};
+  // The helper exports fixed diagnostic enums and booleans only. Keep both
+  // snapshots so cleanup cannot obscure the original setup failure boundary.
+  report.networkBeforeCleanup=network.diagnostic();
   // Cleanup is independent of success. Failure-only systemctl stop contains a
   // disposable worker; it is never reported as a successful controller proof.
   if(invoke&&!stopAttempted)try{stopAttempted=true;await invoke('stop');}catch{cleanupFailure();}
   for(const mode of ['worker','preflight','qualify'])try{await child('/usr/bin/systemctl',['stop',host.units[mode].name]);}catch{cleanupFailure();}
   try{fixture?.close();await fixture?.drain();restore?.();report.fixtureDrained=true;}catch{cleanupFailure();}
   if(fixture)report.transport=fixture.audit();
-  try{report.networkCleanup=await network.cleanup();}catch{cleanupFailure();}
+  try{report.networkCleanup=await network.cleanup();}catch{cleanupFailure();}finally{report.networkAfterCleanup=network.diagnostic();}
   for(const pool of pools)try{await pool.end();}catch{cleanupFailure();}
   for(const role of roles.reverse())try{await owner.query('DROP OWNED BY '+role);await owner.query('DROP ROLE '+role);}catch{cleanupFailure();}
   report.disposableLoginsRemoved=!report.cleanupFailed;exports.set('image-preparation-installed-flow-ci.json',json(report));
