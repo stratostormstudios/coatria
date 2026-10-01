@@ -45,6 +45,7 @@ const contract:Readonly<Record<string,Contract>>={
  project_storage_access_receipts:{"SELECT":"*"},
  studio_host_credentials:{"SELECT":["company_id","agent_id","host_id","installation_id","token_hash","revoked_at","expires_at","host_epoch","installation_revision","enrolled_by"]},
  studio_generated_followups:{"SELECT":["company_id","child_run_id"]},
+ studio_reference_generation_followups:{"SELECT":["company_id","child_run_id"]},
  studio_client_deliveries:{"SELECT":["id","company_id","project_id","delivery_id","recipient_user_id","created_by","status","package_hash","expires_at"],"UPDATE":["created_at"]},
  studio_deliveries:{"SELECT":["id","company_id","project_id"]},
  studio_shots:{"SELECT":["id","company_id","project_id"]},
@@ -73,6 +74,18 @@ const migrations=[
  '025_studio_higgsfield_pipeline.sql','026_higgsfield_work_bindings.sql','027_project_storage.sql','028_higgsfield_jobs.sql','029_higgsfield_archives.sql','030_studio_generated_media.sql','031_studio_generated_followups.sql',
  '032_studio_generated_client_delivery.sql','033_studio_generated_revisions.sql','034_studio_coordinator_generation.sql',
  '035_trusted_services.sql','036_company_runtime_configuration.sql','037_project_gateway_bindings.sql',
+ '038_company_runtime_executor_credentials.sql',
+ '039_higgsfield_references.sql',
+ '040_higgsfield_reference_inspection_authority.sql',
+ '041_higgsfield_model_contracts.sql',
+ '042_coordinated_reference_preparation.sql',
+ '043_higgsfield_reference_services.sql',
+ '044_higgsfield_reference_enrollments.sql',
+ '045_project_image_preparations.sql',
+ '046_project_image_preparation_storage.sql',
+ '047_project_image_preparation_handoff.sql',
+ '048_project_image_preparation_dispatch.sql',
+ '049_studio_reference_generation_continuations.sql',
 ];
 export class ProjectStorageGatewayPreflightError extends Error{
  constructor(readonly code:'STORAGE_DB_IDENTITY'|'STORAGE_DB_ROLE'|'STORAGE_DB_SCHEMA'|'STORAGE_DB_MIGRATIONS'|'STORAGE_DB_PRIVILEGES'|'STORAGE_DB_CHECK_FAILED'){super(code);this.name='ProjectStorageGatewayPreflightError';}
@@ -134,7 +147,7 @@ export async function assertProjectStorageGatewayDatabase(db:Db){
    WHERE ${userSchema} AND (p.proowner=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=current_user)
     OR p.prosecdef AND pg_catalog.has_function_privilege(current_user,p.oid,'EXECUTE')) LIMIT 1`)).rows;
   if(escaped.length)fail('STORAGE_DB_PRIVILEGES');
-  return {status:'passed' as const,role:PROJECT_STORAGE_GATEWAY_ROLE,contractVersion:2 as const,migrationFloor:37 as const,checkedMigrations:migrations.length,
+  return {status:'passed' as const,role:PROJECT_STORAGE_GATEWAY_ROLE,contractVersion:2 as const,migrationFloor:49 as const,checkedMigrations:migrations.length,
    boundary:'Authenticated dedicated LOGIN, role attributes/memberships, database/schema creation and ownership, effective non-system relation/column grants and grant options, sequence access, and owned or callable SECURITY DEFINER non-system functions.'};
  }catch(error){if(error instanceof ProjectStorageGatewayPreflightError)throw error;fail('STORAGE_DB_CHECK_FAILED');}
 }

@@ -61,7 +61,7 @@ test('reference broker grants deny human authority and OAuth, and bind the exact
   assert(sql.includes('GRANT '+priv+(Array.isArray(cols)?'('+cols.join(',')+')':'')+' ON '+table+' TO '+ROLE+';'));
  }
  const mutable=REFERENCE_BROKER_CONTRACT.higgsfield_references.UPDATE;
- for(const column of['project_id','request_hash','inspection_authority','inspect_expires_at','approved_by','approval_hash','expires_at','revoked_by','revoked_at'])assert(!mutable.includes(column));
+ for(const column of['project_id','request_hash','inspection_authority','inspect_expires_at','approved_by','approval_hash','expires_at','revoked_by','revoked_at','generation_handoff_id','generation_inspection_adoption_id'])assert(!mutable.includes(column));
  assert.deepEqual(REFERENCE_BROKER_CONTRACT.higgsfield_connections.UPDATE,['updated_at']);
  assert(!REFERENCE_BROKER_CONTRACT.higgsfield_connections.SELECT.includes('sealed'));
  assert(!Object.values(REFERENCE_BROKER_CONTRACT).some(c=>'DELETE'in c));
@@ -76,11 +76,14 @@ test('explicit broker transactions release one independent client and never retr
 });
 test('broker startup pins the exact reviewed migration guard bodies and function identities',async()=>{
  const sql=(await readFile('database/043_higgsfield_reference_services.sql','utf8')).replaceAll('\r\n','\n');
+ const adopted=(await readFile('database/049_studio_reference_generation_continuations.sql','utf8')).replaceAll('\r\n','\n');
  assert.equal(REFERENCE_BROKER_STATE_GUARDS.length,3);
  for(const guard of REFERENCE_BROKER_STATE_GUARDS){
-  assert(sql.includes('CREATE FUNCTION '+guard.function+'() RETURNS trigger LANGUAGE plpgsql AS $$\n'+guard.body+' $$;'));
+  if(guard.function==='guard_higgsfield_reference_broker_attempts'){
+   assert(adopted.includes('CREATE OR REPLACE FUNCTION '+guard.function+'() RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,public AS $$\n'+guard.body+' $$;'));
+   assert.deepEqual(guard.config,['search_path=pg_catalog, public']);
+  }else{assert(sql.includes('CREATE FUNCTION '+guard.function+'() RETURNS trigger LANGUAGE plpgsql AS $$\n'+guard.body+' $$;'));assert.equal(guard.config,null);}
   assert(sql.includes('CREATE TRIGGER '+guard.trigger+' BEFORE UPDATE ON '+guard.table+'\n FOR EACH ROW EXECUTE FUNCTION '+guard.function+'();'));
-  assert.equal(guard.config,null);
  }
 });
 
@@ -168,8 +171,13 @@ test('PostgreSQL independent reference broker LOGIN fences authority and execute
     try{
      await owner!.query('ALTER FUNCTION public.'+guard.function+'() SET search_path=public,pg_catalog');
      await assert.rejects(()=>assertHiggsfieldReferenceDatabase(broker!),{code:'REFERENCE_DB_STATE_GUARD'});
-    }finally{await owner!.query('ALTER FUNCTION public.'+guard.function+'() RESET ALL');}
+    }finally{await owner!.query(original);}
    }
+   const view='public.studio_reference_generation_adoption_facts',definition=(await owner!.query('SELECT pg_get_viewdef($1::regclass,true) AS definition',[view])).rows[0].definition;
+   try{await owner!.query('ALTER VIEW '+view+' RESET (security_barrier)');await assert.rejects(()=>assertHiggsfieldReferenceDatabase(broker!),{code:'REFERENCE_DB_ADOPTION_VIEW'});}
+   finally{await owner!.query('ALTER VIEW '+view+' SET (security_barrier=true)');}
+   try{await owner!.query('CREATE OR REPLACE VIEW '+view+' WITH(security_barrier=true) AS SELECT * FROM ('+definition.trim().replace(/;$/,'')+') bounded WHERE false');await assert.rejects(()=>assertHiggsfieldReferenceDatabase(broker!),{code:'REFERENCE_DB_ADOPTION_VIEW'});}
+   finally{await owner!.query('CREATE OR REPLACE VIEW '+view+' WITH(security_barrier=true) AS '+definition);}
    assert.equal((await assertHiggsfieldReferenceDatabase(broker!)).status,'passed');
    const triggerSql=(await owner!.query("SELECT pg_get_triggerdef(oid) AS definition FROM pg_trigger WHERE tgrelid='public.higgsfield_references'::regclass AND tgname='higgsfield_reference_broker_attempts'")).rows[0].definition;
    try{

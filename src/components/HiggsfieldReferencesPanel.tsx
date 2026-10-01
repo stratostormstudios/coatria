@@ -25,10 +25,11 @@ function References({companyId,projectId,projectRevision,projectReady,workItems,
  const [task,setTask]=useState(workItemId??''),[role,setRole]=useState<HiggsfieldReference['role']>('image'),[purpose,setPurpose]=useState(''),[minutes,setMinutes]=useState(30),[consents,setConsents]=useState([false,false,false,false]),[previewed,setPreviewed]=useState(''),[selected,setSelected]=useState<string[]>([]);
  const [loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[now,setNow]=useState(Date.now());
  const [prepareOriginal,setPrepareOriginal]=useState(false);
+ const [inspectionConsent,setInspectionConsent]=useState(false);
  const alive=useRef(true),pending=useRef(false),read=useRef<AbortController|null>(null),sequence=useRef(0),ids=useRef(new Map<string,string>());
  const tasks=workItems.filter(item=>['references','generation'].includes(item.stage)&&['agent','creative'].includes(item.execution));
  const idFor=(value:unknown)=>{const signature=JSON.stringify(value);let id=ids.current.get(signature);if(!id){id=crypto.randomUUID();ids.current.set(signature,id);}return id;};
- function clearConsent(){setConsents([false,false,false,false]);setPreviewed('');}
+ function clearConsent(){setConsents([false,false,false,false]);setPreviewed('');setInspectionConsent(false);}
  function assertScope(reference:HiggsfieldReference){if(reference.projectId!==projectId)throw Error('The reference response changed project scope. Refresh before continuing.');}
  const load=useCallback(async(after?:string)=>{
   read.current?.abort();const controller=new AbortController(),ticket=++sequence.current;read.current=controller;setLoading(true);setError('');setReview(null);setConsents([false,false,false,false]);setPreviewed('');
@@ -63,6 +64,14 @@ function References({companyId,projectId,projectRevision,projectReady,workItems,
   if(result.reference.id!==review.id||result.reference.requestHash!==review.requestHash)throw Error('The approval response does not match the reviewed reference. Refresh its status.');
   replace(result);setNotice('Exact-byte sharing approved. Refresh to see the worker’s saved progress.');
  }
+ async function adoptInspection(){
+  const handoff=review?.referenceGenerationHandoff;
+  if(!review||!handoff||handoff.inspectionAdoption||!inspectionConsent||!isAdmin||review.status!=='proposed')throw Error('Review this exact generation reference before permitting its inspection.');
+  const value={referenceRevision:review.revision,requestHash:review.requestHash,handoffSha256:handoff.handoffSha256,expiresInMinutes:minutes,inspectionConsent:true};
+  const result=await api<ReferenceResponse>(`${base}/${review.id}/adopt-generation-inspection`,'POST',{...value,clientId:idFor({referenceId:review.id,operation:'adopt-generation-inspection',...value})});
+  if(result.reference.id!==review.id||result.reference.requestHash!==review.requestHash||result.reference.referenceGenerationHandoff?.id!==handoff.id||result.reference.referenceGenerationHandoff.handoffSha256!==handoff.handoffSha256||!result.reference.referenceGenerationHandoff.inspectionAdoption)throw Error('The inspection consent response does not match the reviewed handoff. Refresh its saved state.');
+  replace(result);setNotice('One inspection attempt is authorized for this exact derived image. Sharing and generation still require their own approvals.');
+ }
  async function revoke(item:HiggsfieldReference){
   const value={revision:item.revision,note:'Sharing permission revoked by an administrator in the project reference panel.'};
   const result=await api<ReferenceResponse>(`${base}/${item.id}/revoke`,'POST',{...value,clientId:idFor({referenceId:item.id,...value})});
@@ -93,6 +102,15 @@ function References({companyId,projectId,projectRevision,projectReady,workItems,
    {review.status==='awaiting_approval'&&review.inspection&&<ReferenceImagePreview key={`${review.id}:${review.revision}:${review.requestHash}`} companyId={companyId} projectId={projectId} file={review.proxy} onVerified={()=>setPreviewed(review.requestHash)}/>}
    {review.projectRevision!==projectRevision&&<p className={s.notice} role="status">The project changed after this reference was prepared. Prepare and review a new reference before sharing.</p>}<FileFacts file={review.proxy} label="Image to share"/>{review.source&&<FileFacts file={review.source} label="Linked original · never substituted"/>}
    {review.preparation&&<p className={s.notice}><ShieldCheck size={14}/>Prepared derivative: {review.preparation.outputWidth} × {review.preparation.outputHeight} PNG with embedded metadata removed. Its original and preparation receipt are linked to this exact version. Sharing still transfers the prepared file unchanged and needs separate consent.</p>}
+   {review.referenceGenerationHandoff&&<section aria-label="Generation reference inspection consent" className={s.form}>
+    <h4>Inspect the specialist’s prepared reference</h4>
+    <p>This image is linked to one generation task. A completed specialist’s request needs your finite permission for one inspection attempt before you can review sharing.</p>
+    {review.referenceGenerationHandoff.inspectionAdoption?<p role="status">Inspection permission recorded · expires {new Date(review.referenceGenerationHandoff.inspectionAdoption.expiresAt).toLocaleString()}. {Date.parse(review.referenceGenerationHandoff.inspectionAdoption.expiresAt)<=now?'The inspection window has ended. Existing inspection evidence remains available; this permission cannot be renewed.':'Refresh references to see the saved inspection result.'}</p>:isAdmin&&review.status==='proposed'?<>
+     <Field label="Generation reference inspection permission"><select value={minutes} disabled={locked} onChange={event=>{setMinutes(Number(event.target.value));setInspectionConsent(false);}}>{[10,30,60].map(value=><option key={value} value={value}>{value} minutes, within the original inspection window</option>)}</select></Field>
+     <label className={s.check}><input type="checkbox" checked={inspectionConsent} disabled={locked||!processingCurrent||review.projectRevision!==projectRevision} onChange={event=>setInspectionConsent(event.target.checked)}/>I authorize one private inspection of this exact prepared image within the selected window.</label>
+     <button className="button primary small" disabled={locked||!processingCurrent||!inspectionConsent||review.projectRevision!==projectRevision} onClick={()=>void act(adoptInspection)}>Authorize one image inspection</button>
+    </>:<p>A current administrator can authorize inspection after the specialist successfully completes its request.</p>}
+   </section>}
    <dl className={s.facts}><div><dt>Purpose</dt><dd>{review.purpose}</dd></div><div><dt>Role</dt><dd>{review.role}</dd></div><div><dt>Destination</dt><dd>Company Higgsfield connection <code>{review.providerConnectionId}</code> · revision {review.providerConnectionRevision}</dd></div><div><dt>Project / task</dt><dd><code>{review.projectId}</code> / <code>{review.workItemId}</code></dd></div></dl>
    <details><summary>Review fingerprints and inspection</summary><p>Request SHA-256: <code>{review.requestHash}</code><br/>Storage connection revision: {review.storageConnectionRevision}<br/>Project revision: {review.projectRevision} · Task revision: {review.taskRevision}</p>{review.inspection?<><p>Server inspection recorded {when(review.inspection.inspectedAt)}. Full decoding does not sanitize or establish sharing rights.</p><pre>{JSON.stringify(review.inspection,null,2)}</pre></>:<p>No trusted image inspection recorded yet. Approval is unavailable.</p>}</details>
    {review.status==='awaiting_approval'&&<>

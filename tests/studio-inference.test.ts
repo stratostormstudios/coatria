@@ -516,9 +516,12 @@ test('broker runs real leased API and receipt transactions against isolated prov
    await f.call(`companies/${f.company}/studio/setup`,'POST',{clientId:randomUUID(),templateId:'ai-production',templateVersion:1,revision:0,assignments:[{roleKey:'producer',agentId:f.identity.id},{roleKey:'supervisor',agentId:f.identity.id}]},'owner',201);
    const context=await f.call(`agent/runs/${f.run.id}/context`,'GET',undefined,'agent',200,{'X-Coatria-Run-Lease':f.lease.leaseToken});
    // Reconstruct the historical director catalog: prepared-reference proposals
-   // were creative.write-only and original-image tools did not exist at the
-   // observed byte sizes. Those new tools also need storage.read, absent here.
-   const fullTools=Object.entries(AGENT_TOOLS).filter(([name,definition])=>name!=='higgsfield_reference_propose'&&!name.startsWith('project_image_preparation')&&capabilities.includes(definition.capability)).map(([name,definition])=>({type:'function',function:{name,description:definition.description,parameters:z.toJSONSchema(definition.schema,{io:'input',unrepresentable:'any'})}}));
+   // were creative.write-only and original-image/reference-generation tools did
+   // not exist at the observed byte sizes. Including later definitions here
+   // would shrink the synthetic prompt that reconstructs those observations.
+   // Only this historical comparison is frozen; the actual request below uses
+   // every currently authorized tool and keeps the unchanged 100k budget.
+   const fullTools=Object.entries(AGENT_TOOLS).filter(([name,definition])=>name!=='higgsfield_reference_propose'&&!name.startsWith('project_image_preparation')&&!name.startsWith('studio_reference_generation_')&&capabilities.includes(definition.capability)).map(([name,definition])=>({type:'function',function:{name,description:definition.description,parameters:z.toJSONSchema(definition.schema,{io:'input',unrepresentable:'any'})}}));
    const preview=await transaction(async client=>{const run=(await client.query('SELECT * FROM agent_runs WHERE id=$1',[f.run.id])).rows[0];return buildStudioInferenceRequest(client,{run,capabilities,installation:context.installation});});preview.max_tokens=8192;
    // Match the observed pre-fix request sizes with synthetic task/reasoning
    // text, without copying private live content or assuming a tokenizer ratio.
@@ -541,6 +544,7 @@ test('broker runs real leased API and receipt transactions against isolated prov
    const prior=(await query('SELECT id,request_body,used_tokens,reserved_tokens,limits,output FROM studio_inference_jobs WHERE run_id=$1 ORDER BY step',[f.run.id])).rows,priorBefore=JSON.stringify(prior);assert.deepEqual(prior.map(row=>row.used_tokens),[18128,21408]);assert(prior.every(row=>row.limits.maxTotalTokens===100000&&row.limits.maxOutputTokens===8192));
    assert.equal(Number((await query('SELECT count(*) FROM studio_projects WHERE company_id=$1',[f.company])).rows[0].count),0);
    const third=(await submitStudioInference(f.identity,f.run.id,v2(f,2))).inference,thirdRow=(await query('SELECT request_body,reserved_tokens,limits FROM studio_inference_jobs WHERE id=$1',[third.id])).rows[0],request=thirdRow.request_body;
+   const currentNames=Object.entries(AGENT_TOOLS).filter(([,definition])=>[definition.capability,...definition.additionalCapabilities??[]].every(capability=>capabilities.includes(capability))).map(([name])=>name);assert.deepEqual(request.tools.map((entry:any)=>entry.function.name),currentNames);assert(currentNames.includes('studio_reference_generation_followups_get'));assert(currentNames.includes('studio_reference_generation_followup_dispatch'));assert(!currentNames.includes('studio_reference_generation_followup_advance'),'Missing creative/storage grants still exclude the scoped proposal step');
    assert(39536+thirdRow.reserved_tokens<=100000);assert.equal(thirdRow.reserved_tokens,bytes(request)+8192+1024);
    const readMessage=request.messages.find((message:any)=>message.role==='tool'&&message.tool_call_id==='read-current-studio'),modelSnapshot=JSON.parse(readMessage.content);assert.deepEqual(modelSnapshot,modelContextResult('studio_get',fullSnapshot));assert.deepEqual(modelSnapshot.profile,fullSnapshot.profile);assert.equal(JSON.stringify(modelSnapshot.skills),JSON.stringify(fullSnapshot.skills));assert.equal(modelSnapshot.templatesAreSummaries,true);assert.match(modelSnapshot.templateDetails,/studio_templates/);
    assert.deepEqual(JSON.parse(request.messages[1].content).verifiedRequest,{id:f.run.id,prompt:exactPrompt});assert.deepEqual(request.messages.slice(0,prior[1].request_body.messages.length),prior[1].request_body.messages);

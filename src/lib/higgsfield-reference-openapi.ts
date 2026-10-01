@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {higgsfieldReferenceProposalInput,higgsfieldReferenceApproveInput,higgsfieldReferenceRevokeInput} from './higgsfield-references-protocol';
+import {higgsfieldReferenceProposalInput,higgsfieldReferenceApproveInput,higgsfieldReferenceRevokeInput,referenceGenerationInspectionAdoptInput} from './higgsfield-references-protocol';
 const parameter=(name:string,location='path',required=true)=>({name,in:location,required,schema:{type:'string',format:'uuid'}});
 const company=[parameter('companyId')],reference=[...company,parameter('referenceId')];
 const errors=Object.fromEntries([400,401,403,404,409,413,429,503].map(code=>[code,{description:'Invalid, unavailable, stale or unauthorized reference operation. Never repeat an uncertain provider upload.'}]));
@@ -11,6 +11,7 @@ export const higgsfieldReferencePaths={
  '/api/companies/{companyId}/higgsfield/references/candidates':{get:operation('Page exact verified project file versions, including older versions. Returns no download URL or storage capability. Verification is not image inspection or permission to share.',[...company,parameter('projectId','query'),parameter('fileId','query',false),parameter('after','query',false),{name:'limit',in:'query',schema:{type:'integer',minimum:1,maximum:50,default:20}}])},
  '/api/companies/{companyId}/higgsfield/references/{referenceId}':{get:operation('Read exact reference, inspection, approval expiry and durable transfer outcome. Provider confirmed is not generated content, QC or client acceptance.',reference)},
  '/api/companies/{companyId}/higgsfield/references/{referenceId}/approve':{post:operation('Human administrator grants finite exact-byte sharing after inspection, with explicit rights, prepared-image, metadata and provider-sharing consent. Maximum 60 minutes, further bounded by runtime qualification. Agents cannot approve.',reference,higgsfieldReferenceApproveInput)},
+ '/api/companies/{companyId}/higgsfield/references/{referenceId}/adopt-generation-inspection':{post:operation('Human administrator adopts one inspection attempt for the exact derived reference of a successfully completed generation specialist. Pins the reference revision, request and immutable handoff; expires within 60 minutes and never extends the original inspection deadline. Replay cannot renew consent. This grants no sharing, generation spend, new run or agent credential.',reference,referenceGenerationInspectionAdoptInput)},
  '/api/companies/{companyId}/higgsfield/references/{referenceId}/revoke':{post:operation('Human administrator revokes future transfer and managed generation use. This does not retract bytes already disclosed or delete media at the provider.',reference,higgsfieldReferenceRevokeInput)},
 };
 for(const[path,methods]of Object.entries(higgsfieldReferencePaths))for(const[method,definition]of Object.entries(methods))Object.assign(definition,{operationId:'higgsfield_reference_'+method+'_'+path.replace(/[^a-zA-Z0-9]+/g,'_')});

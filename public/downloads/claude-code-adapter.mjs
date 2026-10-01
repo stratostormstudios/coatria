@@ -4,7 +4,7 @@ import {realpath,stat} from 'node:fs/promises';
 import {dirname,isAbsolute,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {StringDecoder} from 'node:string_decoder';
-import {bridgePolicy,characterInstructions,providerConfiguration,modelRequestContext} from './provider-adapter.mjs';
+import {bridgePolicy,characterInstructions,providerConfiguration,modelRequestContext,referenceGenerationToolAllowed} from './provider-adapter.mjs';
 const location=dirname(fileURLToPath(import.meta.url));
 // Stable local classifications only. Raw CLI events, stderr and provider errors
 // must never be included in worker logs or shared failure receipts.
@@ -27,7 +27,7 @@ export async function claudeInvocation({run,context,tools,mcpEnvironment},settin
  let cwd;try{cwd=await realpath(settings.COATRIA_CLAUDE_WORKSPACE);if(!(await stat(cwd)).isDirectory())throw new Error();}catch{throw fault('CLAUDE_CONFIGURATION','The dedicated Claude worker directory is unavailable.');}
  if(!mcpEnvironment||mcpEnvironment.COATRIA_RUN_ID!==run.id||!mcpEnvironment.COATRIA_RUN_LEASE||!settings.COATRIA_AGENT_TOKEN)throw fault('CLAUDE_CONFIGURATION','The trusted worker must supply an active Coatria run connection.');
  const catalog=await tools.list(),caps=new Set(context.capabilities||[]);if(!Array.isArray(catalog?.tools)||catalog.tools.length>100)throw fault('CLAUDE_TOOL_CATALOG','Invalid Coatria tool catalog.');
- const names=catalog.tools.filter(tool=>caps.has(tool.capability)).map(tool=>{if(!/^[-a-zA-Z0-9_]{1,80}$/.test(tool.name))throw fault('CLAUDE_TOOL_CATALOG','Invalid Coatria tool name.');return 'mcp__coatria__'+tool.name;});
+ const names=catalog.tools.filter(tool=>caps.has(tool.capability)&&referenceGenerationToolAllowed(context,tool.name)).map(tool=>{if(!/^[-a-zA-Z0-9_]{1,80}$/.test(tool.name))throw fault('CLAUDE_TOOL_CATALOG','Invalid Coatria tool name.');return 'mcp__coatria__'+tool.name;});
  const mcp={mcpServers:{coatria:{command:process.execPath,args:[resolve(location,'agent-mcp.mjs')]}}};
  const args=['--print',...(authMode==='api-key'?['--bare']:[]),'--restricted','--no-chrome','--no-session-persistence','--disable-slash-commands','--setting-sources','',
   '--output-format','stream-json','--verbose','--input-format','text','--tools','','--strict-mcp-config','--mcp-config',JSON.stringify(mcp),

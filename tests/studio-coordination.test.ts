@@ -12,11 +12,16 @@ const expires=()=>new Date(Date.now()+3600000).toISOString();
 test('coordination schemas expose explicit finite approvals, never privilege or provider overrides',()=>{
  const input={clientId:randomUUID(),revision:0,coordinatorAgentId:randomUUID(),allowedRoleKeys:['producer'],status:'paused',maxRuns:2,maxConcurrentRuns:1,expiresAt:expires()};
  assert(studioCoordinationInput.safeParse(input).success);
+ assert.deepEqual(studioCoordinationInput.parse(input),input,'Existing policy inputs retain precisely their original hash fields');
  assert(!Object.hasOwn(studioCoordinationInput.parse(input),'coordinatorGeneration'),'Legacy inputs keep their exact hash fields and acquire no new opt-in');
+ assert(!Object.hasOwn(studioCoordinationInput.parse(input),'referenceGenerationContinuations'),'Omitted reference continuation does not enter legacy request hashes');
+ for(const enabled of [false,true])assert.equal(studioCoordinationInput.parse({...input,referenceGenerationContinuations:enabled}).referenceGenerationContinuations,enabled);
+ for(const invalid of [null,1,'true',{}])assert(!studioCoordinationInput.safeParse({...input,referenceGenerationContinuations:invalid}).success);
  for(const patch of [{maxRuns:0},{maxRuns:101},{maxConcurrentRuns:4},{allowedRoleKeys:['producer','producer']},{allowedRoleKeys:['invented']},{status:'autonomous'},{grant:['*']},{runsStarted:0},{approvedBy:randomUUID()}])assert(!studioCoordinationInput.safeParse({...input,...patch}).success);
  assert(!studioWorkDispatchInput.safeParse({projectId:randomUUID(),workItemId:randomUUID(),policyRevision:1,projectRevision:1,agentId:randomUUID()}).success);
  assert.equal(AGENT_TOOLS.studio_work_dispatch.capability,'studio.write');assert.equal(AGENT_TOOLS.studio_coordination_get.capability,'studio.read');
  const spec:any=agentRuntimeOpenApi,route=spec.paths['/api/companies/{companyId}/studio/projects/{projectId}/coordination'];assert(route.get&&route.put);assert.deepEqual(route.put.security,[{sessionCookie:[]}]);assert.equal(route.put.requestBody.content['application/json'].schema.additionalProperties,false);
+ const schema=route.put.requestBody.content['application/json'].schema;assert.equal(schema.properties.referenceGenerationContinuations.type,'boolean');assert(!schema.required.includes('referenceGenerationContinuations'));
 });
 
 const emulate=process.env.COATRIA_TEST_EMULATOR==='1',integrationUrl=process.env.COATRIA_INTEGRATION_DATABASE_URL;
@@ -45,9 +50,23 @@ test('coordinator handoffs enforce real leases, exact human approval, lifetime b
    const body={clientId:randomUUID(),revision:0,coordinatorAgentId:agents.coordinator.id,allowedRoleKeys:['producer'],status:'active',maxRuns:1,maxConcurrentRuns:1,expiresAt:expires()};
    await call(policyPath(d.project.id),'PUT',body,'coordinator',401);await call(policyPath(d.project.id),'PUT',body,'member',403);await call(policyPath(d.project.id),'PUT',{...body,expiresAt:new Date(Date.now()+90000000).toISOString()},'owner',400);
    const saved=await call(policyPath(d.project.id),'PUT',body);assert.equal(saved.policy.effectiveStatus,'active');assert.equal(saved.startsWorkers,false);assert.equal(saved.budgetUnit,'specialist_runs');assert.equal((await call(policyPath(d.project.id),'PUT',body)).replayed,true);
+   assert.equal((await query('SELECT request_hash FROM studio_requests WHERE company_id=$1 AND actor_key=$2 AND client_id=$3',[company,'human:'+owner,body.clientId])).rows[0].request_hash,hashToken(JSON.stringify(Object.fromEntries(Object.entries({projectId:d.project.id,...body}).sort(([a],[b])=>a.localeCompare(b))))),'Omitting the new flag preserves the pre-existing canonical request hash');
    assert(!Object.hasOwn(saved.policy,'coordinatorGeneration'));assert.equal((await query('SELECT coordinator_generation FROM studio_coordination_policies WHERE company_id=$1 AND project_id=$2',[company,d.project.id])).rows[0].coordinator_generation,false);
+   assert(!Object.hasOwn(saved.policy,'referenceGenerationContinuations'));assert.equal((await query('SELECT reference_generation_continuations FROM studio_coordination_policies WHERE company_id=$1 AND project_id=$2',[company,d.project.id])).rows[0].reference_generation_continuations,false);
    await call(policyPath(d.project.id),'PUT',{...body,clientId:randomUUID(),revision:saved.policy.revision,coordinatorGeneration:true},'owner',409);
+   assert.equal((await call(policyPath(d.project.id),'PUT',{...body,clientId:randomUUID(),revision:saved.policy.revision,referenceGenerationContinuations:true},'owner',409)).code,'STUDIO_CONTRACT_UNSUPPORTED');
    await call(policyPath(d.project.id),'PUT',{...body,clientId:randomUUID()},'owner',409);assert.equal((await call(policyPath(d.project.id))).policy.runsStarted,0);
+  });
+  await t.test('reference generation policy is explicit, replayable and preserves an expired exact pause without starting work',async()=>{
+   const created=await call(base+'/projects','POST',{clientId:randomUUID(),contractVersion:2,productionPath:'higgsfield',name:'Reference continuation policy',clientName:'Synthetic',brief:'A finite synthetic generation handoff after separate reference sharing approval.',aiPolicy:'allowed',spec:{kind:'image',format:'png',width:16,height:16,color:{mode:'not_required'}},shots:[{kind:'image',code:'REF01',description:'A synthetic reference policy fixture.'}]},'owner',201),pid=created.project.id;
+   const body={clientId:randomUUID(),revision:0,coordinatorAgentId:agents.coordinator.id,allowedRoleKeys:['producer','comp'],status:'active',maxRuns:3,maxConcurrentRuns:1,expiresAt:expires(),referenceGenerationContinuations:true};
+   const before=(await query('SELECT count(*)::int n FROM agent_runs WHERE company_id=$1',[company])).rows[0].n,saved=await call(policyPath(pid),'PUT',body);assert.equal(saved.policy.referenceGenerationContinuations,true);assert.equal(saved.policy.runsStarted,0);assert.equal(saved.startsWorkers,false);assert.equal(saved.startsInference,false);
+   const retried=await call(policyPath(pid),'PUT',body);assert.equal(retried.replayed,true);assert.deepEqual(retried.policy,saved.policy);assert.equal((await call(policyPath(pid),'PUT',{...body,referenceGenerationContinuations:false},'owner',409)).code,'IDEMPOTENCY_CONFLICT');
+   const disabled=await approve(pid,{referenceGenerationContinuations:false});assert(!Object.hasOwn(disabled.policy,'referenceGenerationContinuations'));assert.equal((await query('SELECT reference_generation_continuations FROM studio_coordination_policies WHERE company_id=$1 AND project_id=$2',[company,pid])).rows[0].reference_generation_continuations,false);
+   await approve(pid,{referenceGenerationContinuations:true});await query("UPDATE studio_coordination_policies SET expires_at=clock_timestamp()-interval '1 second' WHERE company_id=$1 AND project_id=$2",[company,pid]);await query("UPDATE agents SET status='paused' WHERE company_id=$1 AND id=$2",[company,agents.producer.id]);
+   try{const old=(await call(policyPath(pid))).policy,pause={clientId:randomUUID(),revision:old.revision,coordinatorAgentId:old.coordinatorAgentId,allowedRoleKeys:old.allowedRoleKeys,status:'paused',maxRuns:old.maxRuns,maxConcurrentRuns:old.maxConcurrentRuns,expiresAt:old.expiresAt,referenceGenerationContinuations:true};const paused=await call(policyPath(pid),'PUT',pause);assert.equal(paused.policy.referenceGenerationContinuations,true);assert.equal(paused.policy.status,'paused');assert.equal(paused.policy.runsStarted,0);assert.equal((await call(policyPath(pid),'PUT',pause)).replayed,true);}
+   finally{await query("UPDATE agents SET status='active' WHERE company_id=$1 AND id=$2",[company,agents.producer.id]);}
+   assert.equal((await query('SELECT count(*)::int n FROM agent_runs WHERE company_id=$1',[company])).rows[0].n,before);
   });
   await t.test('gates, exact revisions and live parent lease reject before creating a child',async()=>{
    const d=await project(false),w=d.workItems.find((w:any)=>w.stage==='estimate');await approve(d.project.id);

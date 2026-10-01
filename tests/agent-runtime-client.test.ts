@@ -61,6 +61,31 @@ test('safe tool retries preserve IDs and content, enforce deadlines and bound re
  await assert.rejects(()=>createRuntimeClient({token,retryBaseMs:0,fetch:async()=>new Response('x'.repeat(1024*1024+1))}).listTools(),{code:'RESPONSE_TOO_LARGE'});
 });
 
+test('only the fixed reference-authority contention409 retries the identical bounded request',async()=>{
+ const calls:{path:string;body:string}[]=[];let busy=true;
+ const client=createRuntimeClient({token,retryBaseMs:0,fetch:(async(url:unknown,options:any)=>{
+  calls.push({path:new URL(String(url)).pathname,body:options.body});
+  return busy?Response.json({code:'REFERENCE_GENERATION_AUTHORITY_BUSY'},{status:409}):Response.json({result:{saved:true},replayed:true});
+ }) as typeof fetch});
+ const payload={runId,leaseToken:lease,requestId:stableRequestId(runId,'reference-proposal'),arguments:{projectId:otherRun,step:'proposal'}};
+ await assert.rejects(()=>client.callTool('studio_reference_generation_followup_advance',payload,undefined),{status:409,code:'REFERENCE_GENERATION_AUTHORITY_BUSY'});
+ assert.equal(calls.length,3);assert(calls.every(call=>call.path===calls[0].path&&call.body===JSON.stringify(payload)));
+ busy=false;await client.callTool('studio_reference_generation_followup_advance',payload,undefined);assert.equal(calls[3].body,calls[0].body);
+ for(const [status,code]of [[409,'REFERENCE_GENERATION_FOLLOWUP_CHANGED'],[403,'REFERENCE_GENERATION_AUTHORITY_BUSY']] as const){let count=0;const rejected=createRuntimeClient({token,retryBaseMs:0,fetch:async()=>{count++;return Response.json({code},{status});}});await assert.rejects(()=>rejected.callTool('studio_reference_generation_followup_advance',payload,undefined),{status,code});assert.equal(count,1);}
+});
+
+test('claim, context and completion contention retain the same durable attempt without a failure outcome or replacement',async()=>{
+ const state=memoryState(),bodies:string[]=[],completionBodies:any[]=[];let blocked=true,executions=0,failures=0,claims=0,contexts=0,completions=0;
+ const wire=createRuntimeClient({token,retryBaseMs:0,fetch:(async(_url:unknown,options:any)=>{bodies.push(options.body);return blocked?Response.json({code:'REFERENCE_GENERATION_AUTHORITY_BUSY'},{status:409}):Response.json(claim());}) as typeof fetch});
+ const client=fakeClient({claim:async(workerId:string,claimId:string,signal:AbortSignal)=>{claims++;return wire.claim(workerId,claimId,signal);},context:async()=>{contexts++;if(contexts===1)throw new RuntimeError(409,'REFERENCE_GENERATION_AUTHORITY_BUSY');return {run:claim().run,messages:[],capabilities:[]};},complete:async(_runId:string,payload:any)=>{completionBodies.push(structuredClone(payload));completions++;if(completions===1)throw new RuntimeError(409,'REFERENCE_GENERATION_AUTHORITY_BUSY');return {run:{id:runId,status:'succeeded'}};},fail:async()=>{failures++;throw Error('Must not invent a failure for contention');}});
+ const execute=async()=>{executions++;return {result:'One exact saved proposal.'};};
+ await assert.rejects(()=>workOnce({client,state,execute}),{code:'REFERENCE_GENERATION_AUTHORITY_BUSY'});assert.equal(bodies.length,3);assert(bodies.every(body=>body===bodies[0]));assert.equal(state.saved.claimId,JSON.parse(bodies[0]).claimId);assert.equal(state.saved.job,null);assert.equal(executions,0);
+ blocked=false;
+ await assert.rejects(()=>workOnce({client,state,execute}),{code:'REFERENCE_GENERATION_AUTHORITY_BUSY'});assert.equal(bodies[3],bodies[0]);assert.equal(state.saved.job.outcome,null);assert.equal(executions,0);assert.equal(claims,2);
+ await assert.rejects(()=>workOnce({client,state,execute}),{code:'REFERENCE_GENERATION_AUTHORITY_BUSY'});assert.equal(state.saved.job.outcome.kind,'complete');assert.equal(executions,1);const completion=structuredClone(state.saved.job.outcome);
+ await workOnce({client,state,execute});assert.equal(executions,1);assert.equal(claims,2);assert.equal(contexts,2);assert.equal(completions,2);assert.equal(failures,0);assert.equal(state.saved.job,null);assert.equal(completion.kind,'complete');assert.deepEqual(completionBodies[0],completion.payload);assert.deepEqual(completionBodies[1],completionBodies[0]);
+});
+
 test('file ticket transport opt-in is explicit, survives retries, and never becomes a model argument',async()=>{
  const requests:any[]=[];let lost=true;
  const client=createRuntimeClient({token,retryBaseMs:0,fetch:(async(url:any,options:any)=>{requests.push({url:String(url),...options});if(lost){lost=false;throw Error('Lost response');}return Response.json({result:{upload:{token:'stg_transport_fixture'}},replayed:true});}) as typeof fetch});
@@ -96,7 +121,7 @@ test('uncertain completion survives worker restart and expired local lease witho
  await workOnce({client,state:restarted,execute,signal:controller().signal});assert.equal(executions,1);assert.deepEqual(payloads[1],payloads[0]);assert.equal(restarted.data.job,null);
 });
 
-for(const code of ['RUN_CANCELLED','COORDINATION_AUTHORITY_ENDED','STUDIO_REVIEW_AUTHORITY_ENDED'])test(`${code} aborts an uncooperative adapter and prevents later tools or completion`,async()=>{
+for(const code of ['RUN_CANCELLED','COORDINATION_AUTHORITY_ENDED','STUDIO_REVIEW_AUTHORITY_ENDED','STUDIO_GENERATED_FOLLOWUP_AUTHORITY_ENDED','REFERENCE_GENERATION_FOLLOWUP_AUTHORITY_ENDED'])test(`${code} aborts an uncooperative adapter and prevents later tools or completion`,async()=>{
  const state=memoryState();let calls=0,completed=0,tools:any,adapterSignal:AbortSignal|undefined;
  const client=fakeClient({heartbeat:async()=>{throw new RuntimeError(409,code);},callTool:async()=>{calls++;return {result:{}};},complete:async()=>{completed++;return {};}});
  const execute=({signal,tools:boundTools}:any)=>{adapterSignal=signal;tools=boundTools;return new Promise(()=>{});};

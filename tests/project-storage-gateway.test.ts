@@ -236,6 +236,7 @@ test('storage gateway uses real scoped database grants and injected byte provide
     const identity=async()=>{const result=(await query('SELECT current_user,session_user,pg_backend_pid() AS pid')).rows[0];assert.equal(result.current_user,role);assert.equal(result.session_user,role);return result.pid;};
     await identity();
     await query('SELECT company_id,child_run_id FROM studio_generated_followups WHERE false');
+    await query('SELECT company_id,child_run_id FROM studio_reference_generation_followups WHERE false');
     await f.json(await f.action(saved.upload,'start'));await f.json(await f.part(saved.upload,saved.body));await f.json(await f.action(saved.upload,'complete'),202);assert.equal(await f.gateway.verifyNext(),true);assert.equal((await f.row(saved.upload.id)).status,'ready');
     for(const sql of [
      "UPDATE memberships SET role='owner' WHERE false",
@@ -252,6 +253,9 @@ test('storage gateway uses real scoped database grants and injected byte provide
      'SELECT source_snapshot FROM studio_generated_followups WHERE false',
      'SELECT claim_request_id FROM studio_generated_followups WHERE false',
      'SELECT * FROM studio_generated_followups WHERE false',
+     'SELECT * FROM studio_reference_generation_followups WHERE false',
+     'SELECT handoff_id FROM studio_reference_generation_followups WHERE false',
+     'SELECT proposal_request_id FROM studio_reference_generation_followups WHERE false',
      'DELETE FROM project_storage_versions WHERE false',
      `CREATE ROLE ${role}_escalated NOLOGIN`
     ]){await identity();await assert.rejects(query(sql),{code:'42501'},sql);await identity();}

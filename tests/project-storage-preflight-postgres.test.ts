@@ -32,7 +32,7 @@ test('PostgreSQL gateway preflight requires the actual dedicated restricted LOGI
    const identity=(await pool.query('SELECT current_user,session_user')).rows[0];assert.deepEqual(identity,{current_user:name,session_user:name});
   }
   await t.test('exact shipped gateway LOGIN passes while owner, application and owner SET ROLE fail',async()=>{
-   const result=await assertProjectStorageGatewayDatabase(gateway!);assert.equal(result.status,'passed');assert.equal(result.role,role);assert.equal(result.checkedMigrations,37);assert.equal(result.migrationFloor,37);assert.equal(result.contractVersion,2);
+   const result=await assertProjectStorageGatewayDatabase(gateway!);assert.equal(result.status,'passed');assert.equal(result.role,role);assert.equal(result.checkedMigrations,49);assert.equal(result.migrationFloor,49);assert.equal(result.contractVersion,2);
    for(const pool of[owner!,application!])await assert.rejects(()=>assertProjectStorageGatewayDatabase(pool),{code:'STORAGE_DB_IDENTITY'});
    const client=await owner!.connect();try{await client.query('SET ROLE '+role);await assert.rejects(()=>assertProjectStorageGatewayDatabase(client),{code:'STORAGE_DB_IDENTITY'});}finally{await client.query('RESET ROLE');client.release();}
   });

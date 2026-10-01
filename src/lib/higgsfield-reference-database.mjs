@@ -19,7 +19,8 @@ export const REFERENCE_BROKER_CONTRACT={
    "company_id",
    "user_id",
    "role",
-   "access_revoked_at"
+   "access_revoked_at",
+   "joined_at"
   ],
   "UPDATE": [
    "joined_at"
@@ -66,6 +67,9 @@ export const REFERENCE_BROKER_CONTRACT={
  "studio_reference_preparation_dispatches": {
   "SELECT": "*"
  },
+ "studio_reference_generation_handoffs": {"SELECT":"*"},
+ "studio_reference_generation_inspection_adoptions": {"SELECT":"*"},
+ "studio_reference_generation_adoption_facts": {"SELECT":"*"},
  "studio_generated_revision_rounds": {
   "SELECT": [
    "id",
@@ -314,40 +318,44 @@ export const REFERENCE_BROKER_CONTRACT={
   "SELECT": [
    "company_id",
    "revision"
-  ]
+  ],
+  "UPDATE": ["updated_at"]
  },
  "higgsfield_reference_service_reads": {
   "SELECT": "*",
   "INSERT": "*"
  }
 };
-const lockTables=["companies","memberships","studio_projects","studio_role_bindings","tasks","agents","agent_runs","plugin_installations","higgsfield_connections","project_storage_connections","project_storage_bindings","higgsfield_reference_services","studio_coordination_policies"];
+const lockTables=["companies","memberships","studio_projects","studio_role_bindings","tasks","agents","agent_runs","plugin_installations","higgsfield_connections","project_storage_connections","project_storage_bindings","higgsfield_reference_services","studio_coordination_policies","studio_profiles"];
 export const REFERENCE_BROKER_LOCK_BODY="BEGIN\n IF current_user=TG_ARGV[0] AND NEW IS DISTINCT FROM OLD THEN\n  RAISE EXCEPTION 'Reference broker authority rows are read only' USING ERRCODE='42501';\n END IF;\n RETURN NEW;\nEND";
-const migrations=['039_higgsfield_references.sql','040_higgsfield_reference_inspection_authority.sql','041_higgsfield_model_contracts.sql','042_coordinated_reference_preparation.sql','043_higgsfield_reference_services.sql','044_higgsfield_reference_enrollments.sql'];
-// Frozen migration 043 bodies, not loaded from a mutable migration at runtime.
+const migrations=['039_higgsfield_references.sql','040_higgsfield_reference_inspection_authority.sql','041_higgsfield_model_contracts.sql','042_coordinated_reference_preparation.sql','043_higgsfield_reference_services.sql','044_higgsfield_reference_enrollments.sql','045_project_image_preparations.sql','046_project_image_preparation_storage.sql','047_project_image_preparation_handoff.sql','048_project_image_preparation_dispatch.sql','049_studio_reference_generation_continuations.sql'];
+// Frozen migration 043/049 bodies, not loaded from mutable migration files at runtime.
 export const REFERENCE_BROKER_STATE_GUARDS=[
- {
-  "table": "higgsfield_references",
-  "trigger": "higgsfield_reference_broker_attempts",
-  "function": "guard_higgsfield_reference_broker_attempts",
-  "body": "BEGIN\n IF current_user='coatria_higgsfield_reference_broker_v1' AND (\n  NEW.inspection_attempts IS DISTINCT FROM OLD.inspection_attempts OR\n  (NEW.status='inspecting' AND NEW.inspection_authority IS NOT NULL AND\n   (OLD.status<>'inspecting' OR NEW.lease_id IS DISTINCT FROM OLD.lease_id OR\n    (OLD.lease_expires_at<=clock_timestamp() AND NEW.lease_expires_at>clock_timestamp())))) THEN\n  IF NOT (NEW.inspection_attempts=OLD.inspection_attempts+1 AND NEW.inspection_attempts<=3\n   AND OLD.inspection_authority IS NOT NULL AND OLD.approved_by IS NULL AND OLD.revoked_at IS NULL\n   AND OLD.status IN ('proposed','inspecting') AND (OLD.lease_id IS NULL OR OLD.lease_expires_at<=clock_timestamp())\n   AND NEW.status='inspecting' AND NEW.lease_id IS NOT NULL AND NEW.lease_id IS DISTINCT FROM OLD.lease_id\n   AND NEW.lease_expires_at>clock_timestamp() AND NEW.lease_expires_at<=OLD.inspect_expires_at\n   AND NEW.lease_expires_at<=clock_timestamp()+interval '120 seconds') THEN\n   RAISE EXCEPTION 'reference inspection attempt transition rejected' USING ERRCODE='42501';\n  END IF;\n END IF;\n RETURN NEW;\nEND",
-  "config": null
- },
- {
-  "table": "higgsfield_reference_service_calls",
-  "trigger": "higgsfield_reference_service_call_immutable",
-  "function": "guard_higgsfield_reference_service_call",
-  "body": "BEGIN\n IF (to_jsonb(NEW)-ARRAY['status','response','finished_at']) IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['status','response','finished_at'])\n  OR (OLD.status='completed' AND NEW IS DISTINCT FROM OLD)\n  OR (NEW IS DISTINCT FROM OLD AND NOT (OLD.status='started' AND NEW.status='completed')) THEN\n  RAISE EXCEPTION 'reference service receipt is immutable' USING ERRCODE='42501';\n END IF;\n RETURN NEW;\nEND",
-  "config": null
- },
- {
-  "table": "higgsfield_reference_services",
-  "trigger": "higgsfield_reference_service_stop",
-  "function": "guard_higgsfield_reference_service_stop",
-  "body": "BEGIN\n IF current_user='coatria_runtime_v1' AND NOT (\n  OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL AND NEW.revoked_at<=clock_timestamp() AND NEW.revoked_by IS NOT NULL\n  AND NEW.revision=OLD.revision+1 AND NEW.updated_at>=OLD.updated_at\n  AND (to_jsonb(NEW)-ARRAY['revoked_at','revoked_by','revision','updated_at'])=(to_jsonb(OLD)-ARRAY['revoked_at','revoked_by','revision','updated_at'])\n ) THEN RAISE EXCEPTION 'reference service can only be stopped' USING ERRCODE='42501'; END IF;\n RETURN NEW;\nEND",
-  "config": null
- }
+  {
+    "table": "higgsfield_references",
+    "trigger": "higgsfield_reference_broker_attempts",
+    "function": "guard_higgsfield_reference_broker_attempts",
+    "body": "DECLARE adoption record;maximum integer;deadline timestamptz;durable boolean;\nBEGIN\n IF current_user<>'coatria_higgsfield_reference_broker_v1' THEN RETURN NEW;END IF;\n durable:=OLD.inspection_authority IS NOT NULL;maximum:=3;deadline:=OLD.inspect_expires_at;\n IF OLD.generation_handoff_id IS NOT NULL THEN\n  SELECT a.* INTO adoption FROM public.studio_reference_generation_inspection_adoptions a\n  JOIN public.memberships m ON m.company_id=a.company_id AND m.user_id=a.approved_by\n  WHERE a.company_id=OLD.company_id AND a.project_id=OLD.project_id AND a.reference_id=OLD.id\n   AND a.id=OLD.generation_inspection_adoption_id AND a.handoff_id=OLD.generation_handoff_id AND a.request_hash=OLD.request_hash AND a.max_attempts=1 AND a.inspection_consent\n   AND a.expires_at>clock_timestamp() AND a.expires_at<=OLD.inspect_expires_at\n   AND m.role IN ('owner','admin') AND m.access_revoked_at IS NULL\n   AND a.approver_snapshot->>'userId'=m.user_id::text AND a.approver_snapshot->>'role'=m.role\n   AND (a.approver_snapshot->>'joinedAt')::timestamptz=m.joined_at;\n  durable:=adoption.id IS NOT NULL AND OLD.inspection_authority IS NULL;maximum:=1;deadline:=adoption.expires_at;\n END IF;\n IF NEW.inspection_attempts IS DISTINCT FROM OLD.inspection_attempts OR\n  (NEW.status='inspecting' AND (NEW.inspection_authority IS NOT NULL OR NEW.generation_handoff_id IS NOT NULL) AND\n   (OLD.status<>'inspecting' OR NEW.lease_id IS DISTINCT FROM OLD.lease_id OR\n    (OLD.lease_expires_at<=clock_timestamp() AND NEW.lease_expires_at>clock_timestamp()))) THEN\n  IF NOT (durable AND NEW.inspection_attempts=OLD.inspection_attempts+1 AND NEW.inspection_attempts<=maximum\n   AND OLD.approved_by IS NULL AND OLD.revoked_at IS NULL AND OLD.status IN ('proposed','inspecting')\n   AND (OLD.lease_id IS NULL OR OLD.lease_expires_at<=clock_timestamp())\n   AND NEW.status='inspecting' AND NEW.lease_id IS NOT NULL AND NEW.lease_id IS DISTINCT FROM OLD.lease_id\n   AND NEW.lease_expires_at>clock_timestamp() AND NEW.lease_expires_at<=OLD.inspect_expires_at\n   AND NEW.lease_expires_at<=deadline AND NEW.lease_expires_at<=clock_timestamp()+interval '120 seconds') IS TRUE THEN\n   RAISE EXCEPTION 'reference inspection attempt transition rejected' USING ERRCODE='42501';\n  END IF;\n END IF;\n RETURN NEW;\nEND",
+    "config": [
+      "search_path=pg_catalog, public"
+    ]
+  },
+  {
+    "table": "higgsfield_reference_service_calls",
+    "trigger": "higgsfield_reference_service_call_immutable",
+    "function": "guard_higgsfield_reference_service_call",
+    "body": "BEGIN\n IF (to_jsonb(NEW)-ARRAY['status','response','finished_at']) IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['status','response','finished_at'])\n  OR (OLD.status='completed' AND NEW IS DISTINCT FROM OLD)\n  OR (NEW IS DISTINCT FROM OLD AND NOT (OLD.status='started' AND NEW.status='completed')) THEN\n  RAISE EXCEPTION 'reference service receipt is immutable' USING ERRCODE='42501';\n END IF;\n RETURN NEW;\nEND",
+    "config": null
+  },
+  {
+    "table": "higgsfield_reference_services",
+    "trigger": "higgsfield_reference_service_stop",
+    "function": "guard_higgsfield_reference_service_stop",
+    "body": "BEGIN\n IF current_user='coatria_runtime_v1' AND NOT (\n  OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL AND NEW.revoked_at<=clock_timestamp() AND NEW.revoked_by IS NOT NULL\n  AND NEW.revision=OLD.revision+1 AND NEW.updated_at>=OLD.updated_at\n  AND (to_jsonb(NEW)-ARRAY['revoked_at','revoked_by','revision','updated_at'])=(to_jsonb(OLD)-ARRAY['revoked_at','revoked_by','revision','updated_at'])\n ) THEN RAISE EXCEPTION 'reference service can only be stopped' USING ERRCODE='42501'; END IF;\n RETURN NEW;\nEND",
+    "config": null
+  }
 ];
+const adoptionViewDefinition="SELECT a.company_id, a.project_id, a.handoff_id, a.reference_id, p.id AS preparation_id, p.status AS preparation_status, p.revision AS preparation_revision, p.revoked_at, p.cleanup_confirmed_at, d.source_version_id, d.source_sha256, d.source_bytes, d.output_version_id, d.output_sha256, d.output_bytes, d.recipe_sha256, d.receipt_sha256 AS derivation_sha256 FROM studio_reference_generation_inspection_adoptions a JOIN studio_reference_generation_handoffs h ON h.company_id = a.company_id AND h.project_id = a.project_id AND h.id = a.handoff_id AND h.reference_id = a.reference_id JOIN project_image_preparations p ON p.company_id = h.company_id AND p.project_id = h.project_id AND p.id = h.preparation_id JOIN project_image_preparation_derivations d ON d.company_id = p.company_id AND d.project_id = p.project_id AND d.preparation_id = p.id;";
 const userSchema="n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname !~ '^pg_(toast|temp)'";
 export class HiggsfieldReferenceDatabaseError extends Error{
  constructor(code){super(code);this.name='HiggsfieldReferenceDatabaseError';this.code=code;}
@@ -384,10 +392,15 @@ export async function assertHiggsfieldReferenceDatabase(db,options={}){
   const found=new Set();
   for(const row of tables){
    const spec=row.schema==='public'?REFERENCE_BROKER_CONTRACT[row.name]:undefined;
-   if(spec){found.add(row.name);if(row.kind!=='r')fail('REFERENCE_DB_SCHEMA');}
+   if(spec){found.add(row.name);if(row.kind!==(row.name==='studio_reference_generation_adoption_facts'?'v':'r'))fail('REFERENCE_DB_SCHEMA');}
    if(row.owned!==false||row.grantable!==false||row.allowed!==(spec?.[row.privilege]==='*'))fail('REFERENCE_DB_PRIVILEGES');
   }
   if(Object.keys(REFERENCE_BROKER_CONTRACT).some(name=>!found.has(name)))fail('REFERENCE_DB_SCHEMA');
+  // One exact owner-defined view exposes only already-adopted derivation facts.
+  // A replacement view cannot turn this exception into general storage access.
+  const adoptionView=(await db.query(`SELECT pg_get_viewdef(c.oid,true) AS definition,c.reloptions FROM pg_catalog.pg_class c
+   JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='studio_reference_generation_adoption_facts' AND c.relkind='v'`)).rows[0];
+  if(!adoptionView||adoptionView.definition.replace(/\s+/g,' ').trim()!==adoptionViewDefinition||JSON.stringify(adoptionView.reloptions)!==JSON.stringify(['security_barrier=true']))fail('REFERENCE_DB_ADOPTION_VIEW');
   const columns=(await db.query(`SELECT n.nspname AS schema,c.relname AS name,a.attname AS column,p.privilege,
    pg_catalog.has_column_privilege(current_user,c.oid,a.attnum,p.privilege) AS allowed,
    pg_catalog.has_column_privilege(current_user,c.oid,a.attnum,p.privilege||' WITH GRANT OPTION') AS grantable

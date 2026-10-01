@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto';
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {createRuntimeClient,stableRequestId,RuntimeError} from './agent-worker.mjs';
+import {referenceGenerationToolAllowed} from './provider-adapter.mjs';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const error=(id,code,message)=>({jsonrpc:'2.0',id,error:{code,message}});
@@ -34,11 +35,12 @@ export function createMcpBridge({client,runId,leaseToken}){
    if(message.method==='tools/list'){
     if(message.params?.cursor)return error(id,-32602,'Tool-list cursors are not supported.');
     const catalog=await client.listTools(controller.signal);if(!Array.isArray(catalog.tools)||catalog.tools.length>100)throw new RuntimeError(502,'INVALID_CATALOG');
-    return result(id,{tools:catalog.tools.filter(tool=>Array.isArray(context.capabilities)&&context.capabilities.includes(tool.capability)).map(tool=>({name:tool.name,description:tool.description,inputSchema:tool.inputSchema,annotations:{readOnlyHint:!tool.mutating}}))});
+    return result(id,{tools:catalog.tools.filter(tool=>Array.isArray(context.capabilities)&&context.capabilities.includes(tool.capability)&&referenceGenerationToolAllowed(context,tool.name)).map(tool=>({name:tool.name,description:tool.description,inputSchema:tool.inputSchema,annotations:{readOnlyHint:!tool.mutating}}))});
    }
    const params=message.params;
    const args=params?.arguments??{};
    if(!params||typeof params.name!=='string'||typeof args!=='object'||Array.isArray(args))return error(id,-32602,'A tool name and arguments object are required.');
+   if(!referenceGenerationToolAllowed(context,params.name))return result(id,{content:[{type:'text',text:'Coatria tool request failed: REFERENCE_GENERATION_FOLLOWUP_SCOPE.'}],isError:true});
    const signature=createHash('sha256').update(JSON.stringify({name:params.name,arguments:canonical(args)})).digest('hex');
    const previous=calls.get(key);if(previous&&previous!==signature)return error(id,-32602,'A tool request ID cannot be reused for different arguments.');
    if(calls.size>=10000&&!previous)return error(id,-32000,'This bridge session has reached its operation limit.');calls.set(key,signature);
@@ -52,7 +54,7 @@ export function createMcpBridge({client,runId,leaseToken}){
 function canonical(value){if(Array.isArray(value))return value.map(canonical);if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])]));return value;}
 
 async function main(){
- if(process.argv.includes('--help')){console.log('MCP stdio: set COATRIA_AGENT_TOKEN, COATRIA_RUN_ID, COATRIA_RUN_LEASE and optional COATRIA_URL. Run node agent-mcp.mjs from an approved MCP host. Requires adjacent agent-worker.mjs.');return;}
+ if(process.argv.includes('--help')){console.log('MCP stdio: set COATRIA_AGENT_TOKEN, COATRIA_RUN_ID, COATRIA_RUN_LEASE and optional COATRIA_URL. Run node agent-mcp.mjs from an approved MCP host. Requires adjacent agent-worker.mjs and provider-adapter.mjs.');return;}
  const bridge=createMcpBridge({client:createRuntimeClient(),runId:process.env.COATRIA_RUN_ID,leaseToken:process.env.COATRIA_RUN_LEASE});
  let buffer=Buffer.alloc(0),active=0,closed=false;
  const emit=value=>{if(value&&!closed)process.stdout.write(JSON.stringify(value)+'\n');};
