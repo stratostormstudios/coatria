@@ -20,7 +20,8 @@ Transfer the **entire host bundle**, including its empty read-only `proc`/`dev`
 mount points and declared modes, through trusted staging. Record its manifest
 digest independently and use the existing installer's `plan` to verify every
 member. The media CI evidence ZIP contains reports/manifests, not that complete
-installable release. Reference/image preparation additionally need their separate
+installable release. The separate release artifact described below contains those
+complete bytes. Reference/image preparation additionally need their separate
 registrar artifacts; image preparation also needs its separate controller artifact.
 Keep their matching source/tree/lock/runtime identities for the later operator steps.
 Prepare the VM before creating the reference/image install scope: that scope has
@@ -30,6 +31,45 @@ The target does not need Docker, npm, GCC, a checkout under `.devdata`, a CI
 qualification JSON or the builder's hand-created cgroup. The installer derives
 new profiles for the target release paths. Target systemd qualification must run
 again against that target's kernel, policy, UID/GID and delegated cgroups.
+
+## Verify the separate CI release transfer
+
+The workflow publishes `coatria-linux-host-releases-<run-id>` only after the media
+lane, final export checks and cleanup succeed. Its retention is three days;
+preserve an approved copy and its independently recorded artifact digest before
+expiry. A failed or incomplete run has no accepted release transfer. Diagnostic
+reports remain in the separate media evidence artifact, including on failure.
+
+The release contains six component archives: `archive-host.tar.gz`,
+`reference-host.tar.gz`, `image-preparation-host.tar.gz`,
+`reference-registrar.tar.gz`, `image-preparation-registrar.tar.gz` and
+`image-preparation-control.tar.gz`. Each has a matching receipt. It also contains
+`operator-source.tar.gz`, `SHA256SUMS` and a final `release-index.json`. The source
+archive carries only the seven exact Git files needed by the installers and
+prerequisite validators, preserving their `scripts/hosting/` import layout.
+
+Verify the GitHub run and artifact identity independently before using this
+transfer. The index binds all six archives to one source commit, tree and lockfile,
+and to the hashes of their successful qualification or exercise reports. For a
+pull request, the tested commit may be GitHub's merge commit; require its exact
+recorded tree rather than substituting a branch tip. Require a complete index and
+all component receipts, then check `SHA256SUMS` and each receipt's bundle digest.
+A checksum file delivered inside the same download is an integrity check, not an
+independent statement of trust.
+
+Extract the reviewed archives separately into fresh root-owned staging directories
+on the target. Preserve their declared file modes and empty mount-point directories;
+do not flatten their contents or install the GitHub outer ZIP as a host bundle.
+Run the selected installer's read-only `plan` with the independently recorded
+bundle digest before any installation. The registrar/controller manifests must
+match the same source/tree/lock and the runtime bytes actually exercised in CI.
+
+The export copies only verified release members and fixed Git blobs. It excludes
+installed configuration, tokens, worker state, qualification receipts and private
+fixture material. Every transfer explicitly records `qualified:false`,
+`productionQualified:false` and `activationAuthorized:false`. Successful fixture
+execution provides evidence about the packaged programs; it never enrolls or
+authorizes the destination host.
 
 ## Check the VM and install only prerequisites
 
