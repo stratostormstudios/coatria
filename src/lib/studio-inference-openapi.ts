@@ -27,7 +27,7 @@ export const studioInferenceSchemas:Record<string,Schema>={
   properties:{
    id:uuid,runId:uuid,step:{type:'integer',minimum:0,maximum:19},
    status:{type:'string',enum:['submitting','queued','running','succeeded','failed','uncertain','cancel_requested','cancelled','expired']},
-   createdAt:date,deadlineAt:date,errorCode:{type:['string','null']},
+   createdAt:date,deadlineAt:date,errorCode:{type:['string','null'],description:'INFERENCE_RETENTION_EXPIRED_OUTCOME_UNKNOWN means a known provider job is unavailable beyond the maximum retention window. The application record is expired; execution outcome and billing remain unknown. Reservations are preserved and the job is not resubmitted.'},
    reservedTokens:{type:'integer',minimum:1},usedTokens:{type:['integer','null'],minimum:0},billingVerified:{const:false},
    output:{type:'object',description:'Original bounded OpenAI chat completion, present only for successful provider completion. In protocol 2, inspect server disposition before any tool execution; successful inference may instead contain server-recorded nonexecution feedback.'},
    protocolVersion:{type:'integer',const:2,description:'Explicitly negotiated on submission and pinned for the entire run. Omission retains the terminal-only legacy contract.'},
