@@ -17,8 +17,8 @@ const host=v=>typeof v==='string'&&v.length<=253&&v===v.toLowerCase()&&!isIP(v)&
 const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 export const REFERENCE_HOST_SOURCE_FILES=Object.freeze([
  'package.json','package-lock.json',
- ...['media-sandbox-launch.c','media-sandbox-probe.c','prepare-media-sandbox-ci.mjs','run-media-sandbox-ci.mjs','media-sandbox-linux-canary.mts','media-sandbox-startup-diagnostic.mts','prepare-media-apparmor-ci.mjs','collect-media-apparmor-ci.mjs','reference-worker-linux-canary.mts','media-sandbox-cgroup-observer.mjs'].map(p=>'scripts/hosting/'+p),
- ...['higgsfield-media-sandbox.ts','higgsfield-media-inspection.ts','higgsfield-reference-worker.ts','higgsfield-references-protocol.ts','higgsfield-reference-transport.ts'].map(p=>'src/lib/'+p),
+ ...['media-sandbox-launch.c','media-sandbox-probe.c','prepare-media-sandbox-ci.mjs','run-media-sandbox-ci.mjs','media-sandbox-linux-canary.mts','media-sandbox-startup-diagnostic.mts','prepare-media-apparmor-ci.mjs','collect-media-apparmor-ci.mjs','reference-worker-linux-canary.mts','image-preparation-linux-canary.mts','media-sandbox-source-files.mjs','media-sandbox-cgroup-observer.mjs'].map(p=>'scripts/hosting/'+p),
+ ...['higgsfield-media-sandbox.ts','higgsfield-media-inspection.ts','higgsfield-reference-worker.ts','higgsfield-references-protocol.ts','higgsfield-reference-transport.ts','higgsfield-image-preparation.ts','higgsfield-image-preparation-policy.ts','higgsfield-image-preparation-source.ts','higgsfield-image-preparation-png.ts','project-image-preparation-sandbox.ts'].map(p=>'src/lib/'+p),
  ...['png','jpeg','webp','mp4','mov','wav','mp3'].map(e=>'tests/fixtures/media/synthetic.'+e)
 ]);
 function files(value){

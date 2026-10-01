@@ -17,6 +17,7 @@ import {createReferenceEnrollmentStore,assertReferenceEnrollmentPending,referenc
 import {provisionReferenceRegistrarRole} from '../provision-reference-registrar-role.mjs';
 import {HIGGSFIELD_REFERENCE_REGISTRAR_ROLE as ROLE,assertHiggsfieldReferenceRegistrarDatabase} from '../../src/lib/higgsfield-reference-registrar-database.mjs';
 import {referenceEnrollmentHash,referenceEnrollmentCanonical as canonical,referenceEnrollmentServiceIdentity,referenceEnrollmentProjectIdentity} from '../../src/lib/higgsfield-reference-enrollment-contract.mjs';
+import {collectImagePreparationCiEvidence,preserveImagePreparationCiEvidence} from './image-preparation-ci-evidence.mjs';
 
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/,sha=/^[a-f0-9]{64}$/,json=v=>Buffer.from(JSON.stringify(v,null,2)+'\n');
 const fail=()=>{throw Error('REFERENCE_ENROLLMENT_CI_REJECTED');};
@@ -96,7 +97,8 @@ async function currentEvidence(host,command){
   const path=join(root,name,'host-evidence.json');let raw;try{raw=await archiveHostRead(path,65536);}catch(error){if(error.code==='ENOENT')continue;throw error;}const evidence=JSON.parse(raw);
   if(evidence.qualifierInvocationId!==unit.InvocationID)continue;
   const reportPath=join(root,name,'qualification.json'),proof=await archiveHostRead(reportPath,1024**2);check(hash(proof)===evidence.reportSha256);command('sync_journal');
-  const journalProof=referenceHostJournalProof(command('read_qualifier_diagnostics',unit.InvocationID),host,unit,{evidencePath:path,evidenceSha256:hash(raw),reportPath,reportSha256:hash(proof)});return {path,raw,proof,journalProof};
+  const journalProof=referenceHostJournalProof(command('read_qualifier_diagnostics',unit.InvocationID),host,unit,{evidencePath:path,evidenceSha256:hash(raw),reportPath,reportSha256:hash(proof)});
+  const imagePreparation=await collectImagePreparationCiEvidence({directory:join(root,name),qualificationBytes:proof,hostEvidenceBytes:raw,sourceCommit:host.commit,sourceTree:host.tree,bundleSha256:host.bundleSha256,invocationId:unit.InvocationID});return {path,raw,proof,journalProof,imagePreparation};
  }fail();
 }
 
@@ -130,6 +132,7 @@ export async function qualifyReferenceEnrollmentCi(){
   const rows=async()=>({services:(await owner.query('SELECT * FROM higgsfield_reference_services WHERE id=$1',[host.scope.serviceId])).rows,projects:(await owner.query('SELECT * FROM higgsfield_reference_service_projects WHERE service_id=$1 ORDER BY project_id',[host.scope.serviceId])).rows,enrollments:(await owner.query('SELECT * FROM higgsfield_reference_service_enrollments WHERE service_id=$1',[host.scope.serviceId])).rows});
   phase('stopped-first-enrollment');const stopped=invoke('enroll',restricted.href);check(!stopped.ok&&stopped.code==='REFERENCE_HOST_ENROLLMENT_REJECTED');const empty=await rows();check(Object.values(empty).every(v=>v.length===0));await absent(join(configRoot,'enrollment'));await absent(join(configRoot,'worker.env'));report.stoppedFirstEnrollmentRejected=true;
   phase('requalify-installed-host');const previous=await archiveHostRead(receiptPath,65536);command('start_qualifier');const current=await currentEvidence(host,command);check(JSON.parse(previous).qualifierInvocationId!==JSON.parse(current.raw).qualifierInvocationId);
+  preserveImagePreparationCiEvidence(exports,'reference-enrollment',current.imagePreparation);
   await acceptReferenceHostQualification(hostPath,host.bundleSha256,current.path,hash(current.raw),hash(previous));const qualified=await readCurrentReferenceHostQualification(hostPath,host.bundleSha256);check(qualified.receipt.reportSha256===hash(current.proof));
   for(const [name,data]of[['evidence',current.raw],['qualification',current.proof],['receipt',qualified.receiptBytes],['journal-proof',json(current.journalProof)]])exports.set('reference-enrollment-'+name+'.json',data);
   phase('compiled-plan');const plan=invoke('plan');check(plan.ok&&plan.value.companyId===host.scope.companyId&&plan.value.enrolledBy===scope.enrolledBy&&same(plan.value.projects,scope.projects)&&same(plan.value.provider,scope.provider)&&plan.value.qualificationSha256===qualified.qualificationSha256);await absent(join(configRoot,'enrollment'));await absent(join(configRoot,'worker.env'));check(Object.values(await rows()).every(v=>v.length===0));report.planReadOnlyProved=true;
@@ -143,6 +146,14 @@ export async function qualifyReferenceEnrollmentCi(){
  }catch{failed=true;report.passed=false;report.failureCode='REFERENCE_ENROLLMENT_CI_FAILED';}
  finally{
   if(command&&host)try{command('stop_qualifier');for(const mode of['qualify','worker','preflight'])check(command('read_unit_state',mode)==='inactive');await absent('/etc/coatria-reference/'+host.scope.serviceId+'/worker-enabled');report.allServicesInactiveAtExit=true;}catch{failed=true;report.passed=false;report.cleanupFailed=true;}
+  if(failed&&host&&!exports.has('reference-enrollment-image-preparation-transform.json'))try{
+   const state='/var/lib/coatria-reference-worker/'+host.scope.serviceId+'/evidence',names=await readdir(state);check(names.length<=1000);let index=0;
+   for(const name of names.filter(n=>/^qualification-[a-f0-9-]{36}$/.test(n)).sort()){
+    let bytes;try{bytes=await archiveHostRead(join(state,name,'qualification.json'),1024**2);}catch(error){if(error.code==='ENOENT')continue;throw error;}
+    const prefix='reference-enrollment-unaccepted-'+(++index);exports.set(prefix+'-qualification.json',bytes);
+    try{preserveImagePreparationCiEvidence(exports,prefix,await collectImagePreparationCiEvidence({directory:join(state,name),qualificationBytes:bytes,sourceCommit:host.commit,sourceTree:host.tree,bundleSha256:host.bundleSha256}));}catch{report.imagePreparationFailureReportUnavailable=true;}
+   }
+  }catch{report.detailedFailureReportUnavailable=true;}
   try{await owner?.end();if(created)await control.query('DROP DATABASE '+database+' WITH (FORCE)');if(roleCreated)await control.query('DROP ROLE '+ROLE);report.disposableDatabaseRemoved=created;report.disposableRoleRemoved=roleCreated;}catch{failed=true;report.passed=false;report.databaseCleanupFailed=true;}finally{await control?.end();}
   report.durationMs=Date.now()-started;exports.set('reference-enrollment-ci.json',json(report));
   // Only sanitized manifests, native evidence and summaries enter artifacts.

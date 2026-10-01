@@ -9,6 +9,8 @@ import {access,lstat,mkdir,open,readFile,readdir,realpath,rmdir,statfs,writeFile
 import {dirname,join,posix} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import type {Readable,Writable} from 'node:stream';
+import {fixedImagePreparationCommand,IMAGE_PREPARATION_RECIPE_HASH,isAllowedPreparationDiagnostic} from './higgsfield-image-preparation';
+import {IMAGE_PREPARATION_POLICY,type PreparationSource} from './higgsfield-image-preparation-policy';
 
 export type MediaSandboxCode='SANDBOX_UNAVAILABLE'|'INVALID_PROFILE'|'INPUT_INVALID'|'ABORTED'|'TIMEOUT'|'OUTPUT_LIMIT'|'PROCESS_FAILED'|'CLEANUP_FAILED';
 export class MediaSandboxError extends Error {
@@ -20,10 +22,13 @@ type PinnedFile={path:string;sha256:string};
 export type MediaSandboxProfile={version:1;platform:'linux-x64';runtimeRoot:string;files:(PinnedFile&{bytes:number})[];launcher:PinnedFile;bubblewrap:PinnedFile;limits:MediaSandboxLimits};
 export type MediaSandboxRun={tool:'ffprobe'|'ffmpeg';args:readonly string[];inputFd:number;signal?:AbortSignal;maxOutputBytes:number;maxStderrBytes:number;timeoutMs:number};
 export type MediaSandboxExitEvidence=Readonly<{memoryEvents:Readonly<Record<string,number>>;pidsEvents:Readonly<Record<string,number>>;cpuUsageUsec:number;limits:MediaSandboxLimits;drained:true}>;
+export type MediaSandboxImagePreparationRun={inputFd:number;source:PreparationSource;recipeSha256:string;signal?:AbortSignal;timeoutMs?:number};
 export type QualifiedLinuxMediaSandbox=Readonly<{run:(input:MediaSandboxRun)=>Promise<string>}>;
+export type QualifiedLinuxImageMediaSandbox=QualifiedLinuxMediaSandbox&Readonly<{profileSha256:string;prepareImage:(input:MediaSandboxImagePreparationRun)=>Promise<Buffer>}>;
 export type LinuxMediaSandboxOptions={profilePath:string;expectedProfileSha256:string;cgroupRoot:string;onExitEvidence?:(evidence:MediaSandboxExitEvidence)=>void};
 const qualified=new WeakSet<object>();
 export function isQualifiedLinuxMediaSandbox(value:unknown):value is QualifiedLinuxMediaSandbox{return !!value&&typeof value==='object'&&qualified.has(value);}
+export function isQualifiedLinuxImageMediaSandbox(value:unknown):value is QualifiedLinuxImageMediaSandbox{return isQualifiedLinuxMediaSandbox(value)&&'prepareImage'in value&&'profileSha256'in value;}
 const hash=(value:Buffer)=>createHash('sha256').update(value).digest('hex');
 const ownKeys=(value:object,keys:string[])=>Object.keys(value).length===keys.length&&Object.keys(value).every(key=>keys.includes(key));
 const object=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
@@ -78,13 +83,19 @@ const numericEvents=(value:string,allowed:string[])=>{const result:Record<string
 /** Bounded output capture, also independently testable without launching a
  * decoder. Pipe failures only pass a fixed code; raw OS errors never escape. */
 export function captureMediaSandboxOutput(stdout:Readable,stderr:Readable,bounds:{maxOutputBytes:number;maxStderrBytes:number},halt:(code:MediaSandboxCode)=>void){
+ const captured=captureMediaSandboxBinaryOutput(stdout,stderr,bounds,halt);
+ return {value:()=>captured.value().toString('utf8'),hasWarnings:captured.hasWarnings};
+}
+/** Binary output is never converted to text. Diagnostics are bounded bytes and
+ * are interpreted only by the fixed transform warning allowlist after drain. */
+export function captureMediaSandboxBinaryOutput(stdout:Readable,stderr:Readable,bounds:{maxOutputBytes:number;maxStderrBytes:number},halt:(code:MediaSandboxCode)=>void){
  const {maxOutputBytes,maxStderrBytes}=bounds;
  if(!bounded(maxOutputBytes,1,64*1024**2)||!bounded(maxStderrBytes,1,65536))fail('INPUT_INVALID');
- const chunks:Buffer[]=[];let bytes=0,warnings=0;
- stdout.on('data',(chunk:Buffer)=>{bytes+=chunk.length;if(bytes>maxOutputBytes)halt('OUTPUT_LIMIT');else chunks.push(chunk);});
- stderr.on('data',(chunk:Buffer)=>{warnings+=chunk.length;if(warnings>maxStderrBytes)halt('OUTPUT_LIMIT');});
+ const chunks:Buffer[]=[],diagnostics:Buffer[]=[];let bytes=0,warnings=0;
+ stdout.on('data',(chunk:Buffer)=>{bytes+=chunk.length;if(bytes>maxOutputBytes)halt('OUTPUT_LIMIT');else chunks.push(Buffer.from(chunk));});
+ stderr.on('data',(chunk:Buffer)=>{warnings+=chunk.length;if(warnings>maxStderrBytes)halt('OUTPUT_LIMIT');else diagnostics.push(Buffer.from(chunk));});
  stdout.on('error',()=>halt('PROCESS_FAILED'));stderr.on('error',()=>halt('PROCESS_FAILED'));
- return {value:()=>Buffer.concat(chunks).toString('utf8'),hasWarnings:()=>warnings>0};
+ return {value:()=>Buffer.concat(chunks),diagnostics:()=>Buffer.concat(diagnostics),hasWarnings:()=>warnings>0};
 }
 async function verifyControls(path:string,limits:MediaSandboxLimits,write:boolean){
  const values={'memory.max':String(limits.memoryBytes),'memory.swap.max':'0','memory.oom.group':'1','pids.max':String(limits.pids),'cpu.max':`${limits.cpuQuotaMicros} ${limits.cpuPeriodMicros}`};
@@ -96,7 +107,7 @@ async function verifyControls(path:string,limits:MediaSandboxLimits,write:boolea
  * CPU quota is aggregate bandwidth, bounded additionally by wall time. Period
  * bursts and cleanup overhead mean this is not an exact CPU-seconds allowance.
  * FD hard limit is per task, with aggregate tasks bounded by pids.max. */
-export async function createLinuxMediaSandbox(options:LinuxMediaSandboxOptions):Promise<QualifiedLinuxMediaSandbox>{
+export async function createLinuxMediaSandbox(options:LinuxMediaSandboxOptions):Promise<QualifiedLinuxImageMediaSandbox>{
  if(process.platform!=='linux'||process.arch!=='x64'||!process.getuid||process.getuid()===0)fail('SANDBOX_UNAVAILABLE');
  const {profilePath,expectedProfileSha256,cgroupRoot,onExitEvidence}=options;
  let profile:MediaSandboxProfile;
@@ -106,13 +117,13 @@ export async function createLinuxMediaSandbox(options:LinuxMediaSandboxOptions):
   await validateClosure(profile);await groupRoot(cgroupRoot);
  }catch(error){throw error instanceof MediaSandboxError?error:new MediaSandboxError('INVALID_PROFILE');}
  let poisoned=false,busy=false;
- const run=async(value:MediaSandboxRun):Promise<string>=>{
+ const execute=async(value:MediaSandboxRun,binarySource?:PreparationSource):Promise<Buffer>=>{
   if(poisoned||busy)fail('SANDBOX_UNAVAILABLE');
   const input={...value,args:Array.isArray(value.args)?[...value.args]:[]};
   if(!['ffprobe','ffmpeg'].includes(input.tool)||!Array.isArray(value.args)||input.args.length>256||input.args.some(a=>typeof a!=='string'||a.includes('\0')||a.length>8192)||input.args.reduce((n,a)=>n+a.length,0)>32768||!bounded(input.inputFd,0,2**31-1)||!bounded(input.maxOutputBytes,1,64*1024**2)||!bounded(input.maxStderrBytes,1,64*1024)||!bounded(input.timeoutMs,1,300000))fail('INPUT_INVALID');
   if(input.signal?.aborted)fail('ABORTED');busy=true;
   const path=join(cgroupRoot,'decoder-'+randomUUID());let created=false,control:FileHandle|undefined,child:ReturnType<typeof spawn>|undefined,timer:ReturnType<typeof setTimeout>|undefined,abort:(()=>void)|undefined;
-  let reason:MediaSandboxCode|undefined;let result='',captured:ReturnType<typeof captureMediaSandboxOutput>|undefined;
+  let reason:MediaSandboxCode|undefined;let result:Buffer=Buffer.alloc(0),captured:ReturnType<typeof captureMediaSandboxBinaryOutput>|undefined;
   try{
    await groupRoot(cgroupRoot);await mkdir(path,{mode:0o700});created=true;await verifyControls(path,profile.limits,true);
    control=await open(join(path,'cgroup.procs'),constants.O_WRONLY|constants.O_NOFOLLOW);
@@ -124,7 +135,7 @@ export async function createLinuxMediaSandbox(options:LinuxMediaSandboxOptions):
    child=spawn(profile.launcher.path,[String(profile.limits.openFiles),profile.runtimeRoot,input.tool,...input.args],{shell:false,cwd:'/',env:{NODE_ENV:'production',LANG:'C',LC_ALL:'C',PATH:'/usr/bin'},stdio:[input.inputFd,'pipe','pipe',control.fd,'pipe','pipe']});
    const extra=child.stdio as (Readable|Writable|null|undefined)[],gate=extra[4] as Writable,ready=extra[5] as Readable;gate.on('error',()=>halt('PROCESS_FAILED'));ready.on('error',()=>halt('PROCESS_FAILED'));
    const ended=new Promise<number|null>(resolve=>{child!.once('error',()=>{halt('SANDBOX_UNAVAILABLE');resolve(null);});child!.once('exit',(code)=>resolve(code));});
-   captured=captureMediaSandboxOutput(child.stdout!,child.stderr!,input,halt);
+   captured=captureMediaSandboxBinaryOutput(child.stdout!,child.stderr!,input,halt);
    const isReady=new Promise<void>((resolve,reject)=>{ready.once('data',(chunk:Buffer)=>chunk.equals(Buffer.from('R'))?resolve():reject(new MediaSandboxError('PROCESS_FAILED')));ready.once('end',()=>reject(new MediaSandboxError('PROCESS_FAILED')));});
    await Promise.race([isReady,ended.then(()=>fail('PROCESS_FAILED')),stopped]);
    if(await text(join(path,'cgroup.procs'))!==String(child.pid))fail('SANDBOX_UNAVAILABLE');await verifyControls(path,profile.limits,false);
@@ -145,7 +156,7 @@ export async function createLinuxMediaSandbox(options:LinuxMediaSandboxOptions):
      if(child){await Promise.race([new Promise<void>(resolve=>{if(child!.exitCode!==null||child!.signalCode!==null){setImmediate(resolve);return;}child!.once('close',()=>resolve());}),delay(1000).then(()=>fail('CLEANUP_FAILED'))]);
       // Wait for end/close on both finite pipes before certifying captured bytes.
       await Promise.race([Promise.all([child.stdout,child.stderr].map(stream=>!stream||stream.readableEnded||stream.destroyed?Promise.resolve():new Promise<void>(resolve=>{stream.once('end',resolve);stream.once('close',resolve);}))),delay(1000).then(()=>fail('CLEANUP_FAILED'))]);
-      if(captured)result=captured.value();if(captured?.hasWarnings())reason??='PROCESS_FAILED';
+      if(captured)result=captured.value();if(captured?.hasWarnings()&&(!binarySource||!isAllowedPreparationDiagnostic(binarySource.format,captured.diagnostics())))reason??='PROCESS_FAILED';
      }
      const mem=numericEvents(await text(join(path,'memory.events')),['low','high','max','oom','oom_kill','oom_group_kill']),pids=numericEvents(await text(join(path,'pids.events')),['max']),cpu=numericEvents(await text(join(path,'cpu.stat')),['usage_usec']);
      if(mem.oom||mem.oom_kill||mem.oom_group_kill||pids.max)reason??='PROCESS_FAILED';
@@ -157,7 +168,15 @@ export async function createLinuxMediaSandbox(options:LinuxMediaSandboxOptions):
   }
   if(input.signal?.aborted)reason??='ABORTED';if(reason)fail(reason);return result;
  };
- const sandbox=Object.freeze({run});
+ const run=async(input:MediaSandboxRun):Promise<string>=>(await execute(input)).toString('utf8');
+ const prepareImage=async(value:MediaSandboxImagePreparationRun):Promise<Buffer>=>{
+  if(!value||Object.keys(value).some(key=>!['inputFd','source','recipeSha256','signal','timeoutMs'].includes(key))||value.recipeSha256!==IMAGE_PREPARATION_RECIPE_HASH||value.signal!==undefined&&!(value.signal instanceof AbortSignal))fail('INPUT_INVALID');
+  const source={...value.source},timeoutMs=value.timeoutMs??IMAGE_PREPARATION_POLICY.timeoutMs;
+  if(!bounded(timeoutMs,1,IMAGE_PREPARATION_POLICY.timeoutMs))fail('INPUT_INVALID');
+  let args:readonly string[];try{args=fixedImagePreparationCommand(source).args;}catch{fail('INPUT_INVALID');}
+  return execute({tool:'ffmpeg',args,inputFd:value.inputFd,signal:value.signal,timeoutMs,maxOutputBytes:IMAGE_PREPARATION_POLICY.outputMaxBytes,maxStderrBytes:IMAGE_PREPARATION_POLICY.maxStderrBytes},source);
+ };
+ const sandbox=Object.freeze({profileSha256:expectedProfileSha256,run,prepareImage});
  try{
   const input=await open(join(profile.runtimeRoot,'bin/ffprobe'),constants.O_RDONLY|constants.O_NOFOLLOW);
   try{for(const tool of ['ffprobe','ffmpeg'] as const){const output=await run({tool,args:['-hide_banner','-h','protocol=fd'],inputFd:input.fd,maxOutputBytes:65536,maxStderrBytes:65536,timeoutMs:10000});if(!output.includes('fd AVOptions:'))fail('SANDBOX_UNAVAILABLE');}}finally{await input.close();}

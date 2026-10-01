@@ -1,3 +1,4 @@
+import {MEDIA_SANDBOX_SOURCE_FILES} from './media-sandbox-source-files.mjs';
 /** No skip path: this command qualifies an actual Linux host or fails the job.
  * Original hostile ELF exists only in its separately pinned test profile. */
 import assert from 'node:assert/strict';
@@ -15,6 +16,7 @@ import {inspectHiggsfieldArchiveMedia,type HiggsfieldMediaDescriptor} from '../.
 import {diagnoseMediaSandboxStartup,diagnoseArchiveHostSandboxStartup} from './media-sandbox-startup-diagnostic.mts';
 import {archiveHostCpuSummary,archiveHostObservationFailure} from './archive-host-diagnostics.mjs';
 import {referenceWorkerIntegrationEvidence,runReferenceWorkerLinuxCanary} from './reference-worker-linux-canary.mts';
+import {imagePreparationTransformEvidence,runImagePreparationLinuxCanary} from './image-preparation-linux-canary.mts';
 import {mediaSandboxDecoderDisappeared} from './media-sandbox-cgroup-observer.mjs';
 
 type ProfilePin={profilePath:string;expectedProfileSha256:string};
@@ -154,13 +156,14 @@ export async function runMediaSandboxCrashChild(config:Config){
 
 export async function runMediaSandboxCanary(config:Config){
  const report:Record<string,unknown>={qualified:false,runpodQualified:false,noProviderCalls:true,kernel:release(),profiles:config.profiles,tests:[],realFormats:[]};
+ const imageReport=imagePreparationTransformEvidence();
  const results=report.tests as unknown[];let listener:Server|undefined,startingProfile:'conformance'|'real'|null='conformance';
  const checkpoint=(name:string)=>{report.activeCheck=name;};
  try{
   checkpoint('host_input_pins');
   const inputBefore=await readFile(fixture(config,'synthetic.png'));assert.equal(digest(await readFile(config.hostCanaryPath)),config.hostCanarySha256);
   const hostNamespaces=await namespaces();report.hostNamespaces=hostNamespaces;
-  checkpoint('host_source_pins');const sourceHashes:Record<string,string>={};for(const file of ['scripts/hosting/media-sandbox-launch.c','scripts/hosting/media-sandbox-probe.c','scripts/hosting/prepare-media-sandbox-ci.mjs','scripts/hosting/run-media-sandbox-ci.mjs','scripts/hosting/media-sandbox-linux-canary.mts','scripts/hosting/media-sandbox-startup-diagnostic.mts','scripts/hosting/prepare-media-apparmor-ci.mjs','scripts/hosting/collect-media-apparmor-ci.mjs','src/lib/higgsfield-media-sandbox.ts','src/lib/higgsfield-media-inspection.ts','scripts/hosting/reference-worker-linux-canary.mts','scripts/hosting/media-sandbox-cgroup-observer.mjs','src/lib/higgsfield-reference-worker.ts','src/lib/higgsfield-references-protocol.ts','src/lib/higgsfield-reference-transport.ts'])sourceHashes[file]=digest(await readFile(source(config,file)));report.sourceHashes=sourceHashes;
+  checkpoint('host_source_pins');const sourceHashes:Record<string,string>={};for(const file of MEDIA_SANDBOX_SOURCE_FILES)sourceHashes[file]=digest(await readFile(source(config,file)));report.sourceHashes=sourceHashes;
   checkpoint('parent_cgroup_controls');const parentLimits:Record<string,string>={};for(const file of ['memory.max','memory.swap.max','pids.max','cpu.max'])parentLimits[file]=await text(join(config.serviceRoot,file));assert.deepEqual(parentLimits,{'memory.max':String(2*1024**3),'memory.swap.max':'0','pids.max':'256','cpu.max':'200000 100000'});report.aggregateParentLimits=parentLimits;
   checkpoint('conformance_profile');const events:MediaSandboxExitEvidence[]=[];report.adversarialEvents=events;const sandbox=await createLinuxMediaSandbox({...config.profiles.conformance,cgroupRoot:config.cgroupRoot,onExitEvidence:event=>events.push(event)});assert.equal(events.length,2);assert.ok(events.every(event=>event.drained));startingProfile=null;
   const limits=events[0].limits;
@@ -212,8 +215,12 @@ export async function runMediaSandboxCanary(config:Config){
   // Extra integration evidence is separate from the established ten boundary
   // checks and seven format descriptors. It cannot qualify/enroll a service.
   checkpoint('reference_worker_integration');const referenceReport=referenceWorkerIntegrationEvidence();report.referenceWorkerIntegration=referenceReport;
-  await runReferenceWorkerLinuxCanary({sandbox:real,profileSha256:config.profiles.real.expectedProfileSha256,fixtureRoot:config.fixtureRoot??resolve('tests/fixtures/media'),scratchParent:config.evidence,cgroupRoot:config.cgroupRoot,decoderEvents:realEvents},referenceReport);report.qualified=true;
- }catch(error){report.failureCode=code(error);report.failingCheck=report.activeCheck;if(startingProfile&&config.diagnostics!==false)report.startupDiagnostic=await(config.diagnosticScope==='archive-host-qualification'?diagnoseArchiveHostSandboxStartup(config,startingProfile):diagnoseMediaSandboxStartup(config,startingProfile));throw error;}finally{if(listener)await closed(listener);await writeFile(join(config.evidence,'qualification.json'),JSON.stringify(report,null,2)+'\n',{mode:0o600});}
+  await runReferenceWorkerLinuxCanary({sandbox:real,profileSha256:config.profiles.real.expectedProfileSha256,fixtureRoot:config.fixtureRoot??resolve('tests/fixtures/media'),scratchParent:config.evidence,cgroupRoot:config.cgroupRoot,decoderEvents:realEvents},referenceReport);
+  // Binary transformation is a separate capability receipt. Existing inspection
+  // qualification/enrollment cannot confer authority to prepare tenant images.
+  checkpoint('image_preparation_transform');
+  await runImagePreparationLinuxCanary({sandbox:real,profileSha256:config.profiles.real.expectedProfileSha256,fixtureRoot:config.fixtureRoot??resolve('tests/fixtures/media'),cgroupRoot:config.cgroupRoot,decoderEvents:realEvents},imageReport);report.qualified=true;
+ }catch(error){report.failureCode=code(error);report.failingCheck=report.activeCheck;if(startingProfile&&config.diagnostics!==false)report.startupDiagnostic=await(config.diagnosticScope==='archive-host-qualification'?diagnoseArchiveHostSandboxStartup(config,startingProfile):diagnoseMediaSandboxStartup(config,startingProfile));throw error;}finally{if(listener)await closed(listener);await writeFile(join(config.evidence,'qualification.json'),JSON.stringify(report,null,2)+'\n',{mode:0o600});await writeFile(join(config.evidence,'image-preparation-transform.json'),JSON.stringify(imageReport,null,2)+'\n',{mode:0o600});}
  console.log('Isolated Linux decoder qualified: boundary/resource/cleanup checks and all seven actual media formats passed.');
 }
 if(process.argv[1]&&/(?:^|[/\\])media-sandbox-linux-canary\.mts$/.test(process.argv[1])&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){void(async()=>{
