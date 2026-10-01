@@ -18,6 +18,7 @@ import {resolveHiggsfieldReferences,revalidateHiggsfieldReferences} from './higg
 import {bindHiggsfieldReferenceArguments} from './higgsfield-reference-arguments';
 import {classifyHiggsfieldModelRead,getHiggsfieldModelContract,listHiggsfieldModelContracts,recordHiggsfieldModelContracts,revalidateHiggsfieldModelContract,type HiggsfieldModelSnapshot} from './higgsfield-model-contract-db';
 import {prepareHiggsfieldModelCostArguments} from './higgsfield-model-contract';
+import {selectHiggsfieldModelRefresh} from './higgsfield-model-refresh';
 
 const callback='https://coatria.com/api/higgsfield/callback';
 type Credentials={metadata:HiggsfieldMetadata;client:HiggsfieldClient;token:HiggsfieldToken};
@@ -141,15 +142,17 @@ async function finish(request:Request){
  });
  return new Response(null,{status:303,headers:{Location:'https://coatria.com/#plugins','Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
 }
-export async function higgsfieldCredential(member:Membership){
+type CredentialAuthority=<T>(run:(db:PoolClient)=>Promise<T>)=>Promise<T>;
+async function higgsfieldCredentialFor(companyId:string,withAuthority:CredentialAuthority,assertConnection?:(row:Row)=>void){
  // Commit an unusable, secret-free fence before the rotating-token POST. A
  // crash after provider rotation must not leave the old refresh token reusable.
- const prepared=await memberMutation(member,true,async db=>{
-  const row=await connection(db,member.companyId,true),context={companyId:member.companyId,id:row.id,purpose:'oauth-connection' as const};
+ const prepared=await withAuthority(async db=>{
+  const row=await connection(db,companyId,true),context={companyId,id:row.id,purpose:'oauth-connection' as const};
+  assertConnection?.(row);
   const saved=openHiggsfieldSecret<Credentials>(row.sealed,context);
   if(+new Date(row.expires_at)>Date.now()+30000)return {ready:{row,token:saved.token.access_token}};
-  if(!saved.token.refresh_token){await db.query("UPDATE higgsfield_connections SET status='reconnect_required',sealed=NULL,revision=revision+1,updated_at=clock_timestamp() WHERE company_id=$1",[member.companyId]);return {error:'HIGGSFIELD_RECONNECT_REQUIRED' as const};}
-  await db.query("UPDATE higgsfield_connections SET status='reconnect_required',sealed=NULL,updated_at=clock_timestamp() WHERE company_id=$1",[member.companyId]);
+  if(!saved.token.refresh_token){await db.query("UPDATE higgsfield_connections SET status='reconnect_required',sealed=NULL,revision=revision+1,updated_at=clock_timestamp() WHERE company_id=$1",[companyId]);return {error:'HIGGSFIELD_RECONNECT_REQUIRED' as const};}
+  await db.query("UPDATE higgsfield_connections SET status='reconnect_required',sealed=NULL,updated_at=clock_timestamp() WHERE company_id=$1",[companyId]);
   return {refresh:{row,saved,context}};
  });
  if(prepared.ready)return prepared.ready;
@@ -158,12 +161,13 @@ export async function higgsfieldCredential(member:Membership){
  try{
   const fresh=await refreshHiggsfieldToken(saved.metadata,saved.client,saved.token.refresh_token!,transport);
   saved.token={...fresh,refresh_token:fresh.refresh_token??saved.token.refresh_token};
-  return await memberMutation(member,true,async db=>{
-   const current=(await db.query('SELECT * FROM higgsfield_connections WHERE company_id=$1 FOR UPDATE',[member.companyId])).rows[0];
+  return await withAuthority(async db=>{
+   const current=(await db.query('SELECT * FROM higgsfield_connections WHERE company_id=$1 FOR UPDATE',[companyId])).rows[0];
    if(!current||current.id!==row.id||current.revision!==row.revision||current.status!=='reconnect_required'||current.sealed!==null||current.connected_by!==row.connected_by)return {error:'HIGGSFIELD_RECONNECT_REQUIRED' as const};
-   if(!(await db.query("SELECT 1 FROM memberships WHERE company_id=$1 AND user_id=$2 AND role IN ('owner','admin') AND access_revoked_at IS NULL FOR SHARE",[member.companyId,current.connected_by])).rowCount)return {error:'HIGGSFIELD_RECONNECT_REQUIRED' as const};
+   assertConnection?.(current);
+   if(!(await db.query("SELECT 1 FROM memberships WHERE company_id=$1 AND user_id=$2 AND role IN ('owner','admin') AND access_revoked_at IS NULL FOR SHARE",[companyId,current.connected_by])).rowCount)return {error:'HIGGSFIELD_RECONNECT_REQUIRED' as const};
    const expiresAt=new Date(Date.now()+fresh.expires_in*1000).toISOString();
-   await db.query("UPDATE higgsfield_connections SET status='connected',sealed=$2,expires_at=$3,updated_at=clock_timestamp() WHERE company_id=$1 AND id=$4 AND revision=$5 AND status='reconnect_required' AND sealed IS NULL",[member.companyId,JSON.stringify(sealHiggsfieldSecret(saved,context)),expiresAt,row.id,row.revision]);
+   await db.query("UPDATE higgsfield_connections SET status='connected',sealed=$2,expires_at=$3,updated_at=clock_timestamp() WHERE company_id=$1 AND id=$4 AND revision=$5 AND status='reconnect_required' AND sealed IS NULL",[companyId,JSON.stringify(sealHiggsfieldSecret(saved,context)),expiresAt,row.id,row.revision]);
    // A successful routine refresh preserves reviewed generation proposals.
    return {row:{...current,status:'connected',expires_at:expiresAt},token:fresh.access_token};
   });
@@ -172,6 +176,51 @@ export async function higgsfieldCredential(member:Membership){
   // A response or commit may be uncertain; only a new user connection recovers it.
   return {error:'HIGGSFIELD_RECONNECT_REQUIRED' as const};
  }
+}
+export async function higgsfieldCredential(member:Membership){
+ return higgsfieldCredentialFor(member.companyId,run=>memberMutation(member,true,run));
+}
+/** Run outside the agent-tool transaction. The supplied server callback checks
+ * current token, scopes, sponsor, host and task authority under each transaction's
+ * locks; it is never constructed from an agent's request or a fake membership. */
+export async function higgsfieldAgentRefreshModels(companyId:string,modelId:string|undefined,authorize:(db:PoolClient)=>Promise<void>){
+ const withAuthority:CredentialAuthority=run=>transaction(async db=>{await authorize(db);const result=await run(db);await authorize(db);return result;});
+ const prepared=await withAuthority(async db=>{
+  const current=await connection(db,companyId);
+  if(modelId===undefined){if(!(await listHiggsfieldModelContracts(db,companyId,current)).refreshRequired)return null;}
+  else{
+   try{await getHiggsfieldModelContract(db,companyId,current,modelId);return null;}
+   catch(error){if(!(error instanceof ApiError)||error.code!=='HIGGSFIELD_MODEL_CONTRACT_CHANGED')throw error;}
+  }
+  return {connectionId:current.id,revision:current.revision,catalogSha256:digest(current.tools),read:selectHiggsfieldModelRefresh(current.tools,modelId)};
+ });
+ if(!prepared)return {refreshed:false};
+ await rateLimit(`higgsfield-models:${companyId}`,5,60);
+ const assertPrepared=(current:Row)=>{
+  if(current.id!==prepared.connectionId||current.revision!==prepared.revision||digest(current.tools)!==prepared.catalogSha256)fail(409,'The connection changed while reading models. Refresh again.','HIGGSFIELD_MODEL_CONTRACT_CHANGED');
+ };
+ const saved=await higgsfieldCredentialFor(companyId,withAuthority,assertPrepared);
+ if('error'in saved)fail(409,'Reconnect Higgsfield.','HIGGSFIELD_RECONNECT_REQUIRED');
+ const recheck=(current:Row)=>{
+  assertPrepared(current);
+  if(current.id!==saved.row.id||current.revision!==saved.row.revision||digest(current.tools)!==digest(saved.row.tools))fail(409,'The connection changed while reading models. Refresh again.','HIGGSFIELD_MODEL_CONTRACT_CHANGED');
+ };
+ const read=await withAuthority(async db=>{
+  const current=await connection(db,companyId);recheck(current);
+  const selected=selectHiggsfieldModelRefresh(current.tools,modelId);
+  if(digest(selected)!==digest(prepared.read))fail(409,'The model lookup changed. Refresh again.','HIGGSFIELD_MODEL_CONTRACT_CHANGED');
+  return selected;
+ });
+ let result:unknown;
+ try{result=await callHiggsfieldTool(saved.token,read.tool,read.arguments,transport);}
+ catch{fail(502,'The model metadata could not be refreshed. Try again later.','HIGGSFIELD_MODEL_REFRESH_UNAVAILABLE');}
+ await withAuthority(async db=>{
+  const current=await connection(db,companyId);recheck(current);
+  await recordHiggsfieldModelContracts(db,companyId,current,read.tool,read.arguments,result);
+ });
+ // Commit unsupported-model retirement before a later exact getter can fail.
+ // Only the normal authorized tool dispatch returns normalized cache metadata.
+ return {refreshed:true};
 }
 export async function proposeHiggsfieldRequest(client:PoolClient,actor:StudioActor,input:unknown){
  const data=parse(higgsfieldProposalInput,input);
