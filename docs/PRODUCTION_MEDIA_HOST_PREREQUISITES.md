@@ -37,7 +37,9 @@ again against that target's kernel, policy, UID/GID and delegated cgroups.
 The workflow publishes `coatria-linux-host-releases-<run-id>` only after the media
 lane, final export checks and cleanup succeed. Its retention is three days;
 preserve an approved copy and its independently recorded artifact digest before
-expiry. A failed or incomplete run has no accepted release transfer. Diagnostic
+expiry. A failed or incomplete media lane emits no completed release artifact.
+Approve a transfer only after the full workflow also succeeds; independent
+application, browser and scale failures still prevent release approval. Diagnostic
 reports remain in the separate media evidence artifact, including on failure.
 
 The release contains six component archives: `archive-host.tar.gz`,
