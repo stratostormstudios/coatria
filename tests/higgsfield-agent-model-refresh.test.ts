@@ -64,7 +64,9 @@ test('leased agent model refresh is an authorized bounded read with durable cred
   const tool=(args:Record<string,unknown>,options:{requestId?:string;leaseToken?:string}={})=>api('agent/tools/higgsfield_connection_get',{runId,leaseToken:options.leaseToken??leaseToken,requestId:options.requestId??randomUUID(),arguments:args});
   const cache=()=>query('SELECT * FROM higgsfield_model_contracts WHERE company_id=$1 ORDER BY model_id',[company]).then(r=>r.rows);
   const seed=()=>transaction(db=>recordHiggsfieldModelContracts(db,company,{id:connectionId,revision:1,tools},'models_get',{model_id:modelId},{structuredContent:observedImageModel}));
-  const expire=()=>query("UPDATE higgsfield_model_contracts SET observed_at=clock_timestamp()-interval '20 minutes',expires_at=clock_timestamp()-interval '5 minutes' WHERE company_id=$1",[company]);
+  // Both ends must use one instant: separate volatile clock reads can exceed
+  // the schema's exact 15-minute ceiling by a few microseconds on PostgreSQL.
+  const expire=()=>query("UPDATE higgsfield_model_contracts SET observed_at=statement_timestamp()-interval '20 minutes',expires_at=statement_timestamp()-interval '5 minutes' WHERE company_id=$1",[company]);
   const safe=(value:unknown)=>{const text=JSON.stringify(value);for(const secret of [access,refresh,rotatedAccess,rotatedRefresh,agentToken,leaseToken,privateProse])assert(!text.includes(secret),'Credentials and provider prose must not enter model context or cache');};
   return{company,sponsor,requester,connectionSponsor,agent,connectionId,runId,leaseToken,tool,api,cache,seed,expire,safe,reads,tools,privateProse,rotatedAccess,rotatedRefresh,setRead:(read:typeof onRead)=>{onRead=read;},setRefresh:(handler:typeof onRefresh)=>{onRefresh=handler;},counts:()=>({network,refreshes})};
  }
