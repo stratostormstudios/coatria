@@ -214,6 +214,8 @@ test('image preparation metadata routes preserve authentication, consent and ten
       assert.equal((await query('SELECT count(*)::int n FROM project_image_preparation_approvals WHERE company_id=$1',[f.company])).rows[0].n,0);
     });
     await t.test('OpenAPI publishes metadata/consent routes and exact external agent tool schemas',()=>{
+      const policy=(agentRuntimeOpenApi as any).components.schemas.StudioCoordinationPolicy;
+      assert.deepEqual(policy.properties.referencePreparationProfile.enum,['prepared_image_v1','original_image_v1']);
       const paths=agentRuntimeOpenApi.paths as Record<string,any>;
       for(const suffix of ['', '/{preparationId}','/{preparationId}/approve','/{preparationId}/revoke','/{preparationId}/reference'])assert(paths['/api/companies/{companyId}/image-preparations'+suffix]);
       const operation=paths['/api/agent/tools/project_image_preparation_propose'].post,schema=operation.requestBody.content['application/json'].schema;
