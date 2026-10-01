@@ -8,8 +8,12 @@ import {ApiError,hashToken} from '../src/lib/security';
 import {createProjectStorageGateway} from '../src/lib/project-storage-gateway';
 import {bindProjectStorage,createProjectStorageConnection,getProjectStorage,reserveProjectStorageUpload,accessProjectStorageVersion,revokeProjectStorageConnection,reauthorizeProjectStorageConnection,openProjectStorageCredentials} from '../src/lib/project-storage';
 import {projectStorageTransfer} from '../src/lib/project-storage-transfer';
-import {RunpodStorageError,type RunpodProjectStorage,type RunpodProjectStorageConfig,type RunpodMultipartUpload} from '../src/lib/project-storage-runpod';
+import {RunpodStorageError,runpodProjectRoot,type RunpodProjectStorage,type RunpodProjectStorageConfig,type RunpodMultipartUpload} from '../src/lib/project-storage-runpod';
 import type {ProjectStorageActor} from '../src/lib/project-storage-protocol';
+import * as preparation from '../src/lib/project-image-preparations';
+import * as preparationStorage from '../src/lib/project-image-preparation-storage';
+import {IMAGE_PREPARATION_RECIPE_HASH} from '../src/lib/higgsfield-image-preparation';
+import type {ProjectImagePreparationProcessor} from '../src/lib/project-image-preparations-protocol';
 
 const emulate=process.env.COATRIA_TEST_EMULATOR==='1',integration=process.env.COATRIA_INTEGRATION_DATABASE_URL;
 const sha=(bytes:Uint8Array|string)=>createHash('sha256').update(bytes).digest('hex');
@@ -31,10 +35,12 @@ test('storage gateway uses real scoped database grants and injected byte provide
  let stop:(()=>Promise<void>)|undefined;const previousFetch=globalThis.fetch;let outbound=0;globalThis.fetch=async()=>{outbound++;throw Error('Storage gateway tests must never contact a provider.');};
  const userId=randomUUID(),companies:string[]=[],projectIds:string[]=[];let userCreated=false;
  type Hooks={credentials?:typeof credentials;beforeCreate?:()=>Promise<void>;beforePart?:()=>Promise<void>;beforeComplete?:()=>Promise<void>;beforeRead?:()=>Promise<void>;read?:(versionId:string,body:Buffer)=>ReadableStream<Uint8Array>;corrupt?:boolean;failCreate?:boolean;failComplete?:boolean};
- async function fixture(hooks:Hooks={}){
+ async function fixture(hooks:Hooks={},imageProject=false){
   const companyId=randomUUID(),projectId=randomUUID();companies.push(companyId);projectIds.push(projectId);
   await query("INSERT INTO companies(id,name,slug,template) VALUES($1,'Storage gateway fixture',$2,'blank')",[companyId,companyId]);await query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'owner')",[companyId,userId]);await query("INSERT INTO studio_profiles(company_id,template_id,template_version,created_by) VALUES($1,'ai-production',1,$2)",[companyId,userId]);
-  const newProject=async(pid:string)=>query("INSERT INTO studio_projects(id,company_id,name,client_name,brief,spec,ai_policy,production_path,created_by) VALUES($1,$2,'File transport fixture','Internal','No cloud or provider operations.',$3,'allowed','higgsfield',$4)",[pid,companyId,JSON.stringify({width:128,height:128,fpsNumerator:24,fpsDenominator:1,format:'mp4',colorSpace:'Rec.709'}),userId]);await newProject(projectId);
+  const newProject=async(pid:string)=>imageProject
+   ?query("INSERT INTO studio_projects(id,company_id,name,client_name,brief,spec,ai_policy,production_path,created_by,contract_version,status,gates) VALUES($1,$2,'Image transport fixture','Internal','Synthetic control metadata only.',$3,'allowed','higgsfield',$4,2,'production',$5)",[pid,companyId,JSON.stringify({kind:'image',format:'png',width:96,height:64,color:{mode:'not_required'}}),userId,JSON.stringify(Object.fromEntries(['brief','estimate','production'].map(gate=>[gate,{decision:'approved',recordedBy:userId}])))] )
+   :query("INSERT INTO studio_projects(id,company_id,name,client_name,brief,spec,ai_policy,production_path,created_by) VALUES($1,$2,'File transport fixture','Internal','No cloud or provider operations.',$3,'allowed','higgsfield',$4)",[pid,companyId,JSON.stringify({width:128,height:128,fpsNumerator:24,fpsDenominator:1,format:'mp4',colorSpace:'Rec.709'}),userId]);await newProject(projectId);
   const actor={companyId,userId},connection=(await transaction(client=>createProjectStorageConnection(client,actor,{clientId:randomUUID(),name:'Synthetic storage credentials',region:'US-NC-2',volumeId:'fixture-volume',...credentials}))).connection;
   const bind=async(pid:string)=>transaction(client=>bindProjectStorage(client,actor,pid,{clientId:randomUUID(),revision:0,connectionId:connection.id}));await bind(projectId);
   const counts={create:0,part:0,complete:0,abort:0,read:0,close:0},objects=new Map<string,Buffer>(),parts=new Map<string,Map<number,Buffer>>(),configs:RunpodProjectStorageConfig[]=[];
@@ -66,6 +72,45 @@ test('storage gateway uses real scoped database grants and injected byte provide
   const row=(uploadId:string)=>query('SELECT * FROM project_storage_uploads WHERE company_id=$1 AND id=$2',[companyId,uploadId]).then(result=>result.rows[0]);
   return {actor,companyId,projectId,connection,gateway,providerFactory,counts,objects,configs,reserve,request,action,part,json,uploaded,readGrant,revoke,row,newProject,bind,hooks,leasedAgent};
  }
+ // Actual preparation control/storage APIs and migration guards, with synthetic
+ // transform/store metadata. This fixture is not native decode or S3 proof.
+ async function verifyingPreparation(f:Awaited<ReturnType<typeof fixture>>){
+  const {companyId,projectId,actor}=f,shotId=randomUUID(),taskId=randomUUID(),workId=randomUUID(),fileId=randomUUID(),versionId=randomUUID(),sourceSha=sha(versionId);
+  await query("INSERT INTO studio_shots(id,company_id,project_id,code,description,frame_start,frame_end,handles,disciplines,media_kind) VALUES($1,$2,$3,'QUEUE','Synthetic coexistence fixture',NULL,NULL,NULL,'[]','image')",[shotId,companyId,projectId]);
+  await query("INSERT INTO tasks(id,company_id,title,description,created_by,assignee_id) VALUES($1,$2,'Prepare an image','Preserve original bytes in a separate derivative',$3,$3)",[taskId,companyId,userId]);
+  await query("INSERT INTO studio_work_items(id,company_id,project_id,logical_key,task_id,stage,role_key,execution,shot_id) VALUES($1,$2,$3,'queue-preparation',$4,'references','ingest','agent',$5)",[workId,companyId,projectId,taskId,shotId]);
+  await query("INSERT INTO studio_role_bindings(company_id,role_key,human_id) VALUES($1,'ingest',$2)",[companyId,userId]);
+  const binding=(await transaction(db=>getProjectStorage(db,actor,projectId))).binding!;
+  await query("INSERT INTO project_storage_files(id,company_id,project_id,binding_id,name,name_key,created_by) VALUES($1,$2,$3,$4,'original.png','original.png',$5)",[fileId,companyId,projectId,binding.id,userId]);
+  await query("INSERT INTO project_storage_versions(id,company_id,project_id,file_id,version,bytes,sha256,content_type,object_key,created_by) VALUES($1,$2,$3,$4,1,1000,$5,'image/png',$6,$7)",[versionId,companyId,projectId,fileId,sourceSha,runpodProjectRoot(companyId,projectId)+'objects/'+versionId,userId]);
+  await query("INSERT INTO project_storage_verifications(company_id,project_id,version_id,bytes,sha256,provider_etag,gateway_receipt_id) VALUES($1,$2,$3,1000,$4,'synthetic-source-etag',$5)",[companyId,projectId,versionId,sourceSha,randomUUID()]);
+  const processor:ProjectImagePreparationProcessor={id:randomUUID(),location:'Synthetic queue fixture',transport:'linux_binary_v1',qualificationSha256:'a'.repeat(64),releaseSha256:'b'.repeat(64),profileSha256:'c'.repeat(64),sourceCommit:'d'.repeat(40),closureSha256:'e'.repeat(64),recipeSha256:IMAGE_PREPARATION_RECIPE_HASH,expiresAt:new Date(Date.now()+3600000).toISOString()};
+  const options:preparation.ProjectImagePreparationOptions={runtime:async()=>structuredClone(processor)};
+  const proposed=(await transaction(db=>preparation.proposeProjectImagePreparation(db,actor,{clientId:randomUUID(),projectId,projectRevision:1,workItemId:workId,sourceVersionId:versionId,sourceSha256:sourceSha,sourceBytes:1000,destinationFolderId:null,destinationName:'prepared.png',purpose:'Synthetic verification queue fixture'}))).preparation;
+  await transaction(db=>preparation.approveProjectImagePreparation(db,actor,proposed.id,{clientId:randomUUID(),revision:proposed.revision,requestHash:proposed.requestHash,processorId:processor.id,qualificationSha256:processor.qualificationSha256,expiresInMinutes:30,maxCostMicrousd:10000,processingConsent:true,derivativeWriteConsent:true,adoptionConsent:true},options));
+  const lease=await transaction(db=>preparation.claimProjectImagePreparation(db,{companyId,projectIds:[projectId]},options));assert.ok(lease);
+  const transform=await transaction(db=>preparation.beginProjectImagePreparationPhase(db,lease,'transform',options));
+  await transaction(db=>preparation.completeProjectImagePreparationPhase(db,lease,transform.actionId,{operation:'transform',sourceVersionId:versionId,sourceSha256:sourceSha,sourceBytes:1000,source:{format:'png',width:96,height:64,orientation:1},recipeSha256:IMAGE_PREPARATION_RECIPE_HASH,processor,output:{bytes:250,sha256:'f'.repeat(64),width:96,height:64,format:'png',pixelFormat:'rgba8',metadataRemoved:true}},options));
+  const output=await transaction(db=>preparationStorage.reserveProjectImagePreparationOutput(db,lease,options));
+  for(const operation of ['initiate','part','complete'] as const){
+   const intent=await transaction(db=>preparationStorage.beginProjectImagePreparationStore(db,lease,operation,options));
+   const result=operation==='initiate'?{operation,descriptor:{scope:sha(JSON.stringify(['US-NC-2','fixture-volume',runpodProjectRoot(companyId,projectId)])),versionId:output.versionId,uploadId:'synthetic-multipart-'+output.uploadId,bytes:output.bytes,partBytes:output.partBytes}}:operation==='part'?{operation,part:{partNumber:1,etag:'"synthetic-part"',bytes:output.bytes},sha256:output.sha256}:{operation,versionId:output.versionId,etag:'"synthetic-prepared"'};
+   await transaction(db=>preparationStorage.completeProjectImagePreparationStore(db,lease,intent.actionId,result,options));
+  }
+  const authorize=()=>transaction(db=>preparation.authorizeProjectImagePreparation(db,lease,options));
+  async function snapshot(){
+   const rows:Record<string,unknown>={};
+   for(const [table,column,value] of [
+    ['project_image_preparations','id',proposed.id],['project_image_preparation_approvals','preparation_id',proposed.id],['project_image_preparation_allocations','preparation_id',proposed.id],['project_image_preparation_receipts','preparation_id',proposed.id],['project_image_preparation_derivations','preparation_id',proposed.id],
+    ['project_storage_uploads','id',output.uploadId],['project_storage_upload_parts','upload_id',output.uploadId],['project_storage_access_receipts','upload_id',output.uploadId],['project_storage_verifications','version_id',output.versionId],
+    ['project_storage_versions','id',versionId],['project_storage_verifications','version_id',versionId],['project_storage_versions','id',output.versionId],['project_storage_files','id',output.fileId],
+   ])rows[table+':'+value]=(await query(`SELECT row_to_json(r) AS value FROM ${table} r WHERE company_id=$1 AND ${column}=$2 ORDER BY row_to_json(r)::text`,[companyId,value])).rows;
+   return rows;
+  }
+  assert.equal((await authorize()).r.status,'verifying');
+  assert.equal((await f.row(output.uploadId)).verification_grant_id,null);
+  return {output,authorize,snapshot};
+ }
  try{
   if(emulate){const{PGlite}=await import('@electric-sql/pglite'),{PGLiteSocketServer}=await import('@electric-sql/pglite-socket'),db=await PGlite.create();stop=async()=>{await db.close();};for(const file of(await readdir('database')).filter(file=>/^\d.*\.sql$/.test(file)).sort())await db.exec(await readFile('database/'+file,'utf8'));const socket=new PGLiteSocketServer({db,host:'127.0.0.1',port:0,maxConnections:1});stop=async()=>{try{await socket.stop();}finally{await db.close();}};await socket.start();const url=new URL('postgresql://'+socket.getServerConn()+'/postgres');url.username='postgres';url.password='postgres';process.env.DATABASE_URL=url.href;}
   await query('INSERT INTO users(id,name,email,password_hash) VALUES($1,$2,$3,$4)',[userId,'Storage gateway fixture',userId+'@example.invalid','fixture']);
@@ -80,6 +125,26 @@ test('storage gateway uses real scoped database grants and injected byte provide
    const f=await fixture(),saved=await f.reserve();await f.json(await f.action(saved.upload,'start'));await f.json(await f.action(saved.upload,'start'));assert.equal(f.counts.create,1);const first=await f.json(await f.part(saved.upload,saved.body));assert.equal(first.sha256,sha(saved.body));assert.equal((await f.json(await f.part(saved.upload,saved.body))).replayed,true);assert.equal((await f.json(await f.part(saved.upload,Buffer.from('xxxxxx')),409)).code,'IDEMPOTENCY_CONFLICT');assert.equal(f.counts.part,1);
    await assert.rejects(f.readGrant(saved.upload.versionId),(error:unknown)=>error instanceof ApiError&&error.status===404);await f.json(await f.action(saved.upload,'complete'),202);await f.json(await f.action(saved.upload,'complete'),202);assert.equal(f.counts.complete,1);assert.equal(await f.gateway.verifyNext(),true);assert.equal(await f.gateway.verifyNext(),false);assert.equal((await f.row(saved.upload.id)).status,'ready');const verification=(await query('SELECT * FROM project_storage_verifications WHERE company_id=$1 AND version_id=$2',[f.companyId,saved.upload.versionId])).rows[0];assert.equal(verification.sha256,sha(saved.body));
    const access=await f.readGrant(saved.upload.versionId),response=await f.gateway.handle(new Request(access.url,{headers:{...access.headers,Origin:origin,Range:'bytes=2-4'}}));assert.equal(response.status,206);assert.equal(response.headers.get('Content-Range'),'bytes 2-4/6');assert.equal(response.headers.get('Cache-Control'),'private, no-store');assert.equal(await response.text(),'cde');assert.equal(response.headers.get('X-Content-SHA256'),sha(saved.body));await f.json(await f.action(saved.upload,'cancel'),409);
+  });
+
+  await t.test('generic verification overlaps a live preparation without claiming it or blocking ordinary uploads',async()=>{
+   const entered=deferred(),release=deferred(),f=await fixture({beforeRead:async()=>{entered.resolve();await release.promise;}},true);
+   // Reserve first so preparation records the current binding revision. Complete
+   // the ordinary upload later, placing the preparation first in queue order.
+   const saved=await f.reserve(),prepared=await verifyingPreparation(f);
+   await f.json(await f.action(saved.upload,'start'));await f.json(await f.part(saved.upload,saved.body));await f.json(await f.action(saved.upload,'complete'),202);
+   const head=(await query("SELECT id FROM project_storage_uploads WHERE company_id=$1 AND status='verifying' ORDER BY updated_at,id LIMIT 1",[f.companyId])).rows[0];assert.equal(head.id,prepared.output.uploadId);
+   const before=await prepared.snapshot();let settled=false;
+   const verification=f.gateway.verifyNext().finally(()=>{settled=true;});
+   try{
+    await bounded(Promise.race([entered.promise,verification.then(()=>{throw Error('Verifier settled before reading the ordinary upload');})]));
+    assert.equal(settled,false);assert.equal((await f.row(saved.upload.id)).status,'verifying');assert.ok((await f.row(saved.upload.id)).action_id);
+    assert.deepEqual(await prepared.snapshot(),before);assert.equal((await prepared.authorize()).r.status,'verifying');assert.equal(f.counts.read,1);
+   }finally{release.resolve();await verification;}
+   assert.equal((await f.row(saved.upload.id)).status,'ready');assert.equal(await f.gateway.verifyNext(),false);
+   assert.deepEqual(await prepared.snapshot(),before);assert.equal((await prepared.authorize()).r.status,'verifying');assert.equal(f.counts.read,1);
+   assert.equal(Number((await query('SELECT count(*) AS n FROM project_storage_verifications WHERE company_id=$1 AND version_id=$2',[f.companyId,saved.upload.versionId])).rows[0].n),1);
+   assert.equal(Number((await query('SELECT count(*) AS n FROM project_storage_verifications WHERE company_id=$1 AND version_id=$2',[f.companyId,prepared.output.versionId])).rows[0].n),0);
   });
 
   await t.test('reauthorization rejects old grants, upload replay and pending verification while preserving completed bytes',async()=>{
@@ -228,7 +293,7 @@ test('storage gateway uses real scoped database grants and injected byte provide
    restrictedUrl.username=role;restrictedUrl.password=password;
    let roleCreated=false,restrictedPool:Pool|undefined;
    try{
-    const f=await fixture(),agent=await f.leasedAgent(),saved=await f.reserve(Buffer.from('abcdef'),{},f.projectId,agent.actor);
+    const f=await fixture({},true),agent=await f.leasedAgent(),saved=await f.reserve(Buffer.from('abcdef'),{},f.projectId,agent.actor),prepared=await verifyingPreparation(f),preparationBefore=await prepared.snapshot();
     await query(`CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`);roleCreated=true;
     await query((await readFile('database/storage-gateway-permissions.sql','utf8')).replaceAll('coatria_storage_gateway_v1',role));
     restrictedPool=new Pool({connectionString:restrictedUrl.href,max:1,connectionTimeoutMillis:10000,statement_timeout:15000});
@@ -237,7 +302,9 @@ test('storage gateway uses real scoped database grants and injected byte provide
     await identity();
     await query('SELECT company_id,child_run_id FROM studio_generated_followups WHERE false');
     await query('SELECT company_id,child_run_id FROM studio_reference_generation_followups WHERE false');
+    assert.deepEqual((await query('SELECT company_id,upload_id FROM project_image_preparation_allocations WHERE company_id=$1',[f.companyId])).rows,[{company_id:f.companyId,upload_id:prepared.output.uploadId}]);
     await f.json(await f.action(saved.upload,'start'));await f.json(await f.part(saved.upload,saved.body));await f.json(await f.action(saved.upload,'complete'),202);assert.equal(await f.gateway.verifyNext(),true);assert.equal((await f.row(saved.upload.id)).status,'ready');
+    assert.equal(await f.gateway.verifyNext(),false);assert.equal((await f.row(prepared.output.uploadId)).status,'verifying');assert.equal((await f.row(prepared.output.uploadId)).action_id,null);
     for(const sql of [
      "UPDATE memberships SET role='owner' WHERE false",
      "UPDATE agents SET capabilities='[]'::jsonb WHERE false",
@@ -256,12 +323,19 @@ test('storage gateway uses real scoped database grants and injected byte provide
      'SELECT * FROM studio_reference_generation_followups WHERE false',
      'SELECT handoff_id FROM studio_reference_generation_followups WHERE false',
      'SELECT proposal_request_id FROM studio_reference_generation_followups WHERE false',
+     'SELECT preparation_id FROM project_image_preparation_allocations WHERE false',
+     'SELECT * FROM project_image_preparations WHERE false',
+     'SELECT * FROM project_image_preparation_approvals WHERE false',
+     'SELECT * FROM project_image_preparation_receipts WHERE false',
+     'SELECT * FROM project_image_preparation_derivations WHERE false',
+     'UPDATE project_image_preparation_allocations SET upload_id=upload_id WHERE false',
+     'DELETE FROM project_image_preparation_allocations WHERE false',
      'DELETE FROM project_storage_versions WHERE false',
      `CREATE ROLE ${role}_escalated NOLOGIN`
     ]){await identity();await assert.rejects(query(sql),{code:'42501'},sql);await identity();}
     // Exercise replacement independently of the driver's current error policy.
     const oldPid=await identity(),connection=await restrictedPool.connect();connection.release(true);assert.notEqual(await identity(),oldPid);
-    (globalThis as any).coatriaPool=ownerPool;const access=await f.readGrant(saved.upload.versionId,agent.actor);(globalThis as any).coatriaPool=restrictedPool;await identity();
+    (globalThis as any).coatriaPool=ownerPool;assert.deepEqual(await prepared.snapshot(),preparationBefore);assert.equal((await prepared.authorize()).r.status,'verifying');const access=await f.readGrant(saved.upload.versionId,agent.actor);(globalThis as any).coatriaPool=restrictedPool;await identity();
     const response=await f.gateway.handle(new Request(access.url,{headers:access.headers}));assert.equal(response.status,200);assert.equal(await response.text(),saved.body.toString());assert.equal(f.counts.create,1);assert.equal(f.counts.part,1);assert.equal(f.counts.complete,1);
    }finally{
     (globalThis as any).coatriaPool=ownerPool;await restrictedPool?.end();if(roleCreated){await query(`DROP OWNED BY ${role}`);await query(`DROP ROLE ${role}`);}

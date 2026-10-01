@@ -6,7 +6,7 @@ export const PROJECT_STORAGE_GATEWAY_ROLE='coatria_storage_gateway_v1';
 type Db={query(sql:string,values?:unknown[]):Promise<{rows:Record<string,unknown>[]}>};
 type Privilege='SELECT'|'INSERT'|'UPDATE'|'REFERENCES';
 type Contract=Partial<Record<Privilege,'*'|readonly string[]>>;
-const contract:Readonly<Record<string,Contract>>={
+export const PROJECT_STORAGE_GATEWAY_CONTRACT:Readonly<Record<string,Contract>>={
  schema_migrations:{"SELECT":"*"},
  companies:{"SELECT":"*","UPDATE":["created_at"]},
  memberships:{"SELECT":"*","UPDATE":["joined_at"]},
@@ -43,6 +43,7 @@ const contract:Readonly<Record<string,Contract>>={
  project_storage_upload_parts:{"SELECT":"*","INSERT":"*"},
  project_storage_verifications:{"SELECT":"*","INSERT":"*"},
  project_storage_access_receipts:{"SELECT":"*"},
+ project_image_preparation_allocations:{SELECT:['company_id','upload_id']},
  studio_host_credentials:{"SELECT":["company_id","agent_id","host_id","installation_id","token_hash","revoked_at","expires_at","host_epoch","installation_revision","enrolled_by"]},
  studio_generated_followups:{"SELECT":["company_id","child_run_id"]},
  studio_reference_generation_followups:{"SELECT":["company_id","child_run_id"]},
@@ -66,7 +67,7 @@ const contract:Readonly<Record<string,Contract>>={
  higgsfield_job_outputs:{"SELECT":["company_id","project_id","id","job_id","locator_identity"]},
  higgsfield_archive_fetches:{"SELECT":["company_id","project_id","archive_id","locator_identity","bytes","sha256"]},
 };
-const migrations=[
+export const PROJECT_STORAGE_GATEWAY_MIGRATIONS=[
  '001_initial.sql','002_calls.sql','003_agent_submission_summary.sql','004_identity_and_review_boundaries.sql','005_personal_avatars.sql','006_presence_interactions.sql',
  '007_conversations.sql','008_agent_runs.sql','009_agent_tools.sql','010_plugin_installations.sql','011_agent_missions.sql','012_studio.sql','013_studio_execution.sql',
  '014_studio_staffing.sql','015_studio_hosting.sql','016_studio_media.sql','017_studio_coordination.sql','018_studio_review_policy.sql','019_studio_host_provisioning.sql',
@@ -94,7 +95,9 @@ function fail(code:ProjectStorageGatewayPreflightError['code']):never{throw new 
 const userSchema="n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname !~ '^pg_(toast|temp)'";
 const privileges:Privilege[]=['SELECT','INSERT','UPDATE','REFERENCES'];
 
-export async function assertProjectStorageGatewayDatabase(db:Db){
+/** Internal server composition hook. Public startup always uses the fixed
+ * default wrapper below; never accept this contract from a request or config. */
+export async function assertProjectStorageGatewayDatabaseContract(db:Db,contract:Readonly<Record<string,Contract>>,migrations:readonly string[]){
  try{
   const identity=(await db.query(`SELECT current_user::text AS current_user,session_user::text AS session_user,
    r.rolcanlogin,r.rolsuper,r.rolcreatedb,r.rolcreaterole,r.rolreplication,r.rolbypassrls,
@@ -147,7 +150,11 @@ export async function assertProjectStorageGatewayDatabase(db:Db){
    WHERE ${userSchema} AND (p.proowner=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=current_user)
     OR p.prosecdef AND pg_catalog.has_function_privilege(current_user,p.oid,'EXECUTE')) LIMIT 1`)).rows;
   if(escaped.length)fail('STORAGE_DB_PRIVILEGES');
-  return {status:'passed' as const,role:PROJECT_STORAGE_GATEWAY_ROLE,contractVersion:2 as const,migrationFloor:49 as const,checkedMigrations:migrations.length,
+  return {status:'passed' as const,role:PROJECT_STORAGE_GATEWAY_ROLE,checkedMigrations:migrations.length,
    boundary:'Authenticated dedicated LOGIN, role attributes/memberships, database/schema creation and ownership, effective non-system relation/column grants and grant options, sequence access, and owned or callable SECURITY DEFINER non-system functions.'};
  }catch(error){if(error instanceof ProjectStorageGatewayPreflightError)throw error;fail('STORAGE_DB_CHECK_FAILED');}
+}
+
+export async function assertProjectStorageGatewayDatabase(db:Db){
+ return {...await assertProjectStorageGatewayDatabaseContract(db,PROJECT_STORAGE_GATEWAY_CONTRACT,PROJECT_STORAGE_GATEWAY_MIGRATIONS),contractVersion:2 as const,migrationFloor:49 as const};
 }
