@@ -2,13 +2,41 @@
 
 ## Status and intended result
 
-This document specifies the next stage after [managed prepared-image references](HIGGSFIELD_REFERENCES.md). It is an architecture and acceptance contract, not evidence that automatic preparation is deployed, qualified on a live host, or enabled for a company. Existing reference sharing remains disabled without its separately qualified runtime. This work does not activate workers, provision resources, change existing agent grants, or authorize provider spending.
+This document specifies the next stage after [managed prepared-image references](HIGGSFIELD_REFERENCES.md). M1 now has a native fixture implementation and real pixel tests, described below. M2–M6 remain outstanding: automatic preparation is not deployed, qualified on a live host, or enabled for a company. Existing reference sharing remains disabled without its separately qualified runtime. This work does not activate workers, provision resources, change existing agent grants, or authorize provider spending.
 
 The intended result is: choose an exact original image already in project storage, create a bounded derivative with verified metadata removal, save it as a separate verified project-storage version, review that exact derivative, then use the existing finite Higgsfield sharing approval. The original remains unchanged. Preparing an image is not permission to share it with Higgsfield, approve its creative content, generate paid media, or accept a client delivery.
 
 The source of truth for implementation status is the completed milestones and their recorded evidence, not a planned API name or a mocked successful response.
 
 The accompanying prepared-image inspection work is a separate, earlier slice: an explicitly selected dispatch may establish bounded inspection authority for an image that is already prepared. It does not implement the transformation, metadata-removal proof, derivative storage publication, or processing authorization specified below. An inspection result still describes the selected bytes, and the later Higgsfield sharing consent still covers those bytes unchanged.
+
+### Implemented M1 boundary
+
+[`higgsfield-image-preparation.ts`](../src/lib/higgsfield-image-preparation.ts) exposes `prepareReferenceImage` for native fixtures only. It requires `nativeTestMode:true`, an absolute FFmpeg path and its exact SHA-256; it always refuses `NODE_ENV=production`. No application route, agent tool, storage writer or production executor calls it. A native executable hash is test reproducibility evidence, not OS isolation or an immutable production binary guarantee.
+
+The versioned [policy](../src/lib/higgsfield-image-preparation-policy.ts) fixes 32 MiB / 8192 pixels per dimension / 32,000,000 source pixels, a 2048-pixel output long edge without enlargement, nearest-pixel aspect-ratio rounding, RGBA8 PNG and a 10 MiB output ceiling. The 30-second deadline includes binary verification, input checking, transformation and final validation; callers can only shorten it. One attempt is allowed. FFmpeg uses one codec/filter thread, a 256 MiB per-allocation limit and 64 KiB diagnostic bound. These local limits do not cap aggregate process memory; M5 must provide the actual OS boundary.
+
+The [source parser](../src/lib/higgsfield-image-preparation-source.ts) accepts:
+
+- Noninterlaced 8-bit PNG: grayscale, RGB, palette, grayscale-alpha and RGBA, including valid palette/transparency ordering. Standard sRGB, gamma 45455 and canonical sRGB chromaticities are accepted; other color declarations are rejected.
+- Three-component 8-bit baseline or progressive JPEG, with supported ordinary JFIF/Adobe RGB or YCbCr declarations. CMYK, ICC and Photoshop profile payloads are rejected.
+- Still WebP VP8/VP8L, including supported extended alpha, EXIF and XMP. Animation, ICC and unknown chunk families are rejected.
+
+EXIF orientation 1–8 is parsed from bounded classic TIFF directories and baked explicitly into pixels before resizing. Unsupported or ambiguous EXIF graphs are rejected. Untagged pixels are assumed sRGB; this implementation does **not** convert arbitrary ICC profiles. XMP/text are descriptive metadata and are discarded, not used to change pixel interpretation.
+
+The selected original is checked for exact length/hash and regular-file identity, copied into an exclusive private scratch file, and rechecked after transformation. Only the snapshot's read-only descriptor reaches FFmpeg. Frame side data is deleted explicitly—`-map_metadata -1` alone was demonstrated to preserve EXIF. After conversion, inherited color tags are cleared to prevent ancillary color chunks. The original is never written. Binary stdout is bounded and never converted to UTF-8 or put into command logs. Only fixed JPEG legacy-range and WebP skipped-XMP diagnostics are accepted; all other warnings fail.
+
+The separate [output validator](../src/lib/higgsfield-image-preparation-png.ts) requires literal chunk names, correct CRCs/order, exact expected dimensions, RGBA8, one complete bounded zlib stream and legal pixel-row filters. It removes only a valid encoder-added `pHYs` density chunk and then validates again. Final bytes contain only `IHDR`, contiguous `IDAT`, and `IEND`, with no trailing bytes. A process exit code or caller's metadata assertion cannot bypass this check. Failure to close/remove scratch state returns a fixed error instead of a successful result or private path.
+
+Real synthetic fixtures independently decode the result pixels: resize/no enlargement, all eight JPEG orientations, progressive JPEG, rotated PNG/WebP, all supported PNG pixel types, alpha, standard sRGB, and real EXIF/GPS/XMP removal. Adversarial cases cover malformed containers, profiles, CRC-valid high-bit aliases, compressed-stream tails/bombs, returned unsanitized source bytes, source/pin mismatches, production refusal, deadlines, cancellation and cleanup failures. Run them with a trusted fd-capable FFmpeg binary:
+
+```text
+COATRIA_TEST_FFMPEG_PATH=<absolute trusted FFmpeg path>
+node --import tsx --test tests/higgsfield-image-preparation*.test.ts
+node node_modules/typescript/bin/tsc --noEmit
+```
+
+These tests prove the local transformation and validation layer. They do not establish derivative storage verification, agent processing authority, production containment, remote binary transport, Higgsfield sharing, or a live studio delivery. Those remain M2–M6.
 
 ## Existing foundations and limits
 
