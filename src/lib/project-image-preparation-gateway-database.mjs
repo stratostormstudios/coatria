@@ -1,6 +1,6 @@
 /** Explicit opt-in trusted gateway extension. No grants or runtime activation.
  * The ordinary storage preflight continues to reject this added authority. */
-import {PROJECT_STORAGE_GATEWAY_ROLE,PROJECT_STORAGE_GATEWAY_CONTRACT,PROJECT_STORAGE_GATEWAY_MIGRATIONS,assertProjectStorageGatewayDatabaseContract} from './project-storage-preflight.js';
+import {PROJECT_STORAGE_GATEWAY_ROLE,PROJECT_STORAGE_GATEWAY_CONTRACT,PROJECT_STORAGE_GATEWAY_MIGRATIONS,assertProjectStorageGatewayDatabaseContract} from './project-storage-preflight';
 import {IMAGE_PREPARATION_STATE_GUARDS} from './project-image-preparation-database.mjs';
 
 export const IMAGE_PREPARATION_GATEWAY_DELTA={

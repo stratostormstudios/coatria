@@ -212,6 +212,15 @@ for(const postgres of [false,true])test(`${postgres?'PostgreSQL':'PGlite'} trust
   await t.test('role preflight, price drift and preset drift fail before any provider POST',async()=>{
    for(const fault of ['role','price','preset'] as const){const a=await fixture(),p=(await a.plan()).provision,cloud=provider();await a.start(p);if(fault==='price')cloud.setPrice(.04);if(fault==='preset'){a.entries[0].maxHourlyMicrousd=70000;install();}await reconcileTrustedService(p.id,{fetch:cloud.fetch,verifyDatabase:fault==='role'?async()=>{throw Error(secrets.archive);}:verifiedDatabase});assert.equal(cloud.creates(),0);assert.equal((await a.get(p.id)).phase,fault==='preset'?'stopped':'failed');assert(!JSON.stringify(await a.get(p.id)).includes(secrets.archive));}
   });
+  await t.test('gateway admission carries the exact resolved opt-in configuration to its database verifier',async()=>{
+   for(const enabled of [false,true]){
+    const a=await fixture(),entry=a.entries[1];if(enabled){entry.configuration={...(entry.configuration as Record<string,unknown>),imagePreparation:{version:1,maxTransfers:2}};entry.configurationHash=trustedServiceHash(entry.configuration);install();}
+    // Durable selection, not request headers or ambient mode flags, selects it.
+    await selectRuntime(a,entry);const p=(await a.plan('gateway')).provision,cloud=provider();await a.start(p);let calls=0;
+    await reconcileTrustedService(p.id,{fetch:cloud.fetch,verifyDatabase:async(service,url,companyId,configuration)=>{calls++;await verifiedDatabase(service,url);assert.equal(companyId,a.companyId);assert.deepEqual(configuration,entry.configuration);assert.equal(trustedServiceHash(configuration),p.plan.preset.configurationHash);}});
+    assert.equal(calls,1);assert.equal(cloud.creates(),1);assert.equal((await a.get(p.id)).phase,'running');
+   }
+  });
   await t.test('archive and gateway regional capacity block submission without refunding the reservation',async()=>{
    for(const service of ['archive','gateway'] as const)for(const [capacity,expected] of [[{},'SERVICE_CAPACITY_UNCONFIRMED'],[{availability:'NONE'},'SERVICE_CAPACITY_UNAVAILABLE'],[{availability:'HIGH',dataCenters:[{id:'US-TX-3',availability:'HIGH'}]},'SERVICE_CAPACITY_UNAVAILABLE']] as const){
     const a=await fixture(),p=(await a.plan(service)).provision;await a.start(p);const cloud=provider(),original=cloud.fetch;

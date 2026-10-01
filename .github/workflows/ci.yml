@@ -16,7 +16,7 @@ jobs:
     # A VM is required: an ordinary job container cannot delegate host cgroups or
     # prove the same user/pid/net namespace boundary as the intended worker host.
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     services:
       postgres:
         # Disposable local metadata only; these credentials never enter the
@@ -43,9 +43,9 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - name: Typecheck media qualification and diagnostic modules
-        run: node node_modules/typescript/bin/tsc --noEmit --allowJs --allowImportingTsExtensions --strict --skipLibCheck --target ES2022 --module esnext --moduleResolution bundler --esModuleInterop scripts/hosting/media-sandbox-linux-canary.mts scripts/hosting/media-sandbox-startup-diagnostic.test.mts scripts/hosting/reference-worker-linux-canary.test.mts scripts/hosting/image-preparation-linux-canary.test.mts scripts/hosting/run-archive-host.mts scripts/hosting/qualify-reference-host.mts scripts/hosting/register-reference-host.mts tests/archive-host-package.test.ts tests/reference-host-package.test.ts tests/reference-host-qualification.test.ts tests/reference-host-enrollment.test.ts tests/reference-enrollment-transaction.test.ts tests/reference-enrollment-postgres.test.ts
+        run: node node_modules/typescript/bin/tsc --noEmit --allowJs --allowImportingTsExtensions --strict --skipLibCheck --target ES2022 --module esnext --moduleResolution bundler --esModuleInterop scripts/hosting/media-sandbox-linux-canary.mts scripts/hosting/media-sandbox-startup-diagnostic.test.mts scripts/hosting/reference-worker-linux-canary.test.mts scripts/hosting/image-preparation-linux-canary.test.mts scripts/hosting/run-archive-host.mts scripts/hosting/qualify-reference-host.mts scripts/hosting/qualify-image-preparation-host.mts scripts/hosting/run-image-preparation-worker.mts scripts/hosting/register-reference-host.mts tests/archive-host-package.test.ts tests/reference-host-package.test.ts tests/reference-host-qualification.test.ts tests/image-preparation-host-qualification.test.ts tests/image-preparation-host-package.test.ts tests/image-preparation-runner.test.ts tests/reference-host-enrollment.test.ts tests/reference-enrollment-transaction.test.ts tests/reference-enrollment-postgres.test.ts
       - name: Test bounded diagnostic classification and fail-closed invocation
-        run: node --import tsx --test scripts/hosting/media-sandbox-startup-diagnostic.test.mts scripts/hosting/reference-worker-linux-canary.test.mts scripts/hosting/image-preparation-linux-canary.test.mts scripts/hosting/media-apparmor-ci.test.mjs scripts/hosting/reference-host-ci.test.mjs scripts/hosting/reference-enrollment-ci.test.mjs
+        run: node --import tsx --test scripts/hosting/media-sandbox-startup-diagnostic.test.mts scripts/hosting/reference-worker-linux-canary.test.mts scripts/hosting/image-preparation-linux-canary.test.mts scripts/hosting/media-apparmor-ci.test.mjs scripts/hosting/reference-host-ci.test.mjs scripts/hosting/image-preparation-host-ci.test.mjs scripts/hosting/reference-enrollment-ci.test.mjs
       - name: Prepare pinned closure and one capped delegated service
         run: |
           sudo env CI=true COATRIA_TEST_UID="$(id -u)" COATRIA_TEST_GID="$(id -g)" GITHUB_ENV="$GITHUB_ENV" "$(command -v node)" scripts/hosting/prepare-media-sandbox-ci.mjs
@@ -61,6 +61,9 @@ jobs:
       - name: Exercise the compiled registrar against installed qualification and local restricted PostgreSQL
         run: |
           sudo env CI=true GITHUB_SHA="$GITHUB_SHA" COATRIA_MEDIA_QUALIFICATION="$COATRIA_MEDIA_QUALIFICATION" "$(command -v node)" scripts/hosting/qualify-reference-enrollment-ci.mjs
+      - name: Qualify the exact image-preparation install twice with separate binary evidence
+        run: |
+          sudo env CI=true GITHUB_SHA="$GITHUB_SHA" COATRIA_MEDIA_QUALIFICATION="$COATRIA_MEDIA_QUALIFICATION" COATRIA_NPM_CACHE="$(npm config get cache)" "$(command -v node)" --import tsx scripts/hosting/qualify-image-preparation-host-ci.mjs
       - name: Preserve scoped AppArmor mode and sanitized kernel denial categories
         if: always() && env.COATRIA_MEDIA_QUALIFICATION != ''
         run: |
@@ -152,7 +155,7 @@ jobs:
           import {buildTrustedServiceBundle} from './scripts/hosting/build-trusted-service-bundle.mjs';
           const output=join(process.env.RUNNER_TEMP,'coatria-trusted-services');
           await mkdir(output);
-          for(const service of ['archive','gateway','reference','reference-qualification','reference-registrar','media-qualification']) {
+          for(const service of ['archive','gateway','reference','reference-qualification','reference-registrar','media-qualification','image-preparation','image-preparation-qualification']) {
             const result=await buildTrustedServiceBundle({root:process.cwd(),commit:process.env.GITHUB_SHA,service,output:join(output,service)});
             console.log(JSON.stringify({service,sourceCommit:result.sourceCommit,bundleSha256:result.bundleSha256,runtimeBytes:result.runtime.bytes,qualified:false,providerCalled:false}));
           }
@@ -210,8 +213,10 @@ jobs:
           database.password=process.env.PGPASSWORD;
           database.pathname=process.env.PGDATABASE;
           process.env.COATRIA_LOAD_DATABASE_URL=database.href;
-          const report=await runOfficeLoad(parseLoadOptions(['--mode','production','--clients','50','--duration','60','--report','load-reports/connections.json']));
-          process.exitCode=report.summary.passed?0:1;
+          const report=await runOfficeLoad(parseLoadOptions(['--mode','production','--clients','50','--duration','60','--diagnostics','true','--report','load-reports/connections.json']));
+          // Preserve the existing correctness and 1,000 ms p95 gate. Missing
+          // diagnostic coverage is a separate failure, never a latency waiver.
+          process.exitCode=report.summary.passed&&report.diagnostics?.requiredCoverage?.passed===true?0:1;
           NODE
       - name: Publish sanitized connection report
         if: always()

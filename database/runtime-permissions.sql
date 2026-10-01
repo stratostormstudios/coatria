@@ -83,6 +83,13 @@ GRANT UPDATE(generation_inspection_adoption_id) ON higgsfield_references TO coat
 -- Image preparation is a web control-plane proposal, finite human approval or
 -- revocation. Existing web storage grants do not confer processor authority.
 GRANT SELECT ON project_image_preparations,project_image_preparation_approvals,project_image_preparation_requests,project_image_preparation_receipts,project_image_preparation_allocations,project_image_preparation_derivations,studio_image_preparation_dispatches TO coatria_runtime_v1;
+-- Public readiness and human consent resolve an existing registrar identity in
+-- the same app transaction. This cannot enroll, revoke or extend a service.
+GRANT SELECT ON project_image_preparation_services,project_image_preparation_service_projects TO coatria_runtime_v1;
+GRANT SELECT(service_id,company_id,request_id,request_hash,identity) ON project_image_preparation_service_enrollments TO coatria_runtime_v1;
+-- FOR SHARE needs one UPDATE column. The 050 ALWAYS stop guard rejects every
+-- real created_at change; no service transition or credential column is writable.
+GRANT UPDATE(created_at) ON project_image_preparation_services TO coatria_runtime_v1;
 GRANT INSERT(company_id,project_id,work_item_id,project_revision,project_snapshot,work_snapshot,source_version_id,source_snapshot,destination_folder_id,destination_name,destination_snapshot,storage_binding_id,storage_binding_revision,storage_connection_id,storage_connection_revision,storage_sponsor_id,recipe_sha256,request_hash,purpose,proposed_by,proposed_agent_id,proposed_run_id,proposer_snapshot,continuation_mode) ON project_image_preparations TO coatria_runtime_v1;
 GRANT INSERT ON project_image_preparation_approvals TO coatria_runtime_v1;
 GRANT INSERT(company_id,actor_key,client_id,request_hash,response) ON project_image_preparation_requests TO coatria_runtime_v1;

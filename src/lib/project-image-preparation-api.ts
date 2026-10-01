@@ -7,10 +7,11 @@ import {projectImagePreparationAvailability} from './project-image-preparation-a
 import {proposeProjectImagePreparationReference} from './project-image-preparation-reference';
 import {higgsfieldReferenceAvailability} from './higgsfield-references';
 import {referenceServiceAvailability} from './higgsfield-reference-service';
+import {publicImagePreparationOptions} from './project-image-preparation-public-runtime';
 
 /** Metadata only. Processor availability comes from a trusted server resolver,
  * never a request body. No lease, native execution or storage write route. */
-export async function projectImagePreparationRoute(request:Request,parts:string[],method:string,options:ProjectImagePreparationOptions={}):Promise<Response|null>{
+export async function projectImagePreparationRoute(request:Request,parts:string[],method:string,options:ProjectImagePreparationOptions=publicImagePreparationOptions):Promise<Response|null>{
  if(parts[0]!=='companies'||parts[2]!=='image-preparations')return null;
  const companyId=id(parts[1]),decision=method==='POST'&&parts.length===5&&['approve','revoke'].includes(parts[4]);
  const member=await requireMembership(request,companyId,decision),actor={companyId,userId:member.userId};

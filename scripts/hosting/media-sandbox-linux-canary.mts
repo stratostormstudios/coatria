@@ -135,11 +135,11 @@ async function runObserved(config:Config,sandbox:QualifiedLinuxMediaSandbox,args
 
 async function configInput(){assert.equal(process.platform,'linux');assert.equal(process.arch,'x64');assert.ok(process.getuid&&process.getuid()>0);const path=process.env.COATRIA_MEDIA_QUALIFICATION;assert.ok(path);const info=await lstat(path);assert.equal(info.uid,0);assert.equal(info.mode&0o022,0);const config=JSON.parse(await text(path)) as Config;assert.equal(config.version,1);assert.equal(process.getuid!(),config.uid);assert.equal(process.getgid!(),config.gid);assert.ok((await text('/proc/self/cgroup')).includes(config.supervisorGroup.slice('/sys/fs/cgroup'.length)));return config;}
 
-/** The installed reference bundle has no source loader or node_modules. Only
+/** Installed media bundles have no source loader or node_modules. Only
  * its immutable qualifier entry may replace the existing source CLI child. */
 export function mediaSandboxCrashChildArguments(config:Config){
  if(config.compiledCrashEntrypoint!==undefined){
-  assert.match(config.compiledCrashEntrypoint,/^\/var\/lib\/coatria-reference-releases\/[a-f0-9]{64}\/qualifier\/runtime\.mjs$/);
+  assert.match(config.compiledCrashEntrypoint,/^\/var\/lib\/coatria-(?:reference|image-preparation)-releases\/[a-f0-9]{64}\/qualifier\/runtime\.mjs$/);
   return [config.compiledCrashEntrypoint,'--supervisor-crash-child'];
  }
  return ['--import','tsx',source(config,'scripts/hosting/media-sandbox-linux-canary.mts'),'--supervisor-crash-child'];

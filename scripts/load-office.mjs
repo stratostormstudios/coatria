@@ -7,6 +7,8 @@ import {pathToFileURL} from 'node:url';
 import {spawn} from 'node:child_process';
 import {setTimeout as delay} from 'node:timers/promises';
 import {require as tsxRequire} from 'tsx/cjs/api';
+import {createLoadClientDiagnostics,createLoadDatabaseDiagnostics,createLoadServerDiagnosticCollector,loadDiagnosticCoverage} from './load-office-diagnostics.mjs';
+import {sampleHostDiagnostics} from './load-office-host-diagnostics.mjs';
 
 // Only public TypeScript furniture metadata is imported, never purchased files.
 const {OFFICE_50_PRESET}=tsxRequire('../src/lib/office-presets.ts',import.meta.url);
@@ -16,9 +18,9 @@ export const OFFICE_LOAD_POLICY=Object.freeze({workspaceMs:5000,presencePollMs:2
 
 const hash=value=>createHash('sha256').update(value).digest('hex');
 export function parseLoadOptions(args){
- const options={clients:50,duration:30,port:4196,mode:'development',report:resolve('..','output','coatria-load',`connections-${Date.now()}.json`)};
- const allowed=new Set(['clients','duration','port','report','mode']);
- for(let i=0;i<args.length;i+=2){const key=args[i]?.replace(/^--/,'');if(!args[i]?.startsWith('--')||!allowed.has(key)||!args[i+1]||args[i+1].startsWith('--'))throw new Error('Use --clients, --duration, --port, --mode and --report only. Remote targets and existing app databases are not supported.');options[key]=key==='report'?resolve(args[i+1]):key==='mode'?args[i+1]:Number(args[i+1]);}
+ const options={clients:50,duration:30,port:4196,mode:'development',diagnostics:false,report:resolve('..','output','coatria-load',`connections-${Date.now()}.json`)};
+ const allowed=new Set(['clients','duration','port','report','mode','diagnostics']);
+ for(let i=0;i<args.length;i+=2){const key=args[i]?.replace(/^--/,'');if(!args[i]?.startsWith('--')||!allowed.has(key)||!args[i+1]||args[i+1].startsWith('--'))throw new Error('Use --clients, --duration, --port, --mode, --diagnostics and --report only. Remote targets and existing app databases are not supported.');if(key==='diagnostics'&&!['true','false'].includes(args[i+1]))throw new Error('Diagnostics must be true or false.');options[key]=key==='report'?resolve(args[i+1]):key==='mode'?args[i+1]:key==='diagnostics'?args[i+1]==='true':Number(args[i+1]);}
  for(const [key,min,max] of [['clients',2,50],['duration',10,60],['port',1024,65535]])if(!Number.isInteger(options[key])||options[key]<min||options[key]>max)throw new Error(`${key} must be an integer from ${min} to ${max}.`);
  if(!['development','production'].includes(options.mode))throw new Error('mode must be development or production.');
  if(!options.report.endsWith('.json'))throw new Error('The report must be a .json file.');return options;
@@ -58,12 +60,13 @@ export function summarizeRequestWindows(records){
  }
  return {windowMs,clock:'performance.now',assignment:'request-start',interval:'start-inclusive-end-exclusive',emptyWindowsOmitted:true,windows:[...groups.entries()].sort(([a],[b])=>a-b).map(([index,group])=>({startMs:index*windowMs,endMs:(index+1)*windowMs,...summarizeRequests(group),operations:[...new Set(group.map(record=>record.operation))].sort().map(operation=>({operation,...summarizeRequests(group.filter(record=>record.operation===operation))}))}))};
 }
-export async function readLoadResponse(response,expected){
+export async function readLoadResponse(response,expected,timings){
  let bytes=0,value=null;
+ const bodyStarted=timings?performance.now():0;let parseStarted=0;
  try{
-  const text=await response.text();bytes=Buffer.byteLength(text);value=JSON.parse(text);
+  const text=await response.text();if(timings)timings.body=performance.now()-bodyStarted;bytes=Buffer.byteLength(text);if(timings)parseStarted=performance.now();value=JSON.parse(text);if(timings)timings.parse=performance.now()-parseStarted;
   return {status:response.status,bytes,value,ok:response.status===expected&&value!==null&&typeof value==='object'&&!Array.isArray(value)};
- }catch{return {status:response.status,bytes,value:null,ok:false};}
+ }catch{if(timings){if(parseStarted)timings.parse=performance.now()-parseStarted;else timings.body=performance.now()-bodyStarted;}return {status:response.status,bytes,value:null,ok:false};}
 }
 export function meetsLoadBudget(summary){return summary.requests>0&&summary.unexpectedErrors===0&&Number.isFinite(summary.p95Ms)&&summary.p95Ms<=1000;}
 export function loadPosition(index,clients,step=0){
@@ -107,15 +110,22 @@ export async function runOfficeLoad(options){
  const origin=`http://127.0.0.1:${options.port}`,policy={...OFFICE_LOAD_POLICY,conversationPollMs:2000,conversationPageLimit:100,conversationPagesPerCycle:8};
  const records=[],checks=[],positions=new Map(),conversations=new Map(clients.map(client=>[client.id,{cursor:'0',messages:new Map(),events:0}])),conversationErrors=[];let socket,child,checkout,serverFailure=false,phase='check',warm=false,start=0,loadDuration=0,loadStartedAt=0;
  const cleanup={verified:false,remainingUsers:identities.length,remainingCompanies:2};
+ const clientDiagnostics=options.diagnostics?createLoadClientDiagnostics():null,databaseDiagnostics=options.diagnostics?createLoadDatabaseDiagnostics({db,database:fixture.database}):null,serverDiagnostics=options.diagnostics?createLoadServerDiagnosticCollector():null;
+ let diagnosticResults=null,hostStart=null,hostEnd=null;
+ const hostSnapshot=async()=>{try{return await sampleHostDiagnostics();}catch{return {status:'unavailable',code:'HOST_SAMPLE_FAILED'};}};
+ const stopDiagnostics=async()=>{if(!options.diagnostics||diagnosticResults)return;let client,database;try{client=clientDiagnostics.stop();}catch{client={status:'failed',startedAtUnixMs:null,endedAtUnixMs:null,requests:null,inFlightAtEnd:null,errors:['CLIENT_COLLECTION_FAILED'],windows:[]};}try{database=await databaseDiagnostics.stop();}catch{database={status:'failed',samples:[],errors:['DATABASE_COLLECTION_FAILED']};}hostEnd=await hostSnapshot();diagnosticResults={client,database};};
  let fatal='';
  const check=(id,label,passed,detail)=>{checks.push({id,label,passed:Boolean(passed),detail});if(!passed)console.log(`Check failed: ${label}`);};
  async function request(client,path,method='GET',data,operation='verification',expected=200,extraHeaders={}){
   const began=performance.now();let status=0,bytes=0,value=null,ok=false;
+  const observed=options.diagnostics&&phase==='load',timings=observed?{}:undefined;if(observed)clientDiagnostics.begin(operation,began-loadStartedAt);
   try{
    const response=await fetch(origin+path,{method,headers:{Origin:origin,Cookie:`coatria_session=${client.token}`,'X-Coatria-User':client.id,...(data?{'Content-Type':'application/json'}:{}),...extraHeaders},...(data?{body:JSON.stringify(data)}:{}),redirect:'error',signal:AbortSignal.timeout(10000)});
-   ({status,bytes,value,ok}=await readLoadResponse(response,expected));
+   if(timings)timings.headers=performance.now()-began;
+   ({status,bytes,value,ok}=await readLoadResponse(response,expected,timings));
   }catch{/* Connection errors and timeouts receive status 0. */}
   const record={operation,phase,ms:performance.now()-began,status,ok,bytes,startedMs:phase==='load'?began-loadStartedAt:null};if(warm)records.push(record);
+  if(observed)clientDiagnostics.complete(operation,record.startedMs,{...timings,total:record.ms});
   return {status,value,ok:record.ok};
  }
  const path=resource=>`/api/companies/${companyId}/${resource}`;
@@ -172,7 +182,8 @@ export async function runOfficeLoad(options){
    const code=await Promise.race([new Promise(yes=>{child.once('exit',yes);child.once('error',()=>yes(-1));}),delay(300000,undefined,{ref:false}).then(()=>-1)]);
    if(code!==0){console.error(output.replace(/(?:postgres(?:ql)?|mysql|mongodb):\/\/[^\s"']+/g,'[database URL redacted]').replace(/\b(?:vcp_|msy_|gh[pousr]_)[A-Za-z0-9_-]+/g,'[token redacted]'));throw new Error('The isolated production build failed.');}
   }
-  child=spawn(process.execPath,[resolve('node_modules/next/dist/bin/next'),options.mode==='production'?'start':'dev',...(options.mode==='development'?['--webpack']:[]),'--hostname','127.0.0.1','--port',String(options.port)],{cwd:checkout.directory,env,windowsHide:true,stdio:'ignore'});
+  child=spawn(process.execPath,[...(options.diagnostics?['--require',resolve('scripts/load-office-server-diagnostics.cjs')]:[]),resolve('node_modules/next/dist/bin/next'),options.mode==='production'?'start':'dev',...(options.mode==='development'?['--webpack']:[]),'--hostname','127.0.0.1','--port',String(options.port)],{cwd:checkout.directory,env:{...env,COATRIA_LOAD_DIAGNOSTICS:options.diagnostics?'1':''},windowsHide:true,stdio:options.diagnostics?['ignore','ignore','ignore','pipe']:'ignore'});
+  if(serverDiagnostics){child.stdio[3].on('data',chunk=>serverDiagnostics.push(chunk));child.stdio[3].on('error',()=>serverDiagnostics.fail());child.stdio[3].on('end',()=>serverDiagnostics.close());}
   child.once('error',()=>{serverFailure=true;});
   console.log(`Starting isolated ${options.mode} Next HTTP server with ${fixture.database}…`);
   for(let attempt=0;attempt<90;attempt++){
@@ -188,10 +199,11 @@ export async function runOfficeLoad(options){
   const roster=await request(clients[0],path('presence'));check('initial-roster','Every connected client appears exactly once',roster.ok&&roster.value?.presence?.length===options.clients&&new Set(roster.value.presence.map(person=>person.userId)).size===options.clients,`Expected ${options.clients} presence entries.`);
   const bootstrapped=await Promise.all(clients.map(bootstrapConversation));check('conversation-bootstrap','Every session starts from a consistent history cursor',bootstrapped.every(Boolean),`${options.clients} independent history snapshots and event cursors were initialized before concurrent sends.`);
   console.log(`Measuring ${options.clients} sessions for ${options.duration} seconds; movement every 1 s, presence and conversation events every 2 s, workspace every 5 s…`);
-  phase='load';const began=performance.now(),until=began+options.duration*1000;loadStartedAt=began;
-  async function cadence(client,period,operation){
-   await delay(period*client.index/options.clients);let count=0;
-   while(performance.now()<until){const tick=performance.now();await operation(client,++count);await delay(Math.max(0,Math.min(until-performance.now(),period-(performance.now()-tick))));}
+  if(options.diagnostics)hostStart=await hostSnapshot();
+  phase='load';const began=performance.now(),until=began+options.duration*1000;loadStartedAt=began;clientDiagnostics?.start(began);databaseDiagnostics?.start(began);
+  async function cadence(client,period,operation,name){
+   const firstDelay=period*client.index/options.clients;let target=performance.now()+firstDelay;await delay(firstDelay);let count=0;
+   while(performance.now()<until){const tick=performance.now();clientDiagnostics?.scheduled(name,target,tick);await operation(client,++count);const wait=Math.max(0,Math.min(until-performance.now(),period-(performance.now()-tick)));target=tick+period;await delay(wait);}
   }
   let posted=[],retried=[];
   const payload=client=>({body:`Load visibility ${run} ${client.index}`,clientId:client.messageClientId});
@@ -201,12 +213,12 @@ export async function runOfficeLoad(options){
    await Promise.all(clients.map(client=>request(client,path('tasks/'+client.taskId),'PATCH',{title:`Updated load task ${client.index}`,status:'doing',expectedRevision:1},'task-write')));
   })();
   await Promise.all([collaboration,...clients.flatMap(client=>[
-   cadence(client,policy.movementMs,move),
-   cadence(client,policy.presencePollMs,client=>request(client,path('presence'),'GET',undefined,'presence-read')),
-   cadence(client,policy.conversationPollMs,pollConversation),
-   cadence(client,policy.workspaceMs,client=>request(client,path('workspace'),'GET',undefined,'workspace-read')),
-   cadence(client,policy.sessionMs,client=>request(client,'/api/session','GET',undefined,'session-read'))
-  ])]);loadDuration=(performance.now()-began)/1000;phase='check';
+   cadence(client,policy.movementMs,move,'presence-write'),
+   cadence(client,policy.presencePollMs,client=>request(client,path('presence'),'GET',undefined,'presence-read'),'presence-read'),
+   cadence(client,policy.conversationPollMs,pollConversation,'conversation-events'),
+   cadence(client,policy.workspaceMs,client=>request(client,path('workspace'),'GET',undefined,'workspace-read'),'workspace-read'),
+   cadence(client,policy.sessionMs,client=>request(client,'/api/session','GET',undefined,'session-read'),'session-read')
+  ])]);loadDuration=(performance.now()-began)/1000;phase='check';await stopDiagnostics();
   const observations=await Promise.all([clients[0],clients[Math.floor(clients.length/2)],clients.at(-1)].map(client=>request(client,path('workspace'))));
   const messageIds=new Set(posted.flatMap(result=>result.value?.message?.id?[result.value.message.id]:[]));
   const drained=await Promise.all(clients.map(pollConversation)),histories=await Promise.all([clients[0],clients[Math.floor(clients.length/2)],clients.at(-1)].map(client=>request(client,conversationPath('messages?limit=100'),'GET',undefined,'conversation-history')));
@@ -243,7 +255,9 @@ export async function runOfficeLoad(options){
   check('conversation-reconnect','Event cursors resume after disconnected clients return',afterReconnect.ok&&caughtUp.every(Boolean)&&conversationErrors.length===0&&clients.every(client=>conversations.get(client.id).messages.get(afterReconnect.value.message?.id)?.body==='Conversation continued after reconnect'),'All sessions resumed their saved event cursor after the real presence-expiry interval and received the new message.');
  }catch(error){fatal=error instanceof Error?error.message:'The isolated test failed.';check('completed','The bounded test completed',false,fatal.replace(/postgres(?:ql)?:\/\/\S+/g,'[redacted]'));}
  finally{
+  await stopDiagnostics();
   await stopChild(child);
+  serverDiagnostics?.close();
   try{
    await db.query('DELETE FROM companies WHERE id=ANY($1::uuid[])',[companyIds]);
    await db.query('DELETE FROM users WHERE id=ANY($1::uuid[])',[userIds]);
@@ -261,10 +275,11 @@ export async function runOfficeLoad(options){
  check('latency-budget','p95 request latency meets the 1,000 ms budget',performancePassed,`Measured p95 ${summary.p95Ms} ms; ${summary.unexpectedErrors} unexpected errors. Correctness is reported separately.`);
  const report={schemaVersion:1,kind:'coatria-connections',generatedAt:new Date().toISOString(),summary:{clients:options.clients,durationSeconds:Math.round(loadDuration*100)/100,...summary,requestsPerSecond:loadDuration?Math.round(summary.requests/loadDuration*100)/100:0,correctnessPassed,performancePassed,passed:correctnessPassed&&performancePassed,verificationRequests:records.length-measured.length,wallClockSeconds:start?Math.round((performance.now()-start)/1000):0},checks,environment:{applicationMode:options.mode,database:fixture.database,databaseVersion:fixture.version,isolated:true,origin,databasePoolMax:fixture.poolMax,...loadOfficeMetadata(),limitations:['Real Next HTTP requests with separate authenticated sessions; no browser rendering, assets, WebRTC or network geography are measured.',fixture.database==='PGlite'?'PGlite is a single-connection PostgreSQL emulator. These results do not establish production PostgreSQL concurrency, Vercel capacity or worldwide scale.':'An isolated local PostgreSQL service measures real database concurrency. It does not establish Vercel capacity, internet latency or worldwide scale.','Authentication sessions are inserted only into the owned fixture; signup/password hashing is outside the measured workload.']},policy,metrics:[...new Set(measured.map(record=>record.operation))].map(operation=>({operation,...summarizeRequests(measured.filter(record=>record.operation===operation))})),cleanup};
  report.latencyWindows=summarizeRequestWindows(measured);
+ if(options.diagnostics){const server=serverDiagnostics.report(diagnosticResults.client.startedAtUnixMs??Infinity,diagnosticResults.client.endedAtUnixMs??0);report.diagnostics={version:1,enabled:true,...diagnosticResults,server,host:{start:hostStart,end:hostEnd,required:false},requiredCoverage:loadDiagnosticCoverage({...diagnosticResults,server},measured.length)};}
  await mkdir(dirname(options.report),{recursive:true});await writeFile(options.report,JSON.stringify(report,null,2)+'\n',{flag:'wx'});
  console.log(`Report saved: ${options.report}`);console.log(`${summary.requests} measured HTTP requests; p50 ${summary.p50Ms} ms, p95 ${summary.p95Ms} ms; ${summary.unexpectedErrors} unexpected errors. Correctness: ${correctnessPassed?'passed':'failed'}. Performance budget: ${performancePassed?'passed':'failed'}.`);
  for(const metric of report.metrics)console.log(`${metric.operation}: ${metric.requests} requests, p50 ${metric.p50Ms} ms, p95 ${metric.p95Ms} ms, ${metric.unexpectedErrors} errors.`);
  for(const result of checks)console.log(`${result.passed?'PASS':'FAIL'} ${result.id}: ${result.detail}`);
  return report;
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)runOfficeLoad(parseLoadOptions(process.argv.slice(2))).then(report=>{process.exitCode=report.summary.passed?0:1;}).catch(()=>{console.error('The local load test could not start or save its report. Check the bounded CLI options, unused local port and report path. No remote target is accepted.');process.exitCode=1;});
+if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)runOfficeLoad(parseLoadOptions(process.argv.slice(2))).then(report=>{process.exitCode=report.summary.passed&&(!report.diagnostics||report.diagnostics.requiredCoverage.passed)?0:1;}).catch(()=>{console.error('The local load test could not start or save its report. Check the bounded CLI options, unused local port and report path. No remote target is accepted.');process.exitCode=1;});
