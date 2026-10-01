@@ -24,7 +24,7 @@ import {
 } from './project-image-preparations-protocol';
 
 type Row=Record<string,any>;
-export type ProjectImagePreparationOptions={runtime?:(db:PoolClient,companyId:string,projectId:string,processorId?:string)=>Promise<Processor|null>};
+export type ProjectImagePreparationOptions={runtime?:(db:PoolClient,companyId:string,projectId:string,processorId?:string)=>Promise<Processor|null>;processorId?:string};
 const caps=['storage.read','studio.read','studio.write','tasks.write'];
 const parse=<T>(schema:z.ZodType<T>,value:unknown):T=>{const result=schema.safeParse(value);if(!result.success)fail(400,'Use the exact file, revisions and explicit preparation consent.','VALIDATION_ERROR');return result.data;};
 function canonical(value:unknown):string {
@@ -297,16 +297,20 @@ async function approvedFacts(db:PoolClient,r:Row,a:Row|undefined,members:Row[],o
 function leaseFor(r:Row,processor:Processor):Lease{return {companyId:r.company_id,projectId:r.project_id,preparationId:r.id,leaseId:r.lease_id,requestHash:r.request_hash,expiresAt:iso(r.lease_expires_at)!,claimedAt:iso(r.claimed_at)!,recipeSha256:r.recipe_sha256,source:safeSource(r.source_snapshot),processor};}
 export async function claimProjectImagePreparation(db:PoolClient,scope:{companyId:string;projectIds:string[]},options:ProjectImagePreparationOptions={}):Promise<Lease|null>{
  id(scope.companyId);if(!Array.isArray(scope.projectIds)||!scope.projectIds.length||scope.projectIds.length>32)fail(400,'Use a bounded explicit project scope.');scope.projectIds.forEach(id);
+ if(options.processorId!==undefined)id(options.processorId);
  if(!options.runtime)return null;if(!await companyLock(db,scope.companyId,false))return null;
  const active=(await db.query('SELECT * FROM project_image_preparations WHERE company_id=$1 AND attempt=1 AND cleanup_confirmed_at IS NULL FOR UPDATE',[scope.companyId])).rows[0];
  if(active){
-  if(scope.projectIds.includes(active.project_id)&&['reading','transforming','validating','storing','verifying'].includes(active.status)&&!(await db.query('SELECT $1::timestamptz>clock_timestamp() AS valid',[active.lease_expires_at])).rows[0].valid){
+  const selected=options.processorId===undefined||Boolean((await db.query("SELECT 1 FROM project_image_preparation_approvals WHERE company_id=$1 AND preparation_id=$2 AND processor_snapshot->>'id'=$3",[scope.companyId,active.id,options.processorId])).rowCount);
+  if(selected&&scope.projectIds.includes(active.project_id)&&['reading','transforming','validating','storing','verifying'].includes(active.status)&&!(await db.query('SELECT $1::timestamptz>clock_timestamp() AS valid',[active.lease_expires_at])).rows[0].valid){
    const uncertain=['transforming','storing','verifying'].includes(active.status);await receipt(db,active,randomUUID(),'claim',uncertain?'uncertain':'blocked',{code:'IMAGE_PREPARATION_LEASE_EXPIRED'});
    await db.query('UPDATE project_image_preparations SET status=$3,diagnostic_code=$4,revision=revision+1,updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2',[scope.companyId,active.id,uncertain?'uncertain':'blocked','IMAGE_PREPARATION_LEASE_EXPIRED']);
   }
   return null; // Expiry is never proof that a native process or write stopped.
  }
- const queued=(await db.query("SELECT id FROM project_image_preparations WHERE company_id=$1 AND project_id=ANY($2::uuid[]) AND status='queued' ORDER BY created_at,id LIMIT $3",[scope.companyId,scope.projectIds,limits.maxQueuedPerCompany])).rows;
+ // A finite enrolled processor only considers approvals for itself. Another
+ // processor's unavailable runtime must not turn an unrelated queued job blocked.
+ const queued=(await db.query("SELECT p.id FROM project_image_preparations p WHERE p.company_id=$1 AND p.project_id=ANY($2::uuid[]) AND p.status='queued' AND ($4::text IS NULL OR EXISTS(SELECT 1 FROM project_image_preparation_approvals a WHERE a.company_id=p.company_id AND a.preparation_id=p.id AND a.processor_snapshot->>'id'=$4)) ORDER BY p.created_at,p.id LIMIT $3",[scope.companyId,scope.projectIds,limits.maxQueuedPerCompany,options.processorId??null])).rows;
  for(const item of queued){
   try{
    const {r,a,members}=await lockedRow(db,scope.companyId,item.id);if(r.status!=='queued')continue;

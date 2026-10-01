@@ -15,9 +15,12 @@ const localPostgres=(()=>{try{return !!integration&&['localhost','127.0.0.1'].in
 // shipped ACLs; no existing database, company rows, remote providers or secrets.
 test('PostgreSQL gateway preflight requires the actual dedicated restricted LOGIN',{skip:!localPostgres,timeout:120000},async t=>{
  const suffix=randomUUID().replaceAll('-',''),dbName='coatria_gateway_preflight_'+suffix,role=PROJECT_STORAGE_GATEWAY_ROLE,appRole='gateway_api_'+suffix;
- const control=new Pool({connectionString:integration,max:1,connectionTimeoutMillis:10000}),ownerUrl=new URL(integration!);ownerUrl.pathname='/'+dbName;
+ const controlPool=new Pool({connectionString:integration,max:1,connectionTimeoutMillis:10000}),control=await controlPool.connect(),ownerUrl=new URL(integration!);ownerUrl.pathname='/'+dbName;
  let created=false,owner:Pool|undefined,gateway:Pool|undefined,application:Pool|undefined,gatewayUrl:string|undefined;
  const createdRoles:string[]=[];
+ // The image-preparation extension qualifies the same fixed LOGIN in another
+ // disposable database. Serialize role creation; never reuse its wider ACLs.
+ await control.query('SELECT pg_advisory_lock(739284034)');
  async function change(sql:string,undo:string,code='STORAGE_DB_PRIVILEGES'){
   await owner!.query(sql);try{await assert.rejects(()=>assertProjectStorageGatewayDatabase(gateway!),{code});}finally{await owner!.query(undo);}assert.equal((await assertProjectStorageGatewayDatabase(gateway!)).status,'passed');
  }
@@ -70,6 +73,6 @@ test('PostgreSQL gateway preflight requires the actual dedicated restricted LOGI
  }finally{
   await Promise.all([gateway?.end(),application?.end(),owner?.end()]);
   if(created){const deadline=Date.now()+10000;while(Number((await control.query('SELECT count(*)::int n FROM pg_stat_activity WHERE datname=$1',[dbName])).rows[0].n)>0){if(Date.now()>deadline)throw Error('Disposable gateway preflight database did not drain');await delay(100);}await control.query('DROP DATABASE '+dbName);}
-  for(const roleName of createdRoles.reverse())await control.query('DROP ROLE '+roleName);await control.end();
+  for(const roleName of createdRoles.reverse())await control.query('DROP ROLE '+roleName);await control.query('SELECT pg_advisory_unlock(739284034)');control.release();await controlPool.end();
  }
 });

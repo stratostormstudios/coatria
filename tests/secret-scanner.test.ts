@@ -55,8 +55,8 @@ test('scanner catches staged-only values, binary-looking files, nested environme
   }
 });
 
-test('storage access capabilities are detected without revealing values',()=>{
-  for(const prefix of ['stg','sct']){
+test('storage and image preparation capabilities are detected without revealing values',()=>{
+  for(const prefix of ['stg','sct','ips','ipt']){
     const token=prefix+'_'+'aB09_-'.repeat(7)+'x';
     assert.deepEqual(detectSecrets(token),['Coatria scoped token']);
     assert.deepEqual(detectSecrets(prefix+'_'+'x'.repeat(39)),[]);

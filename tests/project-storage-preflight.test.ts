@@ -33,6 +33,8 @@ test('gateway startup audits the shipped effective permissions without changing 
    await change(`REVOKE UPDATE(status) ON project_storage_uploads FROM ${role}`,`GRANT UPDATE(status) ON project_storage_uploads TO ${role}`);
    await change(`GRANT UPDATE(role) ON memberships TO ${role}`,`REVOKE UPDATE(role) ON memberships FROM ${role}`);
    await change(`GRANT SELECT(source_snapshot) ON studio_generated_followups TO ${role}`,`REVOKE SELECT(source_snapshot) ON studio_generated_followups FROM ${role}`);
+   await change(`REVOKE SELECT(upload_id) ON project_image_preparation_allocations FROM ${role}`,`GRANT SELECT(upload_id) ON project_image_preparation_allocations TO ${role}`);
+   await change(`GRANT SELECT(preparation_id) ON project_image_preparation_allocations TO ${role}`,`REVOKE SELECT(preparation_id) ON project_image_preparation_allocations FROM ${role}`);
    await change(`GRANT SELECT(sealed) ON higgsfield_output_locators TO ${role}`,`REVOKE SELECT(sealed) ON higgsfield_output_locators FROM ${role}`);
    await change(`GRANT SELECT ON schema_migrations TO ${role} WITH GRANT OPTION`,`REVOKE GRANT OPTION FOR SELECT ON schema_migrations FROM ${role}`);
   });

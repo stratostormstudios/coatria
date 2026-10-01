@@ -13,6 +13,8 @@ GRANT SELECT(company_id,agent_id,host_id,installation_id,token_hash,revoked_at,e
 -- Do not grant source snapshots, artifact evidence or canonical step identifiers.
 GRANT SELECT(company_id,child_run_id) ON studio_generated_followups TO coatria_storage_gateway_v1;
 GRANT SELECT(company_id,child_run_id) ON studio_reference_generation_followups TO coatria_storage_gateway_v1;
+-- Queue classification only: preparation performs its own readback/publication.
+GRANT SELECT(company_id,upload_id) ON project_image_preparation_allocations TO coatria_storage_gateway_v1;
 -- External client capabilities are separate from membership and agent grants.
 -- Only exact approved file facts and mutable source availability are exposed.
 GRANT SELECT(id,company_id,project_id,delivery_id,recipient_user_id,created_by,status,package_hash,expires_at) ON studio_client_deliveries TO coatria_storage_gateway_v1;
