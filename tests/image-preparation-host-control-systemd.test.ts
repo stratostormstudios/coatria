@@ -48,6 +48,16 @@ test('separate inactive oneshot proof binds finished main PID and cleared Invoca
  assert.equal(f.calls.filter(c=>c.args[0]==='start').length,1);await assert.rejects(f.control.preflight(),rejected);assert.equal(f.calls.filter(c=>c.args[0]==='start').length,1);
  const patches:State[]=[{ActiveState:'active',SubState:'exited'},{RemainAfterExit:'yes'},{MainPID:'4321'}];for(const patch of patches)assert.throws(()=>parseImagePreparationControlState(f.raw({...f.states.preflight,...patch}),f.host,'preflight'),rejected);
 });
+test('garbage-collected execution identity cannot be reconstructed from a valid historical journal alone',async()=>{
+ const preflight=fixture();preflight.onStart(mode=>{assert.equal(mode,'preflight');preflight.journals.preflight=JSON.stringify(preflight.record(mode,'image-preparation-worker-preflight-passed'));});
+ const result=await preflight.control.preflight();
+ assert.equal(result.processStopped,true);assert.equal(result.preflightPassed,false);assert.equal(result.cleanupConfirmed,false);assert.equal(result.invocationId,null);
+ await assert.rejects(preflight.control.preflight(),rejected);
+ assert.equal(preflight.calls.filter(call=>call.args[0]==='start').length,1);
+ const worker=fixture();worker.journals.worker=['image-preparation-worker-ready','image-preparation-worker-drained'].map(event=>JSON.stringify(worker.record('worker',event))).join('\n');
+ await assert.rejects(worker.control.observe('worker',worker.invocationId),rejected);
+ assert.equal(worker.calls.filter(call=>call.args[0]==='start'||call.args[0]==='stop').length,0);
+});
 test('systemctl start acceptance alone is not readiness and no polling delays invocation persistence',async()=>{
  const f=fixture(),result=await f.control.startWorker();assert.equal(result.invocationId,f.invocationId);assert.equal(result.runningReady,false);assert.equal(result.processStopped,false);assert.equal(result.cleanupConfirmed,false);
  const before=f.calls.length;f.journals.worker=JSON.stringify(f.record('worker','image-preparation-worker-ready'));assert.equal((await f.control.observe('worker',f.invocationId)).runningReady,true);assert.equal(f.calls.length-before,3);

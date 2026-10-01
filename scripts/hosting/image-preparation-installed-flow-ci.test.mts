@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes,randomUUID,createHash} from 'node:crypto';
-import {createImagePreparationInstalledController,parseImagePreparationInstalledControlReply,imagePreparationInstalledCiPng,seedImagePreparationInstalledWork,qualifyImagePreparationInstalledFlowCi} from './qualify-image-preparation-installed-flow-ci.mjs';
+import {createImagePreparationInstalledController,parseImagePreparationInstalledControlReply,imagePreparationInstalledChildOutcome,imagePreparationInstalledCiPng,seedImagePreparationInstalledWork,qualifyImagePreparationInstalledFlowCi} from './qualify-image-preparation-installed-flow-ci.mjs';
 import {seedImagePreparationEnrollmentCiDatabase} from './qualify-image-preparation-enrollment-ci.mjs';
 import {openImagePreparationServiceDatabase} from '../../tests/fixtures/image-preparation-service.js';
 import {createProjectStorageConnection,openProjectStorageCredentials} from '../../src/lib/project-storage.js';
@@ -19,6 +19,28 @@ test('controller proof rejects malformed, contradictory and extra untrusted chil
  const {host,proof}=identity();assert.deepEqual(parseImagePreparationInstalledControlReply(JSON.stringify(proof),host.scope.serviceId),proof);
  for(const bad of [{...proof,token:'synthetic-private'}, {...proof,serviceId:randomUUID()}, {...proof,invocationId:'0'.repeat(32)}, {...proof,processStopped:true}, {...proof,cleanupConfirmed:true}, {...proof,workerEnabled:false}, {...proof,status:'start-unknown'}, {...proof,bootId:null}])assert.throws(()=>parseImagePreparationInstalledControlReply(JSON.stringify(bad),host.scope.serviceId));
  for(const raw of ['',JSON.stringify(proof)+'\n{}','x'.repeat(65537)])assert.throws(()=>parseImagePreparationInstalledControlReply(raw,host.scope.serviceId));
+});
+
+test('controller diagnostics distinguish child failure from invalid reply without retaining child text or input',async()=>{
+ const {host,proof}=identity(),seen:any[]=[];
+ const broken=createImagePreparationInstalledController(host,'c'.repeat(64),async()=>{throw Error('PRIVATE_CHILD_ERROR');},value=>seen.push(value));
+ await assert.rejects(broken('reconcile'));assert.equal(seen.at(-1).stage,'child');assert.equal(seen.at(-1).outcome,'failure');assert.equal(seen.at(-1).child,null);
+ const invalid=createImagePreparationInstalledController(host,'c'.repeat(64),async()=>'PRIVATE_CHILD_REPLY',value=>seen.push(value));
+ await assert.rejects(invalid('reconcile'));assert.equal(seen.at(-1).stage,'reply');assert.equal(seen.at(-1).outcome,'failure');assert.equal(seen.at(-1).child.exitCode,0);assert.equal(seen.at(-1).child.stderrPresent,false);
+ const valid=createImagePreparationInstalledController(host,'c'.repeat(64),async()=>JSON.stringify(proof),value=>{seen.push(value);value.stage='input';throw Error('PRIVATE_OBSERVER_ERROR');});
+ assert.deepEqual(await valid('reconcile'),proof);assert.equal(seen.at(-1).outcome,'success');
+ const serialized=JSON.stringify(seen);for(const text of ['PRIVATE_',host.scope.serviceId,host.release,proof.invocationId,proof.bootId])assert(!serialized.includes(text));
+});
+
+test('child outcome projection is bounded and recognizes only the exact fixed controller failure envelope',()=>{
+ const envelope={event:'image-preparation-host-control-stopped',code:'IMAGE_PREPARATION_HOST_CONTROL_REJECTED',outcome:'unconfirmed'};
+ const known=imagePreparationInstalledChildOutcome({code:1,signal:null,killed:false,message:'PRIVATE_PROCESS_ERROR'},'',JSON.stringify(envelope));
+ assert.equal(known.controllerFailureEnvelope,true);assert.equal(known.exitCode,1);assert.equal(known.executionError,true);
+ const unknown=imagePreparationInstalledChildOutcome({code:'PRIVATE_CODE',signal:'PRIVATE_SIGNAL',killed:true},'PRIVATE_OUTPUT',JSON.stringify({...envelope,private:'PRIVATE_TOKEN'}));
+ assert.equal(unknown.controllerFailureEnvelope,false);assert.equal(unknown.exitCode,null);assert.equal(unknown.signal,'other');assert.equal(unknown.killed,true);assert(!JSON.stringify(unknown).includes('PRIVATE'));
+ assert.equal(imagePreparationInstalledChildOutcome(null,'x'.repeat(70000),'').stdoutBytes,65537);
+ assert.equal(imagePreparationInstalledChildOutcome({code:null,signal:'SIGKILL'},'','').signal,'SIGKILL');
+ for(const code of [-1,256,NaN,Infinity,{},'1'])assert.equal(imagePreparationInstalledChildOutcome({code},'','').exitCode,null);
 });
 test('installed flow refuses a normal developer machine before any host or provider mutation',async()=>{
  if(process.platform==='linux'&&process.getuid?.()===0&&process.env.CI==='true'&&/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA??''))return;

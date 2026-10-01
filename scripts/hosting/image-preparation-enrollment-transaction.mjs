@@ -14,7 +14,7 @@ const authority=()=>fail('IMAGE_PREPARATION_ENROLLMENT_AUTHORITY_ENDED');
 const conflict=()=>fail('IMAGE_PREPARATION_ENROLLMENT_CONFLICT');
 const same=(a,b)=>canonical(a)===canonical(b);
 
-/** Both operations serialize before looking for absence, including after a
+/** All observations serialize before looking for absence, including after a
  * lost original COMMIT response. No service-row UPDATE privilege is borrowed.
  * @param {Database} db @param {Request} request */
 async function lockEnrollment(db,request){
@@ -38,8 +38,8 @@ async function existing(db,request){
 /** Metadata previews find all sponsors; their ordered membership locks precede
  * project/storage locks. The contract pins an exact role/epoch only for enroller;
  * other sponsors retain current role/revocation checks, not invented old epochs.
- * @param {Database} db @param {Request} request */
-async function currentAuthority(db,request){
+ * @param {Database} db @param {Request} request @param {boolean} [postStart] */
+async function currentAuthority(db,request,postStart=false){
  const connectionIds=[...new Set(request.projects.map(p=>p.storageConnectionId))].sort(),projectIds=request.projects.map(p=>p.projectId).sort();
  const previewStorage=(await db.query('SELECT id,created_by FROM project_storage_connections WHERE company_id=$1 AND id=ANY($2::uuid[]) ORDER BY id',[request.companyId,connectionIds])).rows;
  const previewGateways=(await db.query(`SELECT b.id,b.project_id,b.provision_id,b.verified_by,p.created_by FROM project_gateway_bindings b
@@ -57,7 +57,11 @@ async function currentAuthority(db,request){
  const storage=(await db.query('SELECT id,revision,status,created_by FROM project_storage_connections WHERE company_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR SHARE',[request.companyId,connectionIds])).rows;
  if(storage.length!==connectionIds.length||storage.some(c=>c.status!=='configured'||c.created_by!==previewStorage.find(p=>p.id===c.id)?.created_by||request.projects.some(p=>p.storageConnectionId===c.id&&p.storageConnectionRevision!==c.revision)))authority();
  const bindings=(await db.query('SELECT id,project_id,connection_id,revision FROM project_storage_bindings WHERE company_id=$1 AND project_id=ANY($2::uuid[]) ORDER BY project_id FOR SHARE',[request.companyId,projectIds])).rows;
- if(bindings.length!==projectIds.length||bindings.some(b=>{const p=request.projects.find(p=>p.projectId===b.project_id);return !p||b.id!==p.storageBindingId||b.revision!==p.storageBindingRevision||b.connection_id!==p.storageConnectionId;}))authority();
+ // Only the distinct post-start observation permits catalog progress: a worker
+ // may already have allocated its derivative after its invocation was recorded.
+ // Enrollment history and logical routing stay exact. Real work still checks
+ // each preparation's snapshot and its own immutable allocation increment.
+ if(bindings.length!==projectIds.length||bindings.some(b=>{const p=request.projects.find(p=>p.projectId===b.project_id);return !p||b.id!==p.storageBindingId||(postStart?b.revision<p.storageBindingRevision:b.revision!==p.storageBindingRevision)||b.connection_id!==p.storageConnectionId;}))authority();
  const gateways=(await db.query(`SELECT b.id,b.project_id,b.provision_id,b.verified_by,p.created_by FROM project_gateway_bindings b
   JOIN trusted_service_provisions p ON p.company_id=b.company_id AND p.id=b.provision_id
   WHERE b.company_id=$1 AND b.id=ANY($2::uuid[]) ORDER BY b.id`,[request.companyId,request.projects.map(p=>p.gateway.bindingId)])).rows;
@@ -75,19 +79,19 @@ async function deadline(db,request){
 /** Revocation of service/gateway rows uses separate authority. The registrar
  * cannot lock those rows: repeat current reads after all supported lock waits.
  * This reports final observation-time authority; broker checks every real action.
- * @param {Database} db @param {Request} request @param {any} saved @returns {Promise<Result>} */
-async function reconciled(db,request,saved){
+ * @param {Database} db @param {Request} request @param {any} saved @param {boolean} [postStart] @returns {Promise<Result>} */
+async function reconciled(db,request,saved,postStart=false){
  const base={status:'committed',serviceId:request.serviceId,requestId:request.requestId,requestHash:imagePreparationEnrollmentHash(request)};
  if(saved.revoked_at)return {...base,active:false,reason:'revoked'};
  if(request.recipeSha256!==IMAGE_PREPARATION_RECIPE_HASH)return {...base,active:false,reason:'recipe_changed'};
- try{await currentAuthority(db,request);await deadline(db,request);}catch(error){if(error instanceof ImagePreparationEnrollmentError&&['IMAGE_PREPARATION_ENROLLMENT_AUTHORITY_ENDED','IMAGE_PREPARATION_ENROLLMENT_EXPIRED'].includes(error.code))return {...base,active:false,reason:error.code==='IMAGE_PREPARATION_ENROLLMENT_EXPIRED'?'expired':'authority_changed'};throw error;}
+ try{await currentAuthority(db,request,postStart);await deadline(db,request);}catch(error){if(error instanceof ImagePreparationEnrollmentError&&['IMAGE_PREPARATION_ENROLLMENT_AUTHORITY_ENDED','IMAGE_PREPARATION_ENROLLMENT_EXPIRED'].includes(error.code))return {...base,active:false,reason:error.code==='IMAGE_PREPARATION_ENROLLMENT_EXPIRED'?'expired':'authority_changed'};throw error;}
  const fresh=(await db.query('SELECT revoked_at,expires_at>clock_timestamp() AS live FROM project_image_preparation_services WHERE id=$1 AND company_id=$2',[request.serviceId,request.companyId])).rows[0];
  if(!fresh||fresh.revoked_at)return {...base,active:false,reason:'revoked'};
  if(fresh.live!==true)return {...base,active:false,reason:'expired'};
  return {...base,active:true};
 }
-/** @param {Database} db @param {unknown} input @param {boolean} reconcile @returns {Promise<Result>} */
-async function run(db,input,reconcile){
+/** @param {Database} db @param {unknown} input @param {boolean} reconcile @param {boolean} [postStart] @returns {Promise<Result>} */
+async function run(db,input,reconcile,postStart=false){
  const request=parseImagePreparationEnrollmentRequest(input,{allowExpired:reconcile});
  if(!reconcile&&request.recipeSha256!==IMAGE_PREPARATION_RECIPE_HASH)fail('IMAGE_PREPARATION_ENROLLMENT_RECIPE_CHANGED');
  let transaction=false,committing=false;
@@ -96,7 +100,7 @@ async function run(db,input,reconcile){
   for(const setting of ["SET LOCAL search_path=pg_catalog,public","SET LOCAL lock_timeout='5s'","SET LOCAL statement_timeout='10s'","SET LOCAL idle_in_transaction_session_timeout='15s'"])await db.query(setting);
   await assertImagePreparationRegistrarDatabase(db);
   const company=await lockEnrollment(db,request),saved=await existing(db,request);let result;
-  if(saved)result=await reconciled(db,request,saved);
+  if(saved)result=await reconciled(db,request,saved,postStart);
   else if(reconcile)result={status:'absent',serviceId:request.serviceId,requestId:request.requestId,requestHash:imagePreparationEnrollmentHash(request),active:false};
   else{
    if(!company)authority();await currentAuthority(db,request);await deadline(db,request);
@@ -120,3 +124,9 @@ export const enrollImagePreparationService=(db,request)=>run(db,request,false);
 /** Read-only under the original transaction lock. Never inserts absent history.
  * @param {Database} db @param {unknown} request @returns {Promise<Result>} */
 export const reconcileImagePreparationService=(db,request)=>run(db,request,true);
+/** Read-only observation after the caller has durably recorded the exact worker
+ * invocation. Never use this for registration, credential publication or any
+ * pre-start check. Only same-binding catalog progress differs from reconcile;
+ * this result grants no preparation or provider operation authority.
+ * @param {Database} db @param {unknown} request @returns {Promise<Result>} */
+export const observeImagePreparationServicePostStart=(db,request)=>run(db,request,true,true);

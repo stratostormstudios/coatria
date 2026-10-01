@@ -54,6 +54,18 @@ test('finite reviewed scope rejects arbitrary origins, wildcards, duplicate auth
  const now=Date.now(),value=scopeInput();assert.equal(parseImagePreparationHostScope(value,now).serviceId,id);
  for(const change of [{expiresAt:new Date(now).toISOString()},{expiresAt:new Date(now+3600001).toISOString()},{origin:'https://127.0.0.1'},{origin:'https://user:pass@example.invalid'},{origin:'https://coatria.example/path'},{origin:'https://coatria.example:443'},{gateways:[{projectId:value.projectIds[0],origin:'https://127.0.0.1'}]},{gateways:[]},{gateways:[{projectId:id,origin:'https://gateway.example.invalid'}]},{projectIds:[value.projectIds[0],value.projectIds[0]]},{gateways:[...value.gateways,...value.gateways]},{token:'synthetic-value'}])assert.throws(()=>parseImagePreparationHostScope({...value,...change},now));
 });
+test('active qualifier retains only its exact preflight and worker history without pulling either into a start job',()=>{
+ const bundle='a'.repeat(64),release='/var/lib/coatria-image-preparation-releases/'+bundle;
+ const qualify=imagePreparationHostUnit('qualify',release,bundle,id);
+ const lines=qualify.split('\n').filter(line=>line.startsWith('Before='));
+ assert.deepEqual(lines,['Before='+['preflight','worker'].map(mode=>imagePreparationHostUnitName(id,mode)).join(' ')]);
+ assert.match(qualify,/^RemainAfterExit=yes$/m);
+ for(const mode of ['qualify','preflight','worker']){
+  const unit=imagePreparationHostUnit(mode,release,bundle,id);
+  assert.doesNotMatch(unit,/^(?:Wants|Requires|Requisite|BindsTo|Upholds|PartOf|WantedBy|RequiredBy|UpheldBy)=/m);
+  if(mode!=='qualify'){assert.doesNotMatch(unit,/^Before=|^RemainAfterExit=yes$/m);assert.match(unit,/^ConditionPathExists=.*\/qualified\.json$/m);}
+ }
+});
 test('units are exact, disabled, finite and credential-free during qualification; host config pins every derived profile and unit',async t=>{
  const f=await fixture();t.after(async()=>{assert.equal(dirname(resolve(f.temp)),resolve(tmpdir()));assert.match(f.temp.split(/[\\/]/).at(-1)!,/^coatria-image-preparation-package-/);await rm(f.temp,{recursive:true,force:true});});const result=await buildImagePreparationHostBundle({...f.input,output:join(f.temp,'bundle')}),bundle=await inspectImagePreparationHostBundle(result.output,result.bundleSha256,{trusted:false}),scope=parseImagePreparationHostScope(scopeInput()),plan=imagePreparationHostInstallPlan(bundle,result.bundleSha256,scope),host=createImagePreparationHostConfiguration(bundle,result.bundleSha256,scope,{uid:1001,gid:1001});assert.deepEqual(parseImagePreparationHostConfiguration(host,bundle),host);assert.deepEqual(parseRunnerHostConfiguration(host),host);assert.equal(host.recipeSha256,IMAGE_PREPARATION_RECIPE_HASH);assert.equal(plan.qualified,false);assert.equal(plan.credentialsIncluded,false);
  for(const mode of ['qualify','preflight','worker']){const unit=imagePreparationHostUnit(mode,plan.release,result.bundleSha256,id);assert.match(unit,/^User=coatria-image-preparation$/m);assert.match(unit,/^DelegateSubgroup=supervisor$/m);assert.match(unit,/^KillMode=control-group$/m);assert.match(unit,/^Restart=no$/m);assert.match(unit,/^TimeoutStopSec=45$/m);assert.match(unit,/^SendSIGKILL=yes$/m);assert.doesNotMatch(unit,/^\[Install\]|^WantedBy=|^StateDirectory=|^ExecStart=.*(?:npm|curl|wget|sudo)|--sha256/m);assert.ok(unit.includes('--host /etc/coatria-image-preparation/'+id+'/host.json --bundle '+result.bundleSha256));}
