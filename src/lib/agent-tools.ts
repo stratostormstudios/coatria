@@ -9,6 +9,8 @@ import {proposeHiggsfieldReference,listHiggsfieldReferences,getHiggsfieldReferen
 import {projectImagePreparationProposalInput,projectImagePreparationListInput,projectImagePreparationReferenceInput} from './project-image-preparations-protocol';
 import {proposeProjectImagePreparation,listProjectImagePreparations,getProjectImagePreparation} from './project-image-preparations';
 import {proposeProjectImagePreparationReference} from './project-image-preparation-reference';
+import {projectImagePreparationAvailability} from './project-image-preparation-availability';
+import {publicImagePreparationOptions} from './project-image-preparation-public-runtime';
 import {proposeHiggsfieldArchive,listHiggsfieldArchives,getHiggsfieldArchive} from './higgsfield-archives';
 import {managedAgentAuthoritySql,managedAgentAuthorityPrincipals} from './studio-hosting';
 import {createHash} from 'node:crypto';
@@ -256,8 +258,8 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
   if(definition.mutating&&Number((await client.query('SELECT count(*) FROM agent_tool_receipts WHERE company_id=$1 AND run_id=$2',[agent.company_id,command.runId])).rows[0].count)>=200)fail(409,'This run reached its limit of 200 committed tool actions. Start a new reviewed request.','AGENT_TOOL_BUDGET');
   const run=context.run,companyId=agent.company_id,limit=args.limit||50,values=[companyId,args.after||null,limit+1];let result:unknown,staffingRejected=false;
   switch(name){
-   case 'project_image_preparations_list':result=await listProjectImagePreparations(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id},args);break;
-   case 'project_image_preparation_get':result=await getProjectImagePreparation(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id},args.preparationId);break;
+   case 'project_image_preparations_list':{const actor={companyId,userId:run.requested_by,agentId:agent.id,runId:run.id};result={...await listProjectImagePreparations(client,actor,args),processing:await projectImagePreparationAvailability(client,actor,args.projectId,publicImagePreparationOptions)};break;}
+   case 'project_image_preparation_get':{const actor={companyId,userId:run.requested_by,agentId:agent.id,runId:run.id},view=await getProjectImagePreparation(client,actor,args.preparationId);result={...view,processing:await projectImagePreparationAvailability(client,actor,view.preparation.projectId,publicImagePreparationOptions)};break;}
    case 'project_image_preparation_propose':result=await proposeProjectImagePreparation(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id},{...args,clientId:command.requestId});break;
    case 'project_image_preparation_reference':{const{preparationId,...input}=args;result=await proposeProjectImagePreparationReference(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id},preparationId,{...input,clientId:command.requestId});break;}
    case 'storage_get':result=await getProjectStorage(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id},args.projectId,projectStorageTransfer);break;

@@ -1,6 +1,6 @@
 import type {PoolClient} from 'pg';
 import {parseImagePreparationEnrollmentRequest,imagePreparationEnrollmentHash,imagePreparationEnrollmentCanonical,imagePreparationEnrollmentServiceIdentity,imagePreparationEnrollmentProjectIdentity,imagePreparationEnrollmentLockKey,imagePreparationEnrollmentFailure} from './project-image-preparation-enrollment-contract.mjs';
-import {verifiedProjectGateway} from './project-gateway-bindings';
+import {verifiedImagePreparationGateway} from './project-image-preparation-gateway-binding';
 import {IMAGE_PREPARATION_RECIPE_HASH} from './higgsfield-image-preparation';
 
 /** Registrar evidence authenticates an immutable DB record, not a remote host.
@@ -45,7 +45,7 @@ export async function enrollImagePreparationService(db:PoolClient,input:unknown)
   if(!project||project.revision!==p.projectRevision||project.status==='delivered'||project.production_path!=='higgsfield'||project.ai_policy!=='allowed'||project.contract_version!==2||['brief','estimate','production'].some(g=>project.gates?.[g]?.decision!=='approved'))imagePreparationEnrollmentFailure('IMAGE_PREPARATION_ENROLLMENT_AUTHORITY_ENDED');
   const storage=(await db.query(`SELECT b.id,b.revision,b.connection_id,c.revision AS connection_revision,c.status,m.role,m.access_revoked_at FROM project_storage_bindings b JOIN project_storage_connections c ON c.company_id=b.company_id AND c.id=b.connection_id JOIN memberships m ON m.company_id=c.company_id AND m.user_id=c.created_by WHERE b.company_id=$1 AND b.project_id=$2 FOR SHARE OF b,c,m`,[r.companyId,p.projectId])).rows[0];
   if(!storage||storage.id!==p.storageBindingId||storage.revision!==p.storageBindingRevision||storage.connection_id!==p.storageConnectionId||storage.connection_revision!==p.storageConnectionRevision||storage.status!=='configured'||storage.access_revoked_at||!['owner','admin'].includes(storage.role))imagePreparationEnrollmentFailure('IMAGE_PREPARATION_ENROLLMENT_AUTHORITY_ENDED');
-  const gateway=await verifiedProjectGateway(db,r.companyId,p.projectId);
+  const gateway=await verifiedImagePreparationGateway(db,r.companyId,p.projectId);
   if(!gateway||gateway.bindingId!==p.gateway.bindingId||gateway.provisionId!==p.gateway.provisionId||gateway.configurationHash!==p.gateway.configurationSha256||gateway.origin!==p.gateway.origin||gateway.expiresAt!==p.gateway.expiresAt)imagePreparationEnrollmentFailure('IMAGE_PREPARATION_ENROLLMENT_GATEWAY_CHANGED');
  }
  const insert=async(table:string,value:Record<string,unknown>)=>{const columns=Object.keys(value);await db.query(`INSERT INTO ${table}(${columns.join(',')}) VALUES(${columns.map((_,i)=>'$'+(i+1)).join(',')})`,Object.values(value));};

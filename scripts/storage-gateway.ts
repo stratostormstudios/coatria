@@ -1,9 +1,10 @@
-import {createServer} from 'node:http';
-import {Readable} from 'node:stream';
-import {pipeline} from 'node:stream/promises';
 import {createProjectStorageGateway} from '../src/lib/project-storage-gateway';
-import {database} from '../src/lib/db';
-import {assertProjectStorageGatewayDatabase,ProjectStorageGatewayPreflightError} from '../src/lib/project-storage-preflight';
+import {database,transaction} from '../src/lib/db';
+import {ProjectStorageGatewayPreflightError} from '../src/lib/project-storage-preflight';
+import {ImagePreparationGatewayDatabaseError} from '../src/lib/project-image-preparation-gateway-database.mjs';
+import {createImagePreparationByteGateway} from '../src/lib/project-image-preparation-byte-gateway';
+import {createStorageGatewayNodeServer} from '../src/lib/project-storage-gateway-startup';
+import {assertStorageGatewayStartupDatabase} from '../src/lib/project-storage-gateway-database';
 import {hostingEncryptionConfigured} from '../src/lib/studio-hosting';
 import {createHash} from 'node:crypto';
 import {readFile,lstat} from 'node:fs/promises';
@@ -26,38 +27,23 @@ if(!Number.isInteger(port)||port<1||port>65535)throw new Error('Invalid gateway 
 const appOrigin=new URL(configuration?.appOrigin??process.env.APP_URL??'https://coatria.com').origin;
 if(process.env.NODE_ENV==='production'&&!appOrigin.startsWith('https://'))throw new Error('Production requires an HTTPS application origin.');
 const identity=configuration?gatewayIdentitySchema.parse({version:1,companyId:configuration.companyId,projectIds:configuration.projectIds,provisionId:process.env.COATRIA_SERVICE_PROVISION_ID,configurationHash:trustedServiceHash(configuration),sourceCommit:configuration.sourceCommit,expiresAt:configuration.expiresAt}):undefined;
-const pool=database();let serving=false;
+const pool=database();let serving=false,runtime:ReturnType<typeof createStorageGatewayNodeServer>|undefined,cleanupHold:ReturnType<typeof setInterval>|undefined;
+function shutdownFailed(){console.error(JSON.stringify({event:'storage-gateway-cleanup-unconfirmed',code:'STORAGE_GATEWAY_CLEANUP_UNCONFIRMED'}));process.exitCode=1;cleanupHold??=setInterval(()=>{},60000); }
 try{
  // Inspect the actual authenticated session before opening HTTP or polling the
  // verification queue. SET ROLE from an owner session is not a service LOGIN.
  const client=await pool.connect();let dbCheck;
- try{dbCheck=await assertProjectStorageGatewayDatabase(client);}finally{client.release();}
+ try{dbCheck=await assertStorageGatewayStartupDatabase(client,configuration);}finally{client.release();}
  if(preflight){console.log(JSON.stringify({event:'storage-gateway-preflight-passed',database:dbCheck,listening:false,workClaimed:false}));return;}
 if(configuration&&Date.now()>=Date.parse(configuration.expiresAt))throw new Error('Gateway deadline ended during preflight.');
 const gateway=createProjectStorageGateway({allowedOrigins:[appOrigin],...configuration?{scope:{companyId:configuration.companyId,projectIds:configuration.projectIds},identity}:{}});
-let active=0,verifying=false,closing=false;
-const server=createServer(async(req,res)=>{
- if(closing||active>=8){res.writeHead(503,{'Content-Type':'application/json','Retry-After':'5'});res.end(JSON.stringify({error:'The transfer service is busy. Check upload status before retrying.',code:'STORAGE_TRANSFER_LIMIT'}));return;}
- active++;const abort=new AbortController();req.on('aborted',()=>abort.abort());res.on('close',()=>{if(!res.writableFinished)abort.abort();});
- try{
-  // The Host header never chooses an upstream destination or an access scope.
-  const url=new URL(req.url||'/','http://127.0.0.1:'+port);
-  const headers=new Headers();for(const[key,value]of Object.entries(req.headers)){if(value!==undefined)headers.set(key,Array.isArray(value)?value.join(','):value);}
-  const method=req.method||'GET';
-  const request=new Request(url,{method,headers,signal:abort.signal,...!['GET','HEAD'].includes(method)?{body:Readable.toWeb(req) as ReadableStream<Uint8Array>,duplex:'half'}:{}} as RequestInit);
-  const response=await gateway.handle(request);res.writeHead(response.status,Object.fromEntries(response.headers));
-  if(response.body)await pipeline(Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]),res);else res.end();
- }catch{if(!res.headersSent){res.writeHead(502,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'Transfer interrupted. Check its status before retrying.',code:'STORAGE_OUTCOME_UNCERTAIN'}));}else res.destroy();}
- finally{active--;}
-});
-server.requestTimeout=5*60*1000;server.headersTimeout=15000;server.keepAliveTimeout=5000;server.maxHeadersCount=40;
-await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(port,host,()=>{server.removeListener('error',reject);resolve();});});
-serving=true;
-const worker=setInterval(()=>{if(verifying||closing)return;verifying=true;void gateway.verifyNext().catch(()=>{console.error('Storage verification queue unavailable.');}).finally(()=>{verifying=false;});},2000);
-console.log(JSON.stringify({event:'storage-gateway-started',role:dbCheck.role}));
-const expiryTimer=configuration?setTimeout(()=>void stop(),Math.max(1,Date.parse(configuration.expiresAt)-Date.now())):undefined;
-async function stop(){if(closing)return;closing=true;clearInterval(worker);clearTimeout(expiryTimer);server.close();server.closeIdleConnections();const deadline=Date.now()+30000;while((active||verifying)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,250));await database().end();process.exit(0);}
-process.on('SIGTERM',()=>void stop());process.on('SIGINT',()=>void stop());
-}finally{if(!serving)await pool.end();}
+const preparation=configuration?.imagePreparation?createImagePreparationByteGateway({transaction,identity:identity!,maxTransfers:configuration.imagePreparation.maxTransfers}):undefined;
+runtime=createStorageGatewayNodeServer({gateway,preparation,host,port,maxTransfers:configuration?.maxTransfers??8,expiresAt:configuration?.expiresAt,closePool:()=>pool.end(),onVerificationError:()=>console.error('Storage verification queue unavailable.'),onShutdownError:shutdownFailed});
+await runtime.listen();serving=true;
+console.log(JSON.stringify({event:'storage-gateway-started',role:dbCheck.role,...preparation?{imagePreparation:true}:{}}));
+const stop=()=>void runtime!.stop().catch(shutdownFailed);
+process.on('SIGTERM',stop);process.on('SIGINT',stop);
+}finally{if(!serving){if(runtime){try{await runtime.stop();}catch(error){shutdownFailed();throw error;}}else await pool.end();}}
+
 }
-void main().catch(error=>{console.error(JSON.stringify({event:'storage-gateway-startup-failed',code:error instanceof ProjectStorageGatewayPreflightError?error.code:'STORAGE_GATEWAY_CONFIGURATION_INVALID'}));process.exitCode=1;});
+void main().catch(error=>{console.error(JSON.stringify({event:'storage-gateway-startup-failed',code:error instanceof ProjectStorageGatewayPreflightError||error instanceof ImagePreparationGatewayDatabaseError?error.code:'STORAGE_GATEWAY_CONFIGURATION_INVALID'}));process.exitCode=1;});

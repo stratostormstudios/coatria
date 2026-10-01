@@ -3,7 +3,7 @@
 import type {PoolClient} from 'pg';
 import {z} from 'zod';
 import {fail,id} from './security';
-import {verifiedProjectGateway} from './project-gateway-bindings';
+import {verifiedImagePreparationGateway} from './project-image-preparation-gateway-binding';
 import {verifiedImagePreparationServiceEnrollment} from './project-image-preparation-enrollment';
 import {imagePreparationEnrollmentCanonical} from './project-image-preparation-enrollment-contract.mjs';
 import {IMAGE_PREPARATION_RECIPE_HASH} from './higgsfield-image-preparation';
@@ -52,7 +52,7 @@ export async function authorizeImagePreparationServiceProject(db:PoolClient,iden
    WHERE p.company_id=$1 AND p.project_id=$2 AND p.id=$3`,[s.company_id,projectId,id(options.preparationId)])).rows[0];
   if(!r||r.storage_binding_id!==p.storage_binding_id||r.storage_connection_id!==p.storage_connection_id||r.storage_connection_revision!==p.storage_connection_revision||!(storage.revision===r.storage_binding_revision||r.binding_revision_before===r.storage_binding_revision&&r.binding_revision_after===r.storage_binding_revision+1&&storage.revision===r.binding_revision_after))ended();
  }
- const gateway=await verifiedProjectGateway(db,s.company_id,projectId);
+ const gateway=await verifiedImagePreparationGateway(db,s.company_id,projectId);
  if(!gateway||gateway.bindingId!==p.gateway_binding_id||gateway.provisionId!==p.gateway_provision_id||gateway.configurationHash!==p.gateway_configuration_sha256||gateway.origin!==p.gateway_origin||gateway.expiresAt!==iso(p.gateway_expires_at))ended();
  if(!(await db.query('SELECT $1::timestamptz>clock_timestamp() AND $2::timestamptz>clock_timestamp() AS live',[s.expires_at,p.gateway_expires_at])).rows[0]?.live)ended();
  return {...p,gateway};

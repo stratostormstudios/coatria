@@ -12,10 +12,11 @@ import {fail,hashToken,id} from './security';
 import {trustedServicePlanInput,trustedServiceStartInput,trustedServiceStopInput,type TrustedServiceKind} from './trusted-service-protocol';
 import {TRUSTED_SERVICE_IMAGE,TRUSTED_SERVICE_DATABASE_ROLES,loadTrustedServicePreset,trustedServiceHash,companyTrustedServiceEnvironment,companyTrustedServiceReadiness,type TrustedServicePreset} from './trusted-service-config';
 import {assertHiggsfieldArchiveDatabase} from './higgsfield-archive-preflight';
-import {assertProjectStorageGatewayDatabase} from './project-storage-preflight';
+import {assertStorageGatewayStartupDatabase} from './project-storage-gateway-database';
+import {parseTrustedServiceGatewayConfiguration} from './trusted-service-config';
 
 type Row=Record<string,any>;
-type Dependencies={fetch?:typeof fetch;transaction?:typeof transaction;verifyDatabase?:(service:TrustedServiceKind,url:string,companyId:string)=>Promise<void>};
+type Dependencies={fetch?:typeof fetch;transaction?:typeof transaction;verifyDatabase?:(service:TrustedServiceKind,url:string,companyId:string,configuration:unknown)=>Promise<void>};
 const active=['approved','submitting','uncertain','provisioning','running','stopping','needs_attention'],stopped=new Set(['EXITED','TERMINATED']);
 const parse=<T>(schema:{safeParse:(value:unknown)=>{success:boolean;data?:T}},value:unknown):T=>{const result=schema.safeParse(value);if(!result.success)fail(400,'Review the required service fields.','VALIDATION_ERROR');return result.data!;};
 async function control(db:PoolClient,companyId:string){await db.query('SELECT id FROM companies WHERE id=$1 FOR KEY SHARE',[companyId]);await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`trusted-service-control:${companyId}`]);}
@@ -65,9 +66,16 @@ async function currentConfiguration(db:PoolClient,row:Row){
  catch{return false;}
 }
 const environmentHashes=(env:Record<string,string>)=>Object.fromEntries(Object.entries(env).map(([key,value])=>[key,hashToken(value)]));
-async function verifyDatabase(service:TrustedServiceKind,url:string,companyId:string){
+/** The private verifier receives the exact resolved preset configuration. It
+ * never discovers its mode from grants, headers or ambient feature switches. */
+export async function assertTrustedServiceDatabase(db:Parameters<typeof assertStorageGatewayStartupDatabase>[0],service:TrustedServiceKind,companyId:string,configuration:unknown){
+ if(service==='archive')await assertHiggsfieldArchiveDatabase(db);
+ else{const config=parseTrustedServiceGatewayConfiguration(configuration);if(config.companyId!==companyId)throw Error('SERVICE_DATABASE_SCOPE');await assertStorageGatewayStartupDatabase(db,config);}
+ if(!(await db.query('SELECT id FROM companies WHERE id=$1',[companyId])).rows.length)throw Error('SERVICE_DATABASE_SCOPE');
+}
+async function verifyDatabase(service:TrustedServiceKind,url:string,companyId:string,configuration:unknown){
  const pool=new Pool({connectionString:url,max:1,connectionTimeoutMillis:5000,statement_timeout:15000});pool.on('error',()=>{});
- try{if(service==='archive')await assertHiggsfieldArchiveDatabase(pool);else{const client=await pool.connect();try{await assertProjectStorageGatewayDatabase(client);}finally{client.release();}}if(!(await pool.query('SELECT id FROM companies WHERE id=$1',[companyId])).rowCount)throw Error();}
+ try{const client=await pool.connect();try{await assertTrustedServiceDatabase(client,service,companyId,configuration);}finally{client.release();}}
  catch{fail(503,'The dedicated service LOGIN and grants were not verified.','SERVICE_DATABASE_UNCONFIRMED');}finally{await pool.end();}
 }
 async function provider(path:string,method:string,body:string|undefined,transport:typeof fetch,createProvisionId?:string){
@@ -98,7 +106,7 @@ export async function reconcileTrustedService(provisionId:string,dependencies:De
  try{
   if(!submitted){
    if(row.stop_requested_at)return await save({phase:'stopped'});
-   const env=await tx(async db=>{await control(db,row.company_id);const current=await rowFor(db,row.company_id,row.id);if(!await currentConfiguration(db,current))fail(409,'The reviewed service preset changed.','SERVICE_PRESET_CHANGED');return companyTrustedServiceEnvironment(db,await loadTrustedServicePreset(db,row.company_id,row.service),row.id);});const preset=row.preset as TrustedServicePreset;await (dependencies.verifyDatabase??verifyDatabase)(row.service,env.DATABASE_URL,row.company_id);deadline.throwIfAborted();
+   const {env,preset}=await tx(async db=>{await control(db,row.company_id);const current=await rowFor(db,row.company_id,row.id);if(!await currentConfiguration(db,current))fail(409,'The reviewed service preset changed.','SERVICE_PRESET_CHANGED');const resolved=await loadTrustedServicePreset(db,row.company_id,row.service);return {env:await companyTrustedServiceEnvironment(db,resolved,row.id),preset:resolved.preset};});await (dependencies.verifyDatabase??verifyDatabase)(row.service,env.DATABASE_URL,row.company_id,preset.configuration);deadline.throwIfAborted();
    const cpu=await provider(RUNPOD_CPU_CATALOG_PATH,'GET',undefined,transport);
    if(cpu.id!=='cpu3c'||cpu.ramGbPerVcpu!==2||!Number.isInteger(cpu.vcpu?.min)||!Number.isInteger(cpu.vcpu?.max)||cpu.vcpu.min<1||cpu.vcpu.min>2||cpu.vcpu.max<2||!Number.isFinite(cpu.price?.securePerVcpu)||cpu.price.securePerVcpu<=0||Math.ceil(cpu.price.securePerVcpu*2*1000000)>preset.maxHourlyMicrousd)fail(409,'The CPU price or resource changed.','SERVICE_CATALOG_CHANGED');
    const capacity=runpodCpuCapacity(cpu,preset.dataCenterId);

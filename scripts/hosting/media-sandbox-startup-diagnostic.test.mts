@@ -230,8 +230,10 @@ test('default disappearance probe distinguishes a real retained child from its r
 test('installed crash child uses only pinned compiled qualifier and keeps archive source-loader behavior',()=>{
  const config={version:1,uid:123,gid:123,sourceRoot:'/release/source'} as Parameters<typeof mediaSandboxCrashChildArguments>[0];
  const source=mediaSandboxCrashChildArguments(config);assert.deepEqual(source.slice(0,2),['--import','tsx']);assert.match(source[2],/media-sandbox-linux-canary\.mts$/);assert.equal(source[3],'--supervisor-crash-child');
- const entry='/var/lib/coatria-reference-releases/'+'a'.repeat(64)+'/qualifier/runtime.mjs';assert.deepEqual(mediaSandboxCrashChildArguments({...config,compiledCrashEntrypoint:entry}),[entry,'--supervisor-crash-child']);
- for(const bad of ['/tmp/runtime.mjs',entry.replace('/qualifier/','/worker/'),entry+'/../runtime.mjs','runtime.mjs'])assert.throws(()=>mediaSandboxCrashChildArguments({...config,compiledCrashEntrypoint:bad}));
+ for(const kind of ['reference','image-preparation']){
+  const entry='/var/lib/coatria-'+kind+'-releases/'+'a'.repeat(64)+'/qualifier/runtime.mjs';assert.deepEqual(mediaSandboxCrashChildArguments({...config,compiledCrashEntrypoint:entry}),[entry,'--supervisor-crash-child']);
+  for(const bad of ['/tmp/runtime.mjs',entry.replace('/qualifier/','/worker/'),entry+'/../runtime.mjs','runtime.mjs',entry.replace(kind,'archive'),entry.replace('coatria-'+kind+'-','coatria-'+kind+'-extra-'),entry.replace('a'.repeat(64),'a'.repeat(63)),entry.replace('a'.repeat(64),'A'.repeat(64))])assert.throws(()=>mediaSandboxCrashChildArguments({...config,compiledCrashEntrypoint:bad}));
+ }
  const raw=JSON.stringify(config);assert.deepEqual(parseMediaSandboxCrashChildInput(raw,123,123),config);
  for(const [input,uid,gid]of [[undefined,123,123],['',123,123],['{}',123,123],[raw,0,123],[raw,123,456],['é'.repeat(8193),123,123]] as const)assert.throws(()=>parseMediaSandboxCrashChildInput(input,uid,gid));
 });

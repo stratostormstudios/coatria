@@ -48,3 +48,58 @@ Tests use injected clients and adapters and make no provider requests:
 ```sh
 node --import tsx --test tests/hosted-worker.test.ts
 ```
+
+## Image preparation host
+
+The image preparation service turns one approved, verified original into a
+separate bounded PNG derivative. Its worker has an outbound metadata client and
+one-use byte capabilities; database and S3 credentials stay in the broker and
+gateway. Preparing a derivative does not approve sharing it with Higgsfield,
+generation, review, or delivery.
+
+The host path is deliberately staged:
+
+1. Build the `image-preparation` and `image-preparation-qualification` services
+   with `build-trusted-service-bundle.mjs` at the same reviewed commit. Build their
+   immutable host package with `build-image-preparation-host-bundle.mjs` and a
+   verified Linux native runtime export. Source, dependency, native closure,
+   recipe, and compiled output hashes are checked before packaging.
+2. `install-image-preparation-host.mjs` installs under
+   `/var/lib/coatria-image-preparation-releases/<bundle-sha256>` using the separate
+   `coatria-image-preparation` system user. It requires an exact company, finite
+   project list, gateway origins, and expiry within one hour. It writes disabled
+   systemd units and private directories; it does not start services or enroll a
+   processor.
+3. The installed qualifier runs the isolation/resource/cleanup canaries and all
+   image transformation checks on the actual host. Privileged acceptance checks
+   the full reports, current boot, systemd invocation, trusted journal evidence,
+   immutable files, and exact source/recipe identity. Qualification renewal uses
+   the previous receipt hash and preserves that receipt. A package hash alone is
+   not qualification.
+4. The runner additionally requires a matching registrar enrollment, protected
+   `service-token.json`, and separately authorized `worker-enabled` marker.
+   Its `--preflight` path checks readiness without claiming work. Claims are
+   sequential and every attempt drains its real clients before another attempt.
+   Expiry, authorization failure, or uncertain work stops admission.
+
+**Rollout is incomplete:** this slice provides installation, qualification,
+runner, API availability, and gateway startup wiring. The operator registrar
+workflow that safely publishes the token and activation marker, plus a complete
+installed-host metadata/byte-flow acceptance test, remain required before live
+activation. Do not manufacture these files as a setup shortcut.
+
+A storage gateway must explicitly opt into
+`imagePreparation: {version: 1, maxTransfers: 1}` in its immutable provisioning
+configuration (`maxTransfers` supports 1–8). Ordinary gateway configuration keeps
+its existing permission contract. Public and agent API availability requires a
+configured broker that passes its dedicated database-role preflight and a
+current enrollment bound to the exact project and opted-in gateway. Human
+approval resolves that identity in the same authorized application transaction;
+agents can propose and inspect preparation, but cannot grant that approval.
+
+The Linux CI stage `qualify-image-preparation-host-ci.mjs` installs and qualifies
+two distinct invocations, tests stopped/stale evidence and receipt renewal, and
+keeps the worker disabled. Its artifacts contain the separate raw isolation and
+image-transformation reports. CI evidence does not qualify a production host or
+exercise live storage. The source CI orchestrator uses `tsx`; installed services
+run the pinned compiled Node programs without a source loader.

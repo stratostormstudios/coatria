@@ -1,0 +1,51 @@
+/** Pure preparation host/configuration/receipt contract. Parsing is not host
+ * qualification or enrollment. Only an independently accepted receipt qualifies. */
+import {z} from 'zod';
+import {IMAGE_PREPARATION_RECIPE_HASH} from '../../src/lib/higgsfield-image-preparation';
+import {preparationServiceOrigin,preparationServiceToken,preparationServiceUuid,preparationServiceHash,preparationServiceDate} from '../../src/lib/project-image-preparation-service-protocol';
+import {imagePreparationRunnerConfigurationHash,imagePreparationRunnerCanonical as canonical} from './image-preparation-runner-identity.mjs';
+export {imagePreparationRunnerConfigurationHash} from './image-preparation-runner-identity.mjs';
+
+export class ImagePreparationRunnerError extends Error{constructor(readonly code:'IMAGE_PREPARATION_RUNNER_CONFIGURATION_INVALID'|'IMAGE_PREPARATION_RUNNER_UNQUALIFIED'|'IMAGE_PREPARATION_RUNNER_STOPPED'|'IMAGE_PREPARATION_RUNNER_CLEANUP_FAILED'){super(code);this.name='ImagePreparationRunnerError';}}
+export function imagePreparationRunnerFailure(code:ImagePreparationRunnerError['code']='IMAGE_PREPARATION_RUNNER_CONFIGURATION_INVALID'):never{throw new ImagePreparationRunnerError(code);}
+const uuid=preparationServiceUuid,sha=preparationServiceHash,date=preparationServiceDate,commit=z.string().regex(/^[a-f0-9]{40}$/),positive=z.number().int().positive();
+const projects=z.array(uuid).min(1).max(32).refine(ids=>new Set(ids).size===ids.length),file=z.object({path:z.string(),sha256:sha}).strict();
+const profile=z.object({profilePath:z.string(),expectedProfileSha256:sha}).strict(),unit=z.object({name:z.string(),sha256:sha}).strict(),units=z.object({qualify:unit,preflight:unit,worker:unit}).strict();
+const gateways=z.array(z.object({projectId:uuid,origin:preparationServiceOrigin}).strict()).min(1).max(32);
+export const imagePreparationHostConfigurationSchema=z.object({version:z.literal(1),bundleSha256:sha,commit,tree:commit,release:z.string(),closureSha256:sha,recipeSha256:sha,uid:positive,gid:positive,
+ scope:z.object({serviceId:uuid,companyId:uuid,projectIds:projects,origin:preparationServiceOrigin,location:z.string().trim().min(1).max(200),expiresAt:date,gateways}).strict(),
+ profiles:z.object({real:profile,conformance:profile}).strict(),worker:file,qualifier:file,node:file,units}).strict();
+export type ImagePreparationHostConfiguration=z.infer<typeof imagePreparationHostConfigurationSchema>;
+const configurationSchema=z.object({version:z.literal(1),serviceId:uuid,companyId:uuid,projectIds:projects,origin:preparationServiceOrigin,location:z.string().trim().min(1).max(200),expiresAt:date,gateways,
+ sourceCommit:commit,sourceTree:commit,bundleSha256:sha,hostConfigurationSha256:sha,releaseSha256:sha,closureSha256:sha,recipeSha256:sha,uid:positive,gid:positive,runtimePath:z.string(),node:file,scratchRoot:z.string(),temporaryRoot:z.string(),profilePath:z.string(),profileSha256:sha,conformanceProfileSha256:sha,cgroupRoot:z.string(),qualifierSha256:sha,units,qualification:file}).strict();
+export type ImagePreparationRunnerConfiguration=z.infer<typeof configurationSchema>;
+const same=(a:unknown,b:unknown)=>canonical(a)===canonical(b);
+export function imagePreparationRunnerUnitName(serviceId:string,mode:'qualify'|'preflight'|'worker'){if(!uuid.safeParse(serviceId).success||!['qualify','preflight','worker'].includes(mode))imagePreparationRunnerFailure();return `coatria-image-preparation-${serviceId}-${mode}.service`;}
+function finite(expiresAt:string,now:number){const expiry=Date.parse(expiresAt);if(!Number.isSafeInteger(now)||expiry<=now||expiry-now>3600000)imagePreparationRunnerFailure();}
+function scope(projectIds:string[],value:z.infer<typeof gateways>){if(value.length!==projectIds.length||new Set(value.map(g=>g.projectId)).size!==projectIds.length||value.some(g=>!projectIds.includes(g.projectId)))imagePreparationRunnerFailure();}
+export function parseImagePreparationHostConfiguration(input:unknown,now=Date.now()):ImagePreparationHostConfiguration{
+ const result=imagePreparationHostConfigurationSchema.safeParse(input);if(!result.success)imagePreparationRunnerFailure();const h=result.data,s=h.scope,base=`/etc/coatria-image-preparation/${s.serviceId}`;
+ finite(s.expiresAt,now);scope(s.projectIds,s.gateways);
+ if(h.recipeSha256!==IMAGE_PREPARATION_RECIPE_HASH||h.release!==`/var/lib/coatria-image-preparation-releases/${h.bundleSha256}`||h.worker.path!==h.release+'/worker/runtime.mjs'||h.qualifier.path!==h.release+'/qualifier/runtime.mjs'||h.node.path!==h.release+'/runtime/node'||h.profiles.real.profilePath!==base+'/real.json'||h.profiles.conformance.profilePath!==base+'/conformance.json')imagePreparationRunnerFailure();
+ for(const mode of ['qualify','preflight','worker'] as const)if(h.units[mode].name!==imagePreparationRunnerUnitName(s.serviceId,mode))imagePreparationRunnerFailure();return h;
+}
+export function deriveImagePreparationRunnerConfiguration(host:ImagePreparationHostConfiguration,hostConfigurationSha256:string,qualificationSha256:string):ImagePreparationRunnerConfiguration{
+ const s=host.scope,state=`/var/lib/coatria-image-preparation-worker/${s.serviceId}`;
+ return {version:1,...s,sourceCommit:host.commit,sourceTree:host.tree,bundleSha256:host.bundleSha256,hostConfigurationSha256,releaseSha256:host.worker.sha256,closureSha256:host.closureSha256,recipeSha256:host.recipeSha256,uid:host.uid,gid:host.gid,runtimePath:host.worker.path,node:host.node,scratchRoot:state+'/scratch',temporaryRoot:state+'/temporary',profilePath:host.profiles.real.profilePath,profileSha256:host.profiles.real.expectedProfileSha256,conformanceProfileSha256:host.profiles.conformance.expectedProfileSha256,cgroupRoot:`/sys/fs/cgroup/system.slice/${host.units.worker.name}/decoders`,qualifierSha256:host.qualifier.sha256,units:host.units,qualification:{path:`/etc/coatria-image-preparation/${s.serviceId}/qualified.json`,sha256:qualificationSha256}};
+}
+export function parseImagePreparationRunnerConfiguration(input:unknown,now=Date.now()):ImagePreparationRunnerConfiguration{
+ const result=configurationSchema.safeParse(input);if(!result.success)imagePreparationRunnerFailure();const c=result.data,base=`/etc/coatria-image-preparation/${c.serviceId}`,state=`/var/lib/coatria-image-preparation-worker/${c.serviceId}`,release=`/var/lib/coatria-image-preparation-releases/${c.bundleSha256}`;
+ finite(c.expiresAt,now);scope(c.projectIds,c.gateways);
+ if(c.recipeSha256!==IMAGE_PREPARATION_RECIPE_HASH||c.runtimePath!==release+'/worker/runtime.mjs'||c.node.path!==release+'/runtime/node'||c.profilePath!==base+'/real.json'||c.scratchRoot!==state+'/scratch'||c.temporaryRoot!==state+'/temporary'||c.qualification.path!==base+'/qualified.json'||c.cgroupRoot!==`/sys/fs/cgroup/system.slice/${imagePreparationRunnerUnitName(c.serviceId,'worker')}/decoders`)imagePreparationRunnerFailure();
+ for(const mode of ['qualify','preflight','worker'] as const)if(c.units[mode].name!==imagePreparationRunnerUnitName(c.serviceId,mode))imagePreparationRunnerFailure();return c;
+}
+export const imagePreparationRunnerReceiptSchema=z.object({version:z.literal(1),kind:z.literal('coatria-image-preparation-qualification-v1'),serviceId:uuid,companyId:uuid,projectIds:projects,sourceCommit:commit,sourceTree:commit,bundleSha256:sha,releaseSha256:sha,closureSha256:sha,recipeSha256:sha,qualifierSha256:sha,configurationSha256:sha,hostConfigurationSha256:sha,profileSha256:sha,conformanceProfileSha256:sha,bootId:uuid,uid:positive,gid:positive,expiresAt:date,units,qualifierInvocationId:z.string().regex(/^(?!0{32}$)[a-f0-9]{32}$/),serviceRoot:z.string(),evidenceSha256:sha,reportSha256:sha,acceptedAt:date,qualified:z.literal(true),checks:z.object({isolation:z.literal(true),resourceLimits:z.literal(true),descendantCleanup:z.literal(true),imagePreparation:z.literal(true)}).strict()}).strict();
+export type ImagePreparationRunnerReceipt=z.infer<typeof imagePreparationRunnerReceiptSchema>;
+export function assertImagePreparationRunnerReceipt(input:unknown,c:ImagePreparationRunnerConfiguration,identity:{bootId:string;uid:number;gid:number;hostConfigurationSha256:string;host:ImagePreparationHostConfiguration},now=Date.now()):ImagePreparationRunnerReceipt{
+ const result=imagePreparationRunnerReceiptSchema.safeParse(input);if(!result.success)imagePreparationRunnerFailure('IMAGE_PREPARATION_RUNNER_UNQUALIFIED');const r=result.data,h=parseImagePreparationHostConfiguration(identity.host,now);
+ const fields=['serviceId','companyId','sourceCommit','sourceTree','bundleSha256','releaseSha256','closureSha256','recipeSha256','qualifierSha256','profileSha256','conformanceProfileSha256','expiresAt','uid','gid'] as const;
+ if(fields.some(key=>r[key]!==c[key])||!same([...r.projectIds].sort(),[...c.projectIds].sort())||r.configurationSha256!==imagePreparationRunnerConfigurationHash(c)||!same(r.units,c.units)||r.bootId!==identity.bootId||r.uid!==identity.uid||r.gid!==identity.gid||r.uid!==h.uid||r.gid!==h.gid||r.hostConfigurationSha256!==identity.hostConfigurationSha256||c.hostConfigurationSha256!==identity.hostConfigurationSha256||!same(deriveImagePreparationRunnerConfiguration(h,identity.hostConfigurationSha256,c.qualification.sha256),c)||r.serviceRoot!==`/sys/fs/cgroup/system.slice/${c.units.qualify.name}`||Date.parse(r.acceptedAt)>now||Date.parse(r.expiresAt)<=now||Date.parse(r.expiresAt)-Date.parse(r.acceptedAt)>3600000)imagePreparationRunnerFailure('IMAGE_PREPARATION_RUNNER_UNQUALIFIED');return r;
+}
+export function imagePreparationRunnerProcessor(c:ImagePreparationRunnerConfiguration){return {id:c.serviceId,location:c.location,transport:'linux_binary_v1' as const,qualificationSha256:c.qualification.sha256,releaseSha256:c.releaseSha256,profileSha256:c.profileSha256,sourceCommit:c.sourceCommit,closureSha256:c.closureSha256,recipeSha256:c.recipeSha256,expiresAt:c.expiresAt};}
+const tokenSchema=z.object({version:z.literal(1),serviceId:uuid,configurationSha256:sha,expiresAt:date,token:preparationServiceToken}).strict();
+export function parseImagePreparationRunnerToken(input:unknown,c:ImagePreparationRunnerConfiguration){const r=tokenSchema.safeParse(input);if(!r.success||r.data.serviceId!==c.serviceId||r.data.configurationSha256!==imagePreparationRunnerConfigurationHash(c)||r.data.expiresAt!==c.expiresAt)imagePreparationRunnerFailure();return r.data.token;}
