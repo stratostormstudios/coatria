@@ -7,6 +7,7 @@ import {HIGGSFIELD_REFERENCE_ROLES,type HiggsfieldReference,type HiggsfieldRefer
 import type {StudioReadableProjectDetail} from '@/lib/studio-protocol';
 import {Badge,Field,Loading} from './ui';
 import {ReferenceFilePicker,ReferenceImagePreview,referenceSize,type ReferenceFileSelection} from './HiggsfieldReferenceFiles';
+import {ProjectImagePreparationsPanel} from './ProjectImagePreparationsPanel';
 import s from './HiggsfieldReferencesPanel.module.css';
 
 type Page=HiggsfieldReferencePage&{processing:HiggsfieldReferenceAvailability};
@@ -23,6 +24,7 @@ function References({companyId,projectId,projectRevision,projectReady,workItems,
  const [page,setPage]=useState<Page|null>(null),[review,setReview]=useState<HiggsfieldReference|null>(null),[picker,setPicker]=useState<'proxy'|'source'|null>(null),[proxy,setProxy]=useState<ReferenceFileSelection|null>(null),[source,setSource]=useState<ReferenceFileSelection|null>(null);
  const [task,setTask]=useState(workItemId??''),[role,setRole]=useState<HiggsfieldReference['role']>('image'),[purpose,setPurpose]=useState(''),[minutes,setMinutes]=useState(30),[consents,setConsents]=useState([false,false,false,false]),[previewed,setPreviewed]=useState(''),[selected,setSelected]=useState<string[]>([]);
  const [loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[now,setNow]=useState(Date.now());
+ const [prepareOriginal,setPrepareOriginal]=useState(false);
  const alive=useRef(true),pending=useRef(false),read=useRef<AbortController|null>(null),sequence=useRef(0),ids=useRef(new Map<string,string>());
  const tasks=workItems.filter(item=>['references','generation'].includes(item.stage)&&['agent','creative'].includes(item.execution));
  const idFor=(value:unknown)=>{const signature=JSON.stringify(value);let id=ids.current.get(signature);if(!id){id=crypto.randomUUID();ids.current.set(signature,id);}return id;};
@@ -74,7 +76,9 @@ function References({companyId,projectId,projectRevision,projectReady,workItems,
   {error&&<p className="error-message" role="alert">{error}</p>}{notice&&<p className={s.notice} role="status">{notice}</p>}
   {processing&&<p className={s.notice} role="status">{processing.message}{processing.enabled&&!processingCurrent?' This worker qualification has expired. Sharing is unavailable.':''}</p>}
   {loading&&!page&&<Loading label="Loading project references"/>}
-  <p>Prepared images are copied unchanged. Coatria does not resize them or remove metadata in this flow. Keep heavy or private originals on project storage.</p>
+  <p>Already-prepared images are shared unchanged. To create a smaller image with embedded metadata removed, prepare a separate derivative from an original first.</p>
+  <div className={s.actions}><button type="button" className="button secondary small" aria-expanded={prepareOriginal} onClick={()=>setPrepareOriginal(value=>!value)}>{prepareOriginal?'Close original image preparation':'Prepare an original image'}</button></div>
+  {prepareOriginal&&<ProjectImagePreparationsPanel companyId={companyId} projectId={projectId} projectRevision={projectRevision} projectReady={projectReady} workItems={workItems} workItemId={workItemId} isAdmin={isAdmin} onReferencePrepared={value=>{replace(value);setTask(value.reference.workItemId);setRole(value.reference.role);setPurpose(value.reference.purpose);setProxy(value.reference.proxy);setSource(value.reference.source);setNotice('The prepared derivative is now a reference proposal. Review its inspection and give separate sharing approval when available.');}}/>}
   <div className={s.form} role="group" aria-label="Prepare managed reference">
    <h4>1. Choose what can leave project storage</h4>
    <div className={s.actions}><button className="button secondary small" disabled={locked} onClick={()=>setPicker('proxy')}>{proxy?'Change prepared image':'Choose prepared image'}</button>{proxy&&<button className="button secondary small" disabled={locked} onClick={()=>setPicker('source')}>{source?'Change linked original':'Link original for provenance (optional)'}</button>}{source&&<button className="button secondary small" disabled={locked} onClick={()=>setSource(null)}>Remove original link</button>}</div>
@@ -88,6 +92,7 @@ function References({companyId,projectId,projectRevision,projectReady,workItems,
    <div className={s.header}><h4>2. Review exact-byte sharing</h4><Badge>{labels[review.status]}</Badge></div>
    {review.status==='awaiting_approval'&&review.inspection&&<ReferenceImagePreview key={`${review.id}:${review.revision}:${review.requestHash}`} companyId={companyId} projectId={projectId} file={review.proxy} onVerified={()=>setPreviewed(review.requestHash)}/>}
    {review.projectRevision!==projectRevision&&<p className={s.notice} role="status">The project changed after this reference was prepared. Prepare and review a new reference before sharing.</p>}<FileFacts file={review.proxy} label="Image to share"/>{review.source&&<FileFacts file={review.source} label="Linked original · never substituted"/>}
+   {review.preparation&&<p className={s.notice}><ShieldCheck size={14}/>Prepared derivative: {review.preparation.outputWidth} × {review.preparation.outputHeight} PNG with embedded metadata removed. Its original and preparation receipt are linked to this exact version. Sharing still transfers the prepared file unchanged and needs separate consent.</p>}
    <dl className={s.facts}><div><dt>Purpose</dt><dd>{review.purpose}</dd></div><div><dt>Role</dt><dd>{review.role}</dd></div><div><dt>Destination</dt><dd>Company Higgsfield connection <code>{review.providerConnectionId}</code> · revision {review.providerConnectionRevision}</dd></div><div><dt>Project / task</dt><dd><code>{review.projectId}</code> / <code>{review.workItemId}</code></dd></div></dl>
    <details><summary>Review fingerprints and inspection</summary><p>Request SHA-256: <code>{review.requestHash}</code><br/>Storage connection revision: {review.storageConnectionRevision}<br/>Project revision: {review.projectRevision} · Task revision: {review.taskRevision}</p>{review.inspection?<><p>Server inspection recorded {when(review.inspection.inspectedAt)}. Full decoding does not sanitize or establish sharing rights.</p><pre>{JSON.stringify(review.inspection,null,2)}</pre></>:<p>No trusted image inspection recorded yet. Approval is unavailable.</p>}</details>
    {review.status==='awaiting_approval'&&<>

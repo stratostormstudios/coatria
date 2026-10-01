@@ -516,8 +516,9 @@ test('broker runs real leased API and receipt transactions against isolated prov
    await f.call(`companies/${f.company}/studio/setup`,'POST',{clientId:randomUUID(),templateId:'ai-production',templateVersion:1,revision:0,assignments:[{roleKey:'producer',agentId:f.identity.id},{roleKey:'supervisor',agentId:f.identity.id}]},'owner',201);
    const context=await f.call(`agent/runs/${f.run.id}/context`,'GET',undefined,'agent',200,{'X-Coatria-Run-Lease':f.lease.leaseToken});
    // Reconstruct the historical director catalog: prepared-reference proposals
-   // were creative.write-only then and were absent at the observed byte sizes.
-   const fullTools=Object.entries(AGENT_TOOLS).filter(([name,definition])=>name!=='higgsfield_reference_propose'&&capabilities.includes(definition.capability)).map(([name,definition])=>({type:'function',function:{name,description:definition.description,parameters:z.toJSONSchema(definition.schema,{io:'input',unrepresentable:'any'})}}));
+   // were creative.write-only and original-image tools did not exist at the
+   // observed byte sizes. Those new tools also need storage.read, absent here.
+   const fullTools=Object.entries(AGENT_TOOLS).filter(([name,definition])=>name!=='higgsfield_reference_propose'&&!name.startsWith('project_image_preparation')&&capabilities.includes(definition.capability)).map(([name,definition])=>({type:'function',function:{name,description:definition.description,parameters:z.toJSONSchema(definition.schema,{io:'input',unrepresentable:'any'})}}));
    const preview=await transaction(async client=>{const run=(await client.query('SELECT * FROM agent_runs WHERE id=$1',[f.run.id])).rows[0];return buildStudioInferenceRequest(client,{run,capabilities,installation:context.installation});});preview.max_tokens=8192;
    // Match the observed pre-fix request sizes with synthetic task/reasoning
    // text, without copying private live content or assuming a tokenizer ratio.

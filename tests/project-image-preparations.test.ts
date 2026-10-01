@@ -241,7 +241,13 @@ test('image preparation control plane binds finite adoption, immutable evidence 
     await t.test('explicit administrator adoption can outlive the proposing run but not agent identity or sponsorship', async () => {
       const f = await fixture(), actor = await f.agent(), row = (await f.propose(f.input(), actor)).preparation;
       await f.approve(row);
-      await query("UPDATE agent_runs SET status='succeeded',worker_id=NULL,lease_token_hash=NULL,lease_expires_at=NULL,finished_at=clock_timestamp() WHERE id=$1", [actor.runId]);
+      // Committed completion evidence, still metadata-only and not media proof.
+      await transaction(async db=>{
+        const messageId=randomUUID();
+        await db.query("INSERT INTO messages(id,company_id,conversation_id,sequence,last_event_sequence,actor_kind,agent_id,body) SELECT $2,company_id,conversation_id,1,1,'agent',agent_id,'Synthetic committed planning completion' FROM agent_runs WHERE id=$1",[actor.runId,messageId]);
+        await db.query("UPDATE agent_runs SET status='succeeded',worker_id=NULL,lease_token_hash=NULL,lease_expires_at=NULL,finished_at=clock_timestamp(),result_message_id=$2 WHERE id=$1",[actor.runId,messageId]);
+        await db.query("INSERT INTO agent_run_receipts(company_id,run_id,client_id,kind,payload_hash,lease_token_hash,response) VALUES($1,$2,$3,'complete',$4,$5,$6)",[f.company,actor.runId,randomUUID(),'3'.repeat(64),'2'.repeat(64),JSON.stringify({run:{id:actor.runId,status:'succeeded',resultMessageId:messageId}})]);
+      });
       const lease = await f.claim(); assert.ok(lease); await f.authorize(lease);
       await query('UPDATE agents SET token_hash=$2 WHERE id=$1', [actor.agentId, hashToken(randomUUID())]);
       await assert.rejects(f.authorize(lease), denied());

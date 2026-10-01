@@ -2,7 +2,7 @@
 
 ## Status and intended result
 
-This document specifies the next stage after [managed prepared-image references](HIGGSFIELD_REFERENCES.md). M1 has a native fixture implementation and real pixel tests. M2 adds the durable preparation schema, service and metadata API. M3 adds the private scoped storage worker described below. M4–M6 remain outstanding: automatic preparation is not deployed, qualified on a live host, or enabled for a company. Existing reference sharing remains disabled without its separately qualified runtime. This work does not activate workers, provision resources, change existing agent grants, or authorize provider spending.
+This document specifies the next stage after [managed prepared-image references](HIGGSFIELD_REFERENCES.md). M1 has a native fixture implementation and real pixel tests. M2 adds the durable preparation schema, service and metadata API. M3 adds the private scoped storage worker described below. M4 adds the original picker, finite processing consent, derivative preview, explicit agent profile and authenticated handoff tools. Automatic continuation across later processing/sharing waits, M5 runtime qualification and M6 live delivery proof remain outstanding. Automatic preparation is not deployed, qualified on a live host, or enabled for a company. This work does not activate workers, provision resources, change existing agent grants, or authorize provider spending.
 
 The intended result is: choose an exact original image already in project storage, create a bounded derivative with verified metadata removal, save it as a separate verified project-storage version, review that exact derivative, then use the existing finite Higgsfield sharing approval. The original remains unchanged. Preparing an image is not permission to share it with Higgsfield, approve its creative content, generate paid media, or accept a client delivery.
 
@@ -53,7 +53,7 @@ The [metadata route](../src/lib/project-image-preparation-api.ts) supports:
 
 Preparation approval is separate from Higgsfield sharing, generation, quality review and delivery acceptance. Approval lasts at most 60 minutes, cannot outlive its processor qualification and records a maximum cost of at most $1; this record alone is not a spending reservation or provider cap. The default runtime resolver is absent, so public approval returns `IMAGE_PREPARATION_UNAVAILABLE` and no worker is started. A caller cannot submit its own runtime, success receipt, object key or private lease through these routes.
 
-Service-level agent proposals require the existing `storage.read`, `studio.read`, `studio.write` and `tasks.write` grants, a live authenticated run and its reserved assigned task. The future agent-tool wrapper must first prove the lease with `authorizeRunTool` and repeat commit authority; there is no new agent tool or grant in M2. Explicit administrator adoption permits the proposing run to finish successfully while the finite preparation remains authorized. Agent credentials, grants, sponsors and the exact task snapshot must remain current. Task submission/revision changes currently require a new proposal; this slice does not silently permit a changed objective.
+Service-level agent proposals require the existing `storage.read`, `studio.read`, `studio.write` and `tasks.write` grants, a live authenticated run and its reserved assigned task. M4 wraps these through `authorizeRunTool` and final commit authority. Explicit administrator adoption permits the proposing run to finish successfully while the finite preparation remains authorized. Agent credentials, grants and sponsors remain current. Legacy `exact_task_v1` proposals retain the exact task snapshot; M4's explicit submitted-plan mode recognizes only the separately validated transitions described below.
 
 The queue allows at most eight unclaimed proposed/queued preparations per company. A company admits one active attempt, limited to 120 seconds. Transform intent is recorded before external work; a repeated transform request is rejected. The metadata completion API inside the service validates exact source/recipe/processor facts, supported dimensions and the fixed output shape, then stops at `validating`. It does not transform bytes itself, establish storage verification or publish `ready`. Production callers must eventually provide actual qualified transform evidence; test fixtures are explicitly synthetic control-plane evidence.
 
@@ -95,7 +95,7 @@ node --import tsx --test tests/project-image-preparation-storage.test.ts tests/p
 node node_modules/typescript/bin/tsc --noEmit
 ```
 
-Failed or uncertain claimed preparations deliberately retain their company slot until separately trusted cleanup/reconciliation is implemented. M3 does not provide a public endpoint to assert cleanup, replace an unknown upload, or release that hold. M4 must also implement an explicit task-submission handoff: changing the exact task snapshot still invalidates preparation today, even if its proposing agent run has succeeded.
+Failed or uncertain claimed preparations deliberately retain their company slot until separately trusted cleanup/reconciliation is implemented. M3 does not provide a public endpoint to assert cleanup, replace an unknown upload, or release that hold. M4 adds an explicit submitted-plan handoff; legacy exact-task proposals still reject changed task snapshots.
 
 ## Existing foundations and limits
 
@@ -168,6 +168,32 @@ Composite database relationships must prevent cross-company/project source, outp
 6. Publish `ready` only when the transform evidence, output version and stored-byte verification agree in one fenced transaction. Recheck authority at this final boundary and clean scratch/guest state on all outcomes.
 
 Storage allocation currently increments `project_storage_bindings.revision`. Preparation must account for its own exact allocation transition atomically, while rejecting unrelated binding changes. Do not broadly ignore binding revisions. Create the subsequent Higgsfield reference proposal against the current binding only after the derivative is ready; carrying a pre-allocation binding pin into sharing would invalidate the job's own result.
+
+### M4 UI and authenticated agent handoff
+
+The project reference panel offers an opt-in original-image flow. It accepts verified PNG/JPEG/WebP originals up to 32 MiB, resolves the real destination folder, and preserves the existing 10 MiB prepared-image sharing flow. The panel displays the exact processor location, qualification expiry and maximum cost with separate processing, derivative-write and adoption consents. An unavailable processor disables approval while retaining the ability to save a proposal. Ready results can be previewed using their exact verified file identity/hash and proposed as references for eligible current work. Unknown storage outcomes remain visible and are not retried automatically.
+
+The public metadata API includes `POST /api/companies/:companyId/image-preparations/:id/reference`. The caller supplies the preparation revision and current project/task selection; the server derives both the output and recorded original from immutable verified evidence. Caller-supplied file identities, hashes and metadata-removal claims are rejected. New and replayed handoffs revalidate the preparation, current task reservation, reference revocation, source, storage and provider facts. Shared inspection/transfer broker responses retain their old narrow database access; only ordinary application presentation enriches them with preparation provenance.
+
+External harnesses discover and execute these tools through the existing authenticated agent API:
+
+| Tool | Required current grants | Effect |
+| --- | --- | --- |
+| `project_image_preparations_list` / `project_image_preparation_get` | `storage.read`, `studio.read`, `studio.write`, `tasks.write` | Safe project metadata and durable status |
+| `project_image_preparation_propose` | The same four grants | Exact original and destination proposal; no processing |
+| `project_image_preparation_reference` | Those four plus `creative.read`, `creative.write` | Reference proposal for the current assigned downstream task; no sharing |
+
+The run lease, requester, sponsor and grant intersection are checked before dispatch and before commit. Mutation request IDs remain stable. A cached handoff receipt cannot revive revoked preparation/reference authority or an ended task reservation. There is no agent approval, claim, native transform, publication or credential endpoint.
+
+Administrators can explicitly select `original_image_v1` on direct dispatch or a finite coordination policy. It uses a separate immutable marker, narrows the single-attempt child to metadata reads, its assigned task, and an exact `submitted_plan_v1` proposal. It cannot call reference sharing, provider, byte transport, approval or delegation tools. Existing `prepared_image_v1` markers retain their inspection-only meaning and original grants. No agent's installed grants are expanded.
+
+Migration047 adds the opt-in continuation mode. The validator pins the original attempt/start/plugin identity, objective, assignment, exact committed submission revision/summary/URL, and completion receipt. Only the precise review transition or independent acceptance can preserve processing eligibility. New machine planning decisions record their actual project revision transition atomically; historical unbound decisions, unrelated project edits and resubmissions cannot authorize a preparation. Coordinated originals also retain the exact live/successful parent and finite policy after the child finishes.
+
+Current downstream generation runs can propose a ready derivative using their own live authority. An ended preparation producer is never used as a live actor. A remaining scheduling step must create an explicit, source-bound continuation when an initial generation child has already finished while waiting for processing, inspection or sharing consent. Current once-only dispatch limits are preserved; this implementation does not silently reopen or retry that child. M4 is not proof of an autonomous end-to-end company run until that continuation and its tests are complete.
+
+Local evidence includes real HTTP authentication/run/lease/receipt tests, independent policy/task authority tests, browser flows and separate real native transformation tests from M3. CI must additionally exercise actual restricted PostgreSQL logins and the production browser build. None of these replaces M5 actual-host qualification or M6 live provider/client acceptance.
+
+The prepared runtime-permissions update gives the web role metadata reads, proposal inserts, finite approval/revocation and control receipts only. Column grants and an invoker trigger keyed to the actual SQL role reject worker claims, execution receipts, processing transitions and allocation/derivation writes. Immutable original versions and storage verifications remain unwritable. The source file row is locked while its immutable version evidence is read; no update privilege is added merely to lock that evidence. A role regression exercises the service operations under PGlite role switching locally and an independent restricted PostgreSQL login in CI. This permission template has not been applied to production.
 
 ## Handoff to managed references
 

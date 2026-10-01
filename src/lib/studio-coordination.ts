@@ -1,4 +1,5 @@
 import {HIGGSFIELD_REFERENCE_PREPARATION_CAPABILITIES,type HiggsfieldReferenceCoordinationAuthority} from './higgsfield-references-protocol';
+import {STUDIO_ORIGINAL_IMAGE_PREPARATION_CAPABILITIES} from './studio-protocol';
 import {createHash} from 'node:crypto';
 import type {PoolClient} from 'pg';
 import {requireMembership,type Membership} from './auth';
@@ -37,19 +38,23 @@ async function configuration(client:PoolClient,companyId:string,coordinatorAgent
  const profile=(await client.query('SELECT revision FROM studio_profiles WHERE company_id=$1',[companyId])).rows[0];if(!profile)fail(409,'Studio setup is required.');
  return {profileRevision:profile.revision,bindings:selected.map(r=>({roleKey:r!.roleKey,agentId:r!.agentId})),agents:agents.map(a=>({agentId:a.agentId,sponsorId:a.sponsorId,installationId:a.installationId,installationRevision:a.installationRevision}))};
 }
-async function referenceSpecialists(client:PoolClient,companyId:string,projectId:string,coordinatorId:string,roleKeys:string[]){
+async function referenceSpecialists(client:PoolClient,companyId:string,projectId:string,coordinatorId:string,roleKeys:string[],profile:'prepared_image_v1'|'original_image_v1'){
  const specialists=(await client.query(`SELECT DISTINCT b.agent_id,a.capabilities FROM studio_work_items w
   JOIN studio_role_bindings b ON b.company_id=w.company_id AND b.role_key=w.role_key
   JOIN agents a ON a.company_id=b.company_id AND a.id=b.agent_id
   WHERE w.company_id=$1 AND w.project_id=$2 AND w.stage='references' AND w.execution='agent' AND w.role_key=ANY($3::text[])`,[companyId,projectId,roleKeys])).rows;
- if(!specialists.length||specialists.some(a=>a.agent_id===coordinatorId||HIGGSFIELD_REFERENCE_PREPARATION_CAPABILITIES.some(cap=>!a.capabilities.includes(cap))))fail(409,'Select a separate reference specialist with existing studio, task, creative-read and storage-read grants.','COORDINATION_REFERENCE_CAPABILITIES');
+ const required=profile==='original_image_v1'?STUDIO_ORIGINAL_IMAGE_PREPARATION_CAPABILITIES:HIGGSFIELD_REFERENCE_PREPARATION_CAPABILITIES;
+ if(!specialists.length||specialists.some(a=>a.agent_id===coordinatorId||required.some(cap=>!a.capabilities.includes(cap))))fail(409,'Select a separate reference specialist with the existing grants required by this exact profile.','COORDINATION_REFERENCE_CAPABILITIES');
 }
 /** Current prepared-reference delegation authority, including after successful
  * child completion. Deliberately does not use terminal receipt replay rules. */
 export async function referenceCoordinationAuthority(client:PoolClient,companyId:string,projectId:string,workItemId:string,childRunId:string,pinned?:HiggsfieldReferenceCoordinationAuthority):Promise<HiggsfieldReferenceCoordinationAuthority>{
+ return imageCoordinationAuthority(client,companyId,projectId,workItemId,childRunId,'prepared_image_v1',pinned);
+}
+async function imageCoordinationAuthority(client:PoolClient,companyId:string,projectId:string,workItemId:string,childRunId:string,profile:'prepared_image_v1'|'original_image_v1',pinned?:HiggsfieldReferenceCoordinationAuthority):Promise<HiggsfieldReferenceCoordinationAuthority>{
  const ended=():never=>fail(409,'The exact coordination approval for prepared-reference inspection ended.','HIGGSFIELD_REFERENCE_COORDINATION_AUTHORITY_ENDED');
  const p=await policyRow(client,companyId,projectId,'share');
- if(!p||p.referencePreparationProfile!=='prepared_image_v1')return ended();
+ if(!p||p.referencePreparationProfile!==profile)return ended();
  await client.query('SELECT revision FROM studio_profiles WHERE company_id=$1 FOR SHARE',[companyId]);
  await client.query('SELECT role_key FROM studio_role_bindings WHERE company_id=$1 ORDER BY role_key FOR SHARE',[companyId]);
  const d=(await client.query(`SELECT d.*,a.created_by,a.token_hash,a.status AS agent_status,a.expires_at AS agent_expires_at,
@@ -111,7 +116,7 @@ export async function saveStudioCoordination(client:PoolClient,member:Membership
  await client.query('SELECT role_key FROM studio_role_bindings WHERE company_id=$1 ORDER BY role_key FOR SHARE',[member.companyId]);
  if(!exactPause&&canon(configurationSnapshot)!==canon(await configuration(client,member.companyId,data.coordinatorAgentId,data.allowedRoleKeys)))fail(409,'The company structure changed. Review it again.','COORDINATION_ROLE_CHANGED');
  if(!exactPause){const currentRound=(await client.query('SELECT id,plan_sha256 FROM studio_generated_revision_rounds WHERE company_id=$1 AND project_id=$2 ORDER BY number DESC LIMIT 1',[member.companyId,projectId])).rows[0];if(currentRound)Object.assign(configurationSnapshot,{generatedRound:{roundId:currentRound.id,planSha256:currentRound.plan_sha256}});await requireApprovalWindow(client,data.expiresAt);}
- if(data.referencePreparationProfile&&!exactPause)await referenceSpecialists(client,member.companyId,projectId,data.coordinatorAgentId,data.allowedRoleKeys);
+ if(data.referencePreparationProfile&&!exactPause)await referenceSpecialists(client,member.companyId,projectId,data.coordinatorAgentId,data.allowedRoleKeys,data.referencePreparationProfile);
  if(data.maxRuns<(old?.runsStarted??0))fail(409,'The lifetime run limit cannot be below the runs already started.','COORDINATION_BUDGET_USED');
  await client.query(`INSERT INTO studio_coordination_policies(company_id,project_id,coordinator_agent_id,approved_by,status,allowed_role_keys,profile_revision,authority_snapshot,max_runs,max_concurrent_runs,expires_at,generated_continuations,coordinator_generation,reference_preparation_profile) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(company_id,project_id) DO UPDATE SET coordinator_agent_id=EXCLUDED.coordinator_agent_id,approved_by=EXCLUDED.approved_by,status=EXCLUDED.status,allowed_role_keys=EXCLUDED.allowed_role_keys,profile_revision=EXCLUDED.profile_revision,authority_snapshot=EXCLUDED.authority_snapshot,max_runs=EXCLUDED.max_runs,max_concurrent_runs=EXCLUDED.max_concurrent_runs,expires_at=EXCLUDED.expires_at,generated_continuations=EXCLUDED.generated_continuations,coordinator_generation=EXCLUDED.coordinator_generation,reference_preparation_profile=EXCLUDED.reference_preparation_profile,revision=studio_coordination_policies.revision+1,updated_at=clock_timestamp()`,[member.companyId,projectId,data.coordinatorAgentId,member.userId,data.status,JSON.stringify(data.allowedRoleKeys.slice().sort()),configurationSnapshot.profileRevision,JSON.stringify(configurationSnapshot),data.maxRuns,data.maxConcurrentRuns,data.expiresAt,Boolean(data.generatedContinuations),Boolean(data.coordinatorGeneration),data.referencePreparationProfile??null]);
  const result=await studioCoordinationSnapshot(client,member.companyId,projectId);await client.query('INSERT INTO studio_requests(company_id,actor_key,client_id,request_hash,response) VALUES($1,$2,$3,$4,$5)',[member.companyId,'human:'+member.userId,data.clientId,requestHash,JSON.stringify(result)]);
@@ -135,7 +140,8 @@ export async function dispatchStudioWork(client:PoolClient,agent:Row,run:Row,inp
  const work=(await client.query('SELECT w.role_key,w.stage,w.execution,b.agent_id,p.contract_version FROM studio_work_items w JOIN studio_projects p ON p.company_id=w.company_id AND p.id=w.project_id JOIN studio_role_bindings b ON b.company_id=w.company_id AND b.role_key=w.role_key WHERE w.company_id=$1 AND w.project_id=$2 AND w.id=$3',[companyId,data.projectId,data.workItemId])).rows[0];
  if(!work)fail(404,'Studio work item not found.');
  const prepared=policy.referencePreparationProfile==='prepared_image_v1'&&work.contract_version===2&&work.stage==='references'&&work.execution==='agent'&&!data.executionJobId;
- if(prepared&&run.requested_by!==policy.approvedBy)fail(403,'Prepared references require the current policy approver to sponsor the coordinator request.','COORDINATION_REFERENCE_SPONSOR');
+ const original=policy.referencePreparationProfile==='original_image_v1'&&work.contract_version===2&&work.stage==='references'&&work.execution==='agent'&&!data.executionJobId;
+ if((prepared||original)&&run.requested_by!==policy.approvedBy)fail(403,'Image preparation requires the current policy approver to sponsor the coordinator request.','COORDINATION_REFERENCE_SPONSOR');
  const ownGeneration=work.agent_id===agent.id;
  if(ownGeneration&&(!policy.coordinatorGeneration||work.contract_version!==2||work.stage!=='generation'||work.execution!=='creative'||data.executionJobId||run.requested_by!==policy.approvedBy))fail(403,'A separate coordinator generation request requires an explicitly reviewed generated-work policy.','COORDINATION_ROLE_REQUIRED');
  if(!policy.allowedRoleKeys.includes(work.role_key)||work.execution==='human')fail(403,'This work is outside the approved specialist handoff.','COORDINATION_ROLE_REQUIRED');
@@ -153,7 +159,7 @@ export async function dispatchStudioWork(client:PoolClient,agent:Row,run:Row,inp
  const user=(await client.query('SELECT id,name,email,role_title AS "roleTitle",avatar_color AS "avatarColor",avatar_id AS "avatarId",(email_verified_at IS NOT NULL) AS "emailVerified" FROM users WHERE id=$1',[policy.approvedBy])).rows[0];
  const member={companyId,userId:policy.approvedBy,role:'admin',user} as Membership;
  const evidence=data.executionJobId?await renderFollowupEvidence(client,companyId,data.projectId,data.workItemId,data.executionJobId):null;
- const queued=await dispatchWork(client,member,data.projectId,{clientId:uuidFor(`coatria-coordination:${companyId}:${data.projectId}:${data.workItemId}${data.executionJobId?':render:'+data.executionJobId:''}`),revision:data.projectRevision,workItemId:data.workItemId,...prepared?{preparationProfile:'prepared_image_v1'}:{}},prepared?{deferPreparedMarker:true}:{});
+ const queued=await dispatchWork(client,member,data.projectId,{clientId:uuidFor(`coatria-coordination:${companyId}:${data.projectId}:${data.workItemId}${data.executionJobId?':render:'+data.executionJobId:''}`),revision:data.projectRevision,workItemId:data.workItemId,...prepared?{preparationProfile:'prepared_image_v1'}:original?{preparationProfile:'original_image_v1'}:{}},prepared?{deferPreparedMarker:true}:original?{deferOriginalMarker:true}:{});
  if((await status(client,companyId,policy)).effectiveStatus!=='active')fail(409,'Coordination authority changed before this handoff committed.','COORDINATION_UNAVAILABLE');
  // One attempt: lease expiry and provider failure are terminal, never implicit repeats.
  await client.query('UPDATE agent_runs SET max_attempts=1 WHERE company_id=$1 AND id=$2',[companyId,queued.run.id]);
@@ -172,6 +178,7 @@ export async function dispatchStudioWork(client:PoolClient,agent:Row,run:Row,inp
   await client.query('INSERT INTO studio_coordination_followups(company_id,project_id,work_item_id,execution_job_id,parent_run_id,source_child_run_id,child_run_id,coordinator_agent_id,specialist_agent_id,policy_revision,execution_manifest_sha256,artifact_id,artifact_sha256) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)',[companyId,data.projectId,data.workItemId,evidence.executionJobId,run.id,evidence.sourceChildRunId,queued.run.id,agent.id,work.agent_id,policy.revision,evidence.executionManifestSha256,evidence.artifactId,evidence.artifactSha256]);
  }else await client.query('INSERT INTO studio_coordination_dispatches(company_id,project_id,work_item_id,parent_run_id,child_run_id,coordinator_agent_id,specialist_agent_id,policy_revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[companyId,data.projectId,data.workItemId,run.id,queued.run.id,agent.id,work.agent_id,policy.revision]);
  if(prepared){const coordination=await referenceCoordinationAuthority(client,companyId,data.projectId,data.workItemId,queued.run.id);await client.query('INSERT INTO studio_reference_preparation_dispatches(company_id,project_id,work_item_id,run_id,authority_version,coordination) VALUES($1,$2,$3,$4,1,$5)',[companyId,data.projectId,data.workItemId,queued.run.id,JSON.stringify(coordination)]);}
+ if(original){const coordination=await imageCoordinationAuthority(client,companyId,data.projectId,data.workItemId,queued.run.id,'original_image_v1');await client.query('INSERT INTO studio_image_preparation_dispatches(company_id,project_id,work_item_id,run_id,authority_version,coordination) VALUES($1,$2,$3,$4,1,$5)',[companyId,data.projectId,data.workItemId,queued.run.id,JSON.stringify(coordination)]);}
  await client.query('UPDATE studio_coordination_policies SET runs_started=runs_started+1 WHERE company_id=$1 AND project_id=$2',[companyId,data.projectId]);
  const snapshot=await studioCoordinationSnapshot(client,companyId,data.projectId);await requireApprovalLive(client,policy.expiresAt);
  return {workItemId:data.workItemId,parentRunId:run.id,childRunId:queued.run.id,replayed:false,policy:snapshot.policy};
@@ -238,19 +245,59 @@ const referencePreparationToolRules:Record<string,(args:Row,receipt:Row,client:P
  higgsfield_connection_get:()=>true,
 };
 export const referencePreparationToolNames:readonly string[]=Object.freeze(Object.keys(referencePreparationToolRules));
+/** Original proposals are separate from prepared-byte inspection authority. */
+export async function studioOriginalImagePreparationRunScope(client:PoolClient,companyId:string,runId:string){
+ // The discriminator is in the already-readable dispatch table. Ordinary and
+ // prepared-image callers never need access to the new private marker table.
+ const dispatch=(await client.query('SELECT project_id,work_item_id,original_preparation_profile FROM studio_dispatches WHERE company_id=$1 AND run_id=$2',[companyId,runId])).rows[0];
+ if(dispatch?.original_preparation_profile!=='original_image_v1')return undefined;
+ const scope=(await client.query(`SELECT d.project_id,d.work_item_id,w.task_id,d.coordination,w.role_key,b.agent_id AS assigned_agent,r.agent_id,
+  w.stage,w.execution,p.contract_version,p.production_path FROM studio_image_preparation_dispatches d
+  JOIN studio_work_items w ON (w.company_id,w.project_id,w.id)=(d.company_id,d.project_id,d.work_item_id)
+  JOIN studio_projects p ON p.company_id=w.company_id AND p.id=w.project_id
+  JOIN agent_runs r ON r.company_id=d.company_id AND r.id=d.run_id
+  LEFT JOIN studio_role_bindings b ON b.company_id=w.company_id AND b.role_key=w.role_key
+  WHERE d.company_id=$1 AND d.run_id=$2 AND d.authority_version=1`,[companyId,runId])).rows[0] as Row|undefined;
+ if(!scope||scope.project_id!==dispatch.project_id||scope.work_item_id!==dispatch.work_item_id)fail(409,'The exact original-image dispatch marker is missing.','STUDIO_IMAGE_PREPARATION_AUTHORITY_ENDED');return scope;
+}
+/** Called before project locks and again at every adopted processing boundary.
+ * A successful child never converts an expired policy into processing consent. */
+export async function originalImagePreparationRunAuthority(client:PoolClient,companyId:string,runId:string){
+ const scope=await studioOriginalImagePreparationRunScope(client,companyId,runId);if(!scope)return null;
+ if(scope.stage!=='references'||scope.execution!=='agent'||scope.contract_version!==2||scope.production_path!=='higgsfield'||scope.assigned_agent!==scope.agent_id)fail(409,'The original-image specialist assignment changed.','STUDIO_IMAGE_PREPARATION_AUTHORITY_ENDED');
+ if(scope.coordination)await imageCoordinationAuthority(client,companyId,scope.project_id,scope.work_item_id,runId,'original_image_v1',scope.coordination);
+ return {version:1,projectId:scope.project_id,workItemId:scope.work_item_id,runId,coordination:scope.coordination};
+}
+const originalImagePreparationToolRules:Record<string,(args:Row,scope:Row,client:PoolClient,companyId:string)=>unknown>={
+ studio_get:(args,scope)=>args.projectId===scope.project_id&&args.contractVersion===2&&args.workItemId===scope.work_item_id&&!args.artifactId&&!args.after,
+ tasks_claim:(args,scope)=>args.taskId===scope.task_id,
+ tasks_submit:(args,scope)=>args.taskId===scope.task_id,
+ storage_get:(args,scope)=>args.projectId===scope.project_id,
+ storage_files_list:(args,scope)=>args.projectId===scope.project_id,
+ project_image_preparations_list:(args,scope)=>args.projectId===scope.project_id,
+ project_image_preparation_get:async(args,scope,client,companyId)=>Boolean((await client.query('SELECT 1 FROM project_image_preparations WHERE company_id=$1 AND project_id=$2 AND work_item_id=$3 AND id=$4',[companyId,scope.project_id,scope.work_item_id,args.preparationId])).rowCount),
+ project_image_preparation_propose:(args,scope)=>args.projectId===scope.project_id&&args.workItemId===scope.work_item_id&&args.continuation==='submitted_plan_v1',
+};
+export const originalImagePreparationToolNames:readonly string[]=Object.freeze(Object.keys(originalImagePreparationToolRules));
+export async function assertStudioOriginalImagePreparationTool(client:PoolClient,agent:Row,run:Row,name:string,args:Row){
+ const scope=await studioOriginalImagePreparationRunScope(client,agent.company_id,run.id);if(!scope)return;
+ await originalImagePreparationRunAuthority(client,agent.company_id,run.id);
+ if(scope.agent_id!==agent.id||!Object.hasOwn(originalImagePreparationToolRules,name)||!await originalImagePreparationToolRules[name](args,scope,client,agent.company_id))fail(403,'This original-image run may only read its assigned metadata, propose one exact derivative for separate human consent, and submit its planning task.','STUDIO_IMAGE_PREPARATION_SCOPE');
+}
 export async function assertStudioReferencePreparationTool(client:PoolClient,agent:Row,run:Row,name:string,args:Row){
  const receipt=await studioReferencePreparationRunScope(client,agent.company_id,run.id);if(!receipt)return;
  if(!Object.hasOwn(referencePreparationToolRules,name)||!await referencePreparationToolRules[name](args,receipt,client,agent.company_id))fail(403,'This prepared-image request may only read its assigned context, reserve and submit its reference task, and propose exact prepared references. It cannot generate, transfer, approve or delegate work.','STUDIO_REFERENCE_PREPARATION_SCOPE');
 }
 // Ordinary specialists also archive outputs and still need destination storage
 // browsing. The separate coordinator-generation child only proposes generation.
-const generationDispatchToolNames:readonly string[]=Object.freeze([...coordinatorGenerationToolNames,'storage_get','storage_files_list','higgsfield_archives_list','higgsfield_archive_get','higgsfield_archive_propose','studio_generated_artifact_register','tasks_submit']);
+const generationDispatchToolNames:readonly string[]=Object.freeze([...coordinatorGenerationToolNames,'storage_get','storage_files_list','higgsfield_archives_list','higgsfield_archive_get','higgsfield_archive_propose','studio_generated_artifact_register','tasks_submit','project_image_preparations_list','project_image_preparation_get','project_image_preparation_reference']);
 /** Model presentation for an existing assigned task, never an authority grant.
  * Exact server-created dispatch provenance, not prompt text or character role,
  * distinguishes these finite tasks from ordinary company/coordinator missions.
  * Callers must prefer the stricter generated-continuation and own-generation
  * scopes. Legacy creative/render continuations are outside this v2 path. */
 export async function studioDispatchInferenceToolNames(client:PoolClient,companyId:string,runId:string):Promise<readonly string[]|null>{
+ if(await studioOriginalImagePreparationRunScope(client,companyId,runId))return originalImagePreparationToolNames;
  if(await studioReferencePreparationRunScope(client,companyId,runId))return referencePreparationToolNames;
  const work=(await client.query(`SELECT w.stage,w.execution FROM studio_dispatches d
   JOIN studio_work_items w ON w.company_id=d.company_id AND w.project_id=d.project_id AND w.id=d.work_item_id
@@ -272,6 +319,7 @@ export async function assertCoordinatorGenerationTool(client:PoolClient,agent:Ro
 export async function coordinationRunAuthority(client:PoolClient,companyId:string,run:Row):Promise<boolean>{
  // Terminal receipts remain replayable after their historical approval expires.
  if(!['queued','running'].includes(run.status))return true;
+ try{await originalImagePreparationRunAuthority(client,companyId,run.id);}catch(error){if(!(error instanceof ApiError)||error.status>=500)throw error;return false;}
  const delegation=(await client.query('SELECT project_id,policy_revision,NULL::uuid AS execution_job_id,work_item_id,NULL::uuid AS artifact_id,NULL::text AS execution_manifest_sha256,NULL::text AS artifact_sha256,parent_run_id,coordinator_agent_id=specialist_agent_id AS coordinator_generation FROM studio_coordination_dispatches WHERE company_id=$1 AND child_run_id=$2 UNION ALL SELECT project_id,policy_revision,execution_job_id,work_item_id,artifact_id,execution_manifest_sha256,artifact_sha256,parent_run_id,false AS coordinator_generation FROM studio_coordination_followups WHERE company_id=$1 AND child_run_id=$2',[companyId,run.id])).rows[0];if(!delegation)return true;
  const policy=await policyRow(client,companyId,delegation.project_id,'share');if(!policy||policy.revision!==delegation.policy_revision)return false;
  const active=await status(client,companyId,policy);if(!['active','exhausted'].includes(active.effectiveStatus))return false;

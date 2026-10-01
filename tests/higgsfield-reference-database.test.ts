@@ -12,6 +12,7 @@ import {hashToken} from '../src/lib/security';
 import {createHiggsfieldReferenceService} from '../src/lib/higgsfield-reference-service';
 import {dropFixtureDatabase} from './fixtures/postgres-teardown';
 import * as refs from '../src/lib/higgsfield-references';
+import type {HiggsfieldReference} from '../src/lib/higgsfield-references-protocol';
 import {insertSyntheticReferenceEnrollment} from './fixtures/reference-service-enrollment';
 
 const integration=process.env.COATRIA_INTEGRATION_DATABASE_URL;
@@ -212,17 +213,28 @@ test('PostgreSQL independent reference broker LOGIN fences authority and execute
    await denied('CREATE TABLE public.reference_escape(id int)');await denied('CREATE ROLE reference_escape');await denied('ALTER TABLE higgsfield_references DISABLE TRIGGER ALL');
    await denied('SET ROLE '+auxiliary[0]);
   });
-  await t.test('independent LOGIN commits inspection and all once-only reference phases',async()=>{
+  await t.test('independent LOGIN commits inspection and all once-only reference phases without preparation table access',async()=>{
+   // These new application-only tables must not become dependencies of the
+   // private broker response projection. Use the genuine restricted LOGIN,
+   // rather than granting it the optional public provenance enrichment.
+   for(const table of ['project_image_preparations','project_image_preparation_derivations','project_image_preparation_allocations','studio_image_preparation_dispatches']){
+    assert.equal((await broker!.query('SELECT has_table_privilege(current_user,$1,\'SELECT\') AS allowed',['public.'+table])).rows[0].allowed,false);
+    await denied('SELECT * FROM public.'+table+' LIMIT 1');
+   }
    const inspect=await claim();assert(inspect);assert.equal(inspect.phase,'inspect');
    const result=await tx(db=>refs.recordHiggsfieldReferenceInspection(db,inspect,{profileSha256:'a'.repeat(64),descriptor:{kind:'image',format:'png',contentType:'image/png',bytes:100,sha256:sha,verification:'full_decode',inspectionVersion:1,width:16,height:16,codec:'png',color:{space:null,primaries:null,transfer:null,range:null}}},options));
    const r=result.reference;
+   assert.equal(r.status,'awaiting_approval');assert.equal(Object.hasOwn(r,'preparation'),false);
    await assert.rejects(()=>tx(db=>refs.approveHiggsfieldReference(db,actor,r.id,{clientId:randomUUID(),revision:r.revision,requestHash:r.requestHash,inspectionHash:r.inspection!.inspectionHash,expiresInMinutes:10,referenceSharingConsent:true,preparedProxyConsent:true,rightsConsent:true,allBytesConsent:true},options)),{code:'42501'});
    await ownerTx(db=>refs.approveHiggsfieldReference(db,actor,r.id,{clientId:randomUUID(),revision:r.revision,requestHash:r.requestHash,inspectionHash:r.inspection!.inspectionHash,expiresInMinutes:10,referenceSharingConsent:true,preparedProxyConsent:true,rightsConsent:true,allBytesConsent:true},options));
    const lease=await claim();assert(lease);assert.equal(lease.phase,'transfer');const mediaId=randomUUID();
    for(const phase of ['allocate','put','confirm'] as const){
     const intent=await tx(db=>refs.beginHiggsfieldReferencePhase(db,lease,phase,options));
     const value=phase==='allocate'?{phase,allocation:{mediaId,uploadUrl:'https://uploads.example.invalid/private?token=fixture',expiresAt:new Date(Date.now()+60000).toISOString()}}:phase==='put'?{phase,bytes:100,sha256:sha,httpStatus:200 as const}:{phase,mediaId,confirmed:true as const};
-    await tx(db=>refs.completeHiggsfieldReferencePhase(db,lease,intent.actionId,value,options));
+    const completed:{reference:HiggsfieldReference}=await tx(db=>refs.completeHiggsfieldReferencePhase(db,lease,intent.actionId,value,options));
+    assert.equal(completed.reference.status,{allocate:'allocated',put:'uploaded',confirm:'confirmed'}[phase]);
+    assert.equal(Object.hasOwn(completed.reference,'preparation'),false);
+    assert.equal(completed.reference.providerConfirmed,phase==='confirm');
     await assert.rejects(()=>tx(db=>refs.beginHiggsfieldReferencePhase(db,lease,phase,options)));
    }
    assert.equal((await owner!.query('SELECT status FROM higgsfield_references WHERE id=$1',[r.id])).rows[0].status,'confirmed');
