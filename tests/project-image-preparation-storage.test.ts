@@ -270,6 +270,39 @@ test('image preparation storage preserves one exact derivative and reviewed writ
       assert.equal((await query('SELECT count(*)::int n FROM project_storage_upload_parts WHERE upload_id=$1', [out.uploadId])).rows[0].n, 0);
       assert.equal((await query("SELECT count(*)::int n FROM project_image_preparation_receipts WHERE preparation_id=$1 AND operation='store_initiate' AND phase='intent'", [f.lease.preparationId])).rows[0].n, 1);
     });
+    await t.test('restricted ordinary part writers need no preparation table or function access', async () => {
+      const f = await prepared(), out = await f.allocate(), ordinary = randomUUID();
+      await query("INSERT INTO project_storage_uploads(id,company_id,project_id,version_id,actor_key,actor_user_id,client_id,request_hash,part_bytes,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,67108864,clock_timestamp()+interval '1 hour')", [ordinary, f.company, f.project, f.source.version, 'human:' + f.owner, f.owner, randomUUID(), 'a'.repeat(64)]);
+      const role = 'preparation_part_' + randomUUID().replaceAll('-', '');
+      await transaction(async db => {
+        // Role and grants are scoped to this disposable fixture transaction.
+        // SET ROLE proves SQL privilege semantics here; CI separately proves
+        // real authenticated archive/gateway logins through their full workers.
+        await db.query('CREATE ROLE ' + role + ' NOLOGIN NOINHERIT');
+        await db.query('GRANT USAGE ON SCHEMA public TO ' + role);
+        await db.query('GRANT INSERT ON public.project_storage_upload_parts TO ' + role);
+        await db.query('SET LOCAL ROLE ' + role);
+        assert.equal((await db.query("SELECT has_table_privilege(current_user,'public.project_image_preparation_allocations','SELECT') AS allowed")).rows[0].allowed, false);
+        assert.equal((await db.query("SELECT has_function_privilege(current_user,'public.validate_project_image_preparation_upload_part()','EXECUTE') AS allowed")).rows[0].allowed, false);
+        const deniedSql = async (sql: string, values: unknown[], code: string) => {
+          await db.query('SAVEPOINT denied_part');
+          try { await assert.rejects(db.query(sql, values), {code}); }
+          finally { await db.query('ROLLBACK TO SAVEPOINT denied_part'); await db.query('RELEASE SAVEPOINT denied_part'); }
+        };
+        await deniedSql('SELECT * FROM public.project_image_preparation_allocations', [], '42501');
+        // A caller's temporary relation cannot shadow the guard's privileged read.
+        await db.query('CREATE TEMP TABLE project_image_preparation_allocations(company_id uuid,upload_id uuid,output_bytes bigint,output_sha256 text)');
+        const insert = 'INSERT INTO public.project_storage_upload_parts(company_id,upload_id,part_number,bytes,sha256,provider_etag) VALUES($1,$2,$3,$4,$5,$6)';
+        await db.query(insert, [f.company, ordinary, 2, 11, 'a'.repeat(64), 'ordinary-part']);
+        await deniedSql(insert, [f.company, out.uploadId, 2, out.bytes, out.sha256, 'wrong-part'], '23514');
+        await db.query(insert, [f.company, out.uploadId, 1, out.bytes, out.sha256, 'exact-part']);
+        await db.query('DROP TABLE pg_temp.project_image_preparation_allocations');
+        await db.query('RESET ROLE');
+        await db.query('REVOKE INSERT ON public.project_storage_upload_parts FROM ' + role);
+        await db.query('REVOKE USAGE ON SCHEMA public FROM ' + role);
+        await db.query('DROP ROLE ' + role);
+      });
+    });
     assert.equal(outbound, 0, 'Storage control tests must never invoke a provider or decode native bytes');
   } finally {
     globalThis.fetch = oldFetch;

@@ -80,14 +80,20 @@ CREATE TRIGGER project_image_preparation_multipart_receipt_guard BEFORE INSERT O
 
 -- Preparation outputs are at most 10 MiB and use one 64 MiB-capacity part.
 -- Other project uploads retain their existing multipart behavior.
-CREATE FUNCTION validate_project_image_preparation_upload_part() RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,public AS $$
+-- This trigger also runs for existing restricted archive/gateway INSERT roles.
+-- Its sole privileged read is the preparation allocation; do not grant those
+-- roles general access to preparation metadata. Revoke direct invocation and
+-- schema-qualify the relation so caller-controlled temporary objects cannot
+-- replace it under the function owner's authority.
+CREATE FUNCTION validate_project_image_preparation_upload_part() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
 BEGIN
- IF EXISTS(SELECT 1 FROM project_image_preparation_allocations WHERE company_id=NEW.company_id AND upload_id=NEW.upload_id)
-  AND NOT EXISTS(SELECT 1 FROM project_image_preparation_allocations WHERE company_id=NEW.company_id AND upload_id=NEW.upload_id
+ IF EXISTS(SELECT 1 FROM public.project_image_preparation_allocations WHERE company_id=NEW.company_id AND upload_id=NEW.upload_id)
+  AND NOT EXISTS(SELECT 1 FROM public.project_image_preparation_allocations WHERE company_id=NEW.company_id AND upload_id=NEW.upload_id
    AND NEW.part_number=1 AND output_bytes=NEW.bytes AND output_sha256=NEW.sha256)
  THEN RAISE EXCEPTION 'Preparation upload requires its one exact output part' USING ERRCODE='23514'; END IF;
  RETURN NEW;
 END $$;
+REVOKE ALL ON FUNCTION validate_project_image_preparation_upload_part() FROM PUBLIC;
 CREATE TRIGGER project_image_preparation_upload_part_guard BEFORE INSERT ON project_storage_upload_parts FOR EACH ROW EXECUTE FUNCTION validate_project_image_preparation_upload_part();
 
 -- Additive guard: every existing 045 derivation check still runs unchanged.
