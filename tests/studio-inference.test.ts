@@ -378,6 +378,19 @@ test('broker runs real leased API and receipt transactions against isolated prov
    assert.equal(Number((await query("SELECT count(*) FROM studio_inference_jobs WHERE id=$1 AND status IN ('submitting','queued','running','uncertain','cancel_requested')",[job.id])).rows[0].count),0);
    assert.equal((await reconcileStudioInferenceJob(job.id,{fetch:async()=>{throw Error('Terminal retention cleanup must not contact Runpod');}})).skipped,true);assert.equal(Number((await query("SELECT count(*) FROM activity WHERE company_id=$1 AND kind='studio.inference.retention_expired'",[f.company])).rows[0].count),1);
   });
+  await t.test('Runpod retention uses elapsed time across spring and fall daylight-saving changes in both SQL fences',async()=>{
+   const f=await fixture(),p=providerFixture();p.setStatus('IN_QUEUE');const job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;await reconcileStudioInferenceJob(job.id,{fetch:p.transport});await query("UPDATE studio_inference_jobs SET submitted_at=clock_timestamp()-interval '8 days',deadline_at=clock_timestamp()-interval '7 days',status='cancel_requested',cancel_requested_at=clock_timestamp() WHERE id=$1",[job.id]);
+   const intervals=new Map<string,unknown>(),capture:typeof transaction=async fn=>transaction(client=>fn({query:async(text:string,values:unknown[])=>{if(text.startsWith('SELECT j.*,submitted_at<clock_timestamp()'))intervals.set('admission',values[1]);if(text.startsWith("UPDATE studio_inference_jobs j SET status='expired'"))intervals.set('terminal',values[5]);return client.query(text,values);}} as any));
+   await reconcileStudioInferenceJob(job.id,{transaction:capture,fetch:async()=>new Response(null,{status:404})});assert.deepEqual([...intervals.keys()],['admission','terminal']);
+   for(const zone of ['UTC','Europe/Berlin'])for(const fixedNow of ['2026-03-30T12:00:00Z','2026-10-26T12:00:00Z'])for(const [fence,interval]of intervals){
+    const cutoff=new Date(Date.parse(fixedNow)-(7*24*60*60+60)*1000).toISOString();
+    const result=await transaction(async client=>{await client.query("SELECT set_config('TimeZone',$1,true)",[zone]);return(await client.query(`SELECT extract(epoch FROM ($1::timestamptz-($1::timestamptz-$2::interval))) AS elapsed_seconds,
+     $3::timestamptz<($1::timestamptz-$2::interval) AS at_boundary,
+     $3::timestamptz-interval '1 microsecond'<($1::timestamptz-$2::interval) AS past_boundary,
+     $3::timestamptz+interval '1 microsecond'<($1::timestamptz-$2::interval) AS before_boundary`,[fixedNow,interval,cutoff])).rows[0];});
+    assert.equal(Number(result.elapsed_seconds),7*24*60*60+60,`${fence} in ${zone} across ${fixedNow} must measure elapsed retention, not calendar days`);assert.equal(result.at_boundary,false);assert.equal(result.past_boundary,true);assert.equal(result.before_boundary,false);
+   }
+  });
   await t.test('Runpod retention requires more than seven days plus submission grace and an authoritative nonfuture submission timestamp',async()=>{
    for(const age of ["interval '1 hour'","interval '7 days'","interval '7 days 30 seconds'","interval '-1 day'","interval '7 days 2 minutes'"]){
     const f=await fixture(),p=providerFixture();p.setStatus('IN_QUEUE');const job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference;await reconcileStudioInferenceJob(job.id,{fetch:p.transport});

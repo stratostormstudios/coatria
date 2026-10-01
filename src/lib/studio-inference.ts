@@ -20,8 +20,9 @@ const terminal=new Set(['succeeded','failed','cancelled','expired']),providerId=
 // Runpod deletes every job after at most seven days, regardless of outcome.
 // Add one minute beyond its limit because submitted_at fences the outbound POST,
 // rather than recording provider acceptance (the whole request is bounded to 25s).
+// Elapsed seconds remain exact across session TimeZone daylight-saving changes.
 // https://docs.runpod.io/serverless/endpoints/endpoint-configurations#job-ttl-time-to-live
-const runpodRetentionInterval='7 days 1 minute';
+const runpodRetentionInterval='604860 seconds';
 const retentionSnapshotColumns=['poll_lease_id','poll_lease_expires_at'];
 class RunpodStatusNotFound extends ApiError {
  constructor(readonly endpointId:string,readonly providerJobId:string){super(503,'Provider inference state was not confirmed.','INFERENCE_PROVIDER_UNCONFIRMED');}
