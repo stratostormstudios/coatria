@@ -16,6 +16,21 @@ export function loadFloorDocument(){return {version:1,items:structuredClone(OFFI
 export function loadOfficeMetadata(){return {floor:{...OFFICE_50_PRESET.floor},layoutItems:OFFICE_50_PRESET.layout.length,uniqueAssetCount:new Set(OFFICE_50_PRESET.layout.map(item=>item.assetId).filter(Boolean)).size};}
 export const OFFICE_LOAD_POLICY=Object.freeze({workspaceMs:5000,presencePollMs:2000,movementMs:1000,sessionMs:15000,noOverlap:true});
 
+/** The clock and wait seams exercise the actual harness scheduler offline.
+ * @param {{period:number, firstDelay:number, until:number, operation:(count:number)=>Promise<unknown>, scheduled?:(target:number,tick:number)=>void, now?:()=>number, wait?:(ms:number)=>Promise<unknown>}} options
+ */
+export async function runLoadCadence({period,firstDelay,until,operation,scheduled=()=>{},now=()=>performance.now(),wait=delay}){
+ let target=now()+firstDelay;await wait(firstDelay);let count=0;
+ while(true){
+  const tick=now();if(tick>=until)return;
+  // Timers can wake early, including a final wait shortened to the deadline.
+  // Reaching that wakeup must not admit an operation before its cadence target.
+  if(tick<target){await wait(Math.min(target,until)-tick);continue;}
+  scheduled(target,tick);await operation(++count);target=tick+period;
+  const remaining=now();await wait(Math.max(0,Math.min(until-remaining,target-remaining)));
+ }
+}
+
 const hash=value=>createHash('sha256').update(value).digest('hex');
 export function parseLoadOptions(args){
  const options={clients:50,duration:30,port:4196,mode:'development',diagnostics:false,report:resolve('..','output','coatria-load',`connections-${Date.now()}.json`)};
@@ -202,8 +217,7 @@ export async function runOfficeLoad(options){
   if(options.diagnostics)hostStart=await hostSnapshot();
   phase='load';const began=performance.now(),until=began+options.duration*1000;loadStartedAt=began;clientDiagnostics?.start(began);databaseDiagnostics?.start(began);
   async function cadence(client,period,operation,name){
-   const firstDelay=period*client.index/options.clients;let target=performance.now()+firstDelay;await delay(firstDelay);let count=0;
-   while(performance.now()<until){const tick=performance.now();clientDiagnostics?.scheduled(name,target,tick);await operation(client,++count);const wait=Math.max(0,Math.min(until-performance.now(),period-(performance.now()-tick)));target=tick+period;await delay(wait);}
+   await runLoadCadence({period,firstDelay:period*client.index/options.clients,until,operation:count=>operation(client,count),scheduled:(target,tick)=>clientDiagnostics?.scheduled(name,target,tick)});
   }
   let posted=[],retried=[];
   const payload=client=>({body:`Load visibility ${run} ${client.index}`,clientId:client.messageClientId});

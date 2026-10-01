@@ -8,6 +8,7 @@ import {archiveHostHash,archiveHostRead} from './archive-host-package.mjs';
 import {ArchiveRuntimeExportError} from './export-archive-host-runtime.mjs';
 import {ImagePreparationHostCiCommandError} from './image-preparation-host-ci-command.mjs';
 import {makeImagePreparationHostReport} from './image-preparation-host-qualification.mjs';
+import {retainCiHostRelease,publishCiHostRelease} from './export-host-release-ci.mjs';
 
 
 const fail=()=>{throw Error('IMAGE_PREPARATION_HOST_CI_CHECK_FAILED');};
@@ -58,7 +59,7 @@ export async function qualifyImagePreparationHostCi(){
  const configPath=process.env.COATRIA_MEDIA_QUALIFICATION;if(!configPath||!process.env.COATRIA_NPM_CACHE)fail();
  const config=JSON.parse(await archiveHostRead(configPath)),output=resolve('.devdata/media-sandbox-linux/evidence'),base='/var/lib/coatria-image-preparation-build-'+randomUUID(),serviceId=randomUUID(),started=Date.now();
  if(!Number.isInteger(config.uid)||config.uid<1||!Number.isInteger(config.gid)||config.gid<1)fail();await mkdir(base,{mode:0o755});
- const exports=new Map(),report={version:1,qualified:false,productionQualified:false,enrolled:false,workerEnabled:false,noProviderCalls:true,noCredentials:true,phase:'prerequisites',phaseDurationsMs:{}};let failed=false,host,command,state,lastPhaseAt=Date.now();
+ const exports=new Map(),report={version:1,qualified:false,productionQualified:false,enrolled:false,workerEnabled:false,noProviderCalls:true,noCredentials:true,phase:'prerequisites',phaseDurationsMs:{}};let failed=false,host,command,state,retainedRelease,lastPhaseAt=Date.now();
  const phase=name=>{report.phaseDurationsMs[report.phase]=(report.phaseDurationsMs[report.phase]??0)+Date.now()-lastPhaseAt;report.phase=name;lastPhaseAt=Date.now();};
  try{
   const [{exportArchiveHostRuntime},{buildTrustedServiceBundle},{buildImagePreparationHostBundle},{installImagePreparationHost},{readImagePreparationHostConfiguration,IMAGE_PREPARATION_HOST_CONFIG,IMAGE_PREPARATION_HOST_STATE},{acceptImagePreparationHostQualification,readCurrentImagePreparationHostQualification,imagePreparationHostQualificationState,imagePreparationHostJournalProof},{createImagePreparationHostCiCommand,createImagePreparationHostCiAcceptor}]=await Promise.all([
@@ -84,6 +85,7 @@ export async function qualifyImagePreparationHostCi(){
   };
   Object.assign(report,await exerciseImagePreparationHostCiLifecycle({phase,disabled,source:{commit:build.commit,tree:build.tree,bundleSha256:build.bundleSha256,hostSha256:archiveHostHash(installation.hostBytes),recipeSha256:host.recipeSha256,closureSha256:host.closureSha256},readAccepted:()=>readCurrentImagePreparationHostQualification(hostPath,build.bundleSha256),preserveCurrent:(label,value)=>exports.set('image-preparation-host-'+label+'-current-qualification.json',Buffer.from(JSON.stringify(value,null,2)+'\n')),start:()=>command('start_qualifier'),stop:()=>{command('stop_qualifier');if(command('read_unit_state','qualify')!=='inactive')fail();},current,accept:(e,previous)=>{if(!compiledAcceptanceProved){if(previous!==undefined)fail();const result=compiledAccept(e.path,archiveHostHash(e.raw));compiledAcceptanceProved=true;return result;}return acceptImagePreparationHostQualification(hostPath,build.bundleSha256,e.path,archiveHostHash(e.raw),previous);},receipt:()=>archiveHostRead(receiptPath,65536),history:sha=>archiveHostRead(join(configRoot,'qualified-'+sha+'.json'),65536),preserve:(label,e)=>{exports.set('image-preparation-host-'+label+'-evidence.json',e.raw);exports.set('image-preparation-host-'+label+'-qualification.json',e.proof);exports.set('image-preparation-host-'+label+'-journal-proof.json',Buffer.from(JSON.stringify(e.journalProof,null,2)+'\n'));exports.set('image-preparation-host-'+label+'-isolation.json',e.isolation);exports.set('image-preparation-host-'+label+'-transform.json',e.transform);},preserveReceipt:(label,bytes)=>exports.set('image-preparation-host-'+label+'-receipt.json',bytes)}));
   for(const [name,path]of [['bundle',join(build.output,'bundle.json')],['host',hostPath],['worker-bundle',join(bundles['image-preparation'].output,'bundle.json')],['qualifier-bundle',join(bundles['image-preparation-qualification'].output,'bundle.json')]])exports.set('image-preparation-host-'+name+'.json',await archiveHostRead(path));
+  retainedRelease=await retainCiHostRelease({component:'image-preparation-host',sourceDirectory:build.output,bundleSha256:build.bundleSha256,commit:build.commit,tree:build.tree,base});
   Object.assign(report,{qualified:true,compiledAcceptanceProved,recipeSha256:host.recipeSha256,closureSha256:host.closureSha256,commit:build.commit,tree:build.tree,bundleSha256:build.bundleSha256,runtimeManifestSha256:runtime.runtimeManifestSha256,workerRuntimeSha256:bundles['image-preparation'].runtime.sha256,qualifierRuntimeSha256:bundles['image-preparation-qualification'].runtime.sha256,servicesInstalled:plan.installed===true,systemd:command('read_systemd_version').split('\n')[0]});phase('complete');
  }catch(error){failed=true;report.failureCode='IMAGE_PREPARATION_HOST_CI_FAILED';if(error instanceof ImagePreparationHostCiCommandError||error instanceof ArchiveRuntimeExportError)report.commandOrExportFailure=error.diagnostic;
   if(command)try{const invocationId=command('read_invocation');report.qualifierInvocationId=/^(?!0{32}$)[a-f0-9]{32}$/.test(invocationId)?invocationId:null;if(report.qualifierInvocationId){const raw=command('read_qualifier_diagnostics',invocationId);report.fixedQualificationRejection=raw.split('\n').some(line=>{try{const row=JSON.parse(line),message=JSON.parse(row.MESSAGE);return row._SYSTEMD_INVOCATION_ID===invocationId&&message.event==='image-preparation-host-qualification-failed'&&message.code==='IMAGE_PREPARATION_HOST_QUALIFICATION_REJECTED';}catch{return false;}});}}catch{report.diagnosticUnavailable=true;}
@@ -101,6 +103,7 @@ export async function qualifyImagePreparationHostCi(){
   // artifact paths in the checkout. Neither write follows existing links.
   for(const [name,bytes]of exports)await writeFile(join(base,name),bytes,{flag:'wx',mode:0o444});process.setgroups([]);process.setgid(config.gid);process.setuid(config.uid);
   for(const [name,bytes]of exports)await writeFile(join(output,name),bytes,{flag:'wx',mode:0o600});
+  if(!failed&&retainedRelease)await publishCiHostRelease(retainedRelease);
  }
  if(failed)throw Error('IMAGE_PREPARATION_HOST_CI_FAILED: inspect bounded qualification evidence.');
  return report;

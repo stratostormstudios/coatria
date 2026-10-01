@@ -13,6 +13,7 @@ import {readReferenceHostConfiguration} from './reference-host-package.mjs';
 import {acceptReferenceHostQualification,readCurrentReferenceHostQualification,referenceHostQualificationState,referenceHostJournalProof} from './reference-host-qualification.mjs';
 import {createReferenceHostCiCommand} from './reference-host-ci-command.mjs';
 import {buildTrustedServiceBundle} from './build-trusted-service-bundle.mjs';
+import {retainCiHostRelease,publishCiHostRelease} from './export-host-release-ci.mjs';
 import {createReferenceEnrollmentStore,assertReferenceEnrollmentPending,referenceEnrollmentTokenHash} from './reference-host-enrollment.mjs';
 import {provisionReferenceRegistrarRole} from '../provision-reference-registrar-role.mjs';
 import {HIGGSFIELD_REFERENCE_REGISTRAR_ROLE as ROLE,assertHiggsfieldReferenceRegistrarDatabase} from '../../src/lib/higgsfield-reference-registrar-database.mjs';
@@ -106,7 +107,7 @@ export async function qualifyReferenceEnrollmentCi(){
  check(process.platform==='linux'&&process.arch==='x64'&&process.getuid?.()===0&&process.env.CI==='true'&&/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA??''));
  const config=JSON.parse(await archiveHostRead(process.env.COATRIA_MEDIA_QUALIFICATION)),output=resolve('.devdata/media-sandbox-linux/evidence');check(Number.isInteger(config.uid)&&config.uid>0&&Number.isInteger(config.gid)&&config.gid>0);
  const base='/var/lib/coatria-reference-enrollment-ci-'+randomUUID(),database='coatria_ref_host_ci_'+randomUUID().replaceAll('-',''),report={version:1,kind:'reference-installed-registrar-ci',passed:false,productionQualified:false,productionEnrolled:false,syntheticCredentialsUsed:true,productionCredentialsUsed:false,workerEnabled:false,noProviderCalls:true,phase:'prerequisites'},exports=new Map();
- let host,command,owner,control,created=false,roleCreated=false,failed=false;const started=Date.now();
+ let host,command,owner,control,retainedRelease,created=false,roleCreated=false,failed=false;const started=Date.now();
  const phase=value=>{report.phase=value;};
  try{
   await mkdir(base,{mode:0o700});await archiveHostTrusted(base,true);
@@ -142,6 +143,7 @@ export async function qualifyReferenceEnrollmentCi(){
   phase('compiled-reconcile');const reconciled=invoke('reconcile',restricted.href);check(reconciled.ok&&same(reconciled.value,enrolled.value));check(same(referenceEnrollmentCiDatabaseProof(await store.read(),await rows(),await privateFile(join(configRoot,'worker.env'))),proof));report.exactReplayProved=true;
   phase('stopped-reconciliation');command('stop_qualifier');check(command('read_unit_state','qualify')==='inactive');const inactiveReply=invoke('reconcile',restricted.href);check(inactiveReply.ok&&inactiveReply.value.status==='committed'&&!inactiveReply.value.active&&!inactiveReply.value.credentialReady&&inactiveReply.value.reason==='local-qualification-inactive'&&inactiveReply.value.requestHash===proof.requestHash);check(same(referenceEnrollmentCiDatabaseProof(await store.read(),await rows(),await privateFile(join(configRoot,'worker.env'))),proof));report.stoppedReconciliationInactive=true;
   phase('revoked-reconciliation');await owner.query('UPDATE higgsfield_reference_services SET revoked_at=clock_timestamp(),revoked_by=enrolled_by,revision=revision+1,updated_at=clock_timestamp() WHERE id=$1 AND revoked_at IS NULL',[host.scope.serviceId]);const revoked=invoke('reconcile',restricted.href);check(revoked.ok&&revoked.value.status==='committed'&&!revoked.value.active&&!revoked.value.credentialReady&&revoked.value.requestHash===proof.requestHash);check((await store.read()).intentBytes.equals(pending.intentBytes)&&hash(await privateFile(join(configRoot,'worker.env')))===proof.credentialSha256);const final=await rows();check(final.services.length===1&&final.projects.length===scope.projects.length&&final.enrollments.length===1&&final.services[0].revoked_at&&final.enrollments[0].request_hash===proof.requestHash);await inactive();report.revokedReconciliationInactive=true;
+  retainedRelease=await retainCiHostRelease({component:'reference-registrar',sourceDirectory:registrarRoot,bundleSha256:build.bundleSha256,commit:host.commit,tree:host.tree,base});
   Object.assign(report,{passed:true,phase:'complete',sourceCommit:host.commit,sourceTree:host.tree,hostBundleSha256:host.bundleSha256,registrarBundleSha256:build.bundleSha256,registrarRuntimeSha256:build.runtime.sha256,registrarRuntimeBytes:build.runtime.bytes,scopeSha256:hash(scopeBytes),qualificationSha256:qualified.qualificationSha256,priorQualificationSha256:hash(previous),qualifierInvocationId:qualified.receipt.qualifierInvocationId,databaseProof:proof,rootPrivateModesProved:true,syntheticEnrollmentExercised:true,compiledRegistrarExecuted:true,independentReconciliationProved:true,credentialUnchangedAfterStopAndRevoke:true,workerRemainedInactive:true,roleGrantsSha256:provision.grantsSha256});
  }catch{failed=true;report.passed=false;report.failureCode='REFERENCE_ENROLLMENT_CI_FAILED';}
  finally{
@@ -160,6 +162,7 @@ export async function qualifyReferenceEnrollmentCi(){
   // Pending files, token, worker.env and any database URL never leave /etc.
   for(const [name,data]of exports)await writeFile(join(base,name),data,{flag:'wx',mode:0o444});process.setgroups([]);process.setgid(config.gid);process.setuid(config.uid);
   for(const [name,data]of exports)await writeFile(join(output,name),data,{flag:'wx',mode:0o600});
+  if(!failed&&retainedRelease)await publishCiHostRelease(retainedRelease);
  }
  if(failed)throw Error('REFERENCE_ENROLLMENT_CI_FAILED');return report;
 }

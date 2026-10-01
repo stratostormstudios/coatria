@@ -32,6 +32,10 @@ bundles: they omit mount points required after the decoder root becomes read-onl
 
 ## Prepare a suitable host
 
+Use the [production prerequisite runbook](PRODUCTION_MEDIA_HOST_PREREQUISITES.md)
+for a clean target VM. The CI preparation scripts below produce builder inputs;
+they are not a production bootstrap command and do not require `CI=true` on target.
+
 Use a Linux x64 VM with systemd as PID 1, systemd 254 or newer, unified cgroup v2
 and working `cpu`, `memory` and `pids` delegation. The actual host must support
 the namespaces, `close_range`, `cgroup.kill` and parent-death behavior exercised
@@ -78,7 +82,9 @@ must be new, outside the source and input trees, with canonical parents.
 
 `PREPARATION_CONFIG` is the root-owned qualification configuration produced by
 the explicit [media preparation](../scripts/hosting/prepare-media-sandbox-ci.mjs),
-with its pinned setup evidence and real/conformance profiles. It is not a claim
+on a genuine isolated CI builder, with its pinned setup evidence and
+real/conformance profiles. Export the complete runtime/bundle there; the target
+does not run that CI preparation. It is not a claim
 that a target production host passed. The builder needs the exact Docker image
 already cached and a complete npm tarball cache matching `package-lock.json`.
 

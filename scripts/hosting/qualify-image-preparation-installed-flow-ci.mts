@@ -11,6 +11,7 @@ import {pathToFileURL} from 'node:url';
 import pg,{type PoolClient} from 'pg';
 import {qualifyImagePreparationEnrollmentCi} from './qualify-image-preparation-enrollment-ci.mjs';
 import {buildTrustedServiceBundle} from './build-trusted-service-bundle.mjs';
+import {retainCiHostRelease} from './export-host-release-ci.mjs';
 import {archiveHostRead,archiveHostTrusted,verifyArchiveTree} from './archive-host-package.mjs';
 import {createImagePreparationInstalledNetworkCi} from './image-preparation-installed-network-ci.mjs';
 import {collectImagePreparationInstalledControlDiagnostic} from './image-preparation-installed-control-diagnostic.mjs';
@@ -99,7 +100,7 @@ async function transaction<T>(pool:pg.Pool,run:(db:PoolClient)=>Promise<T>){cons
 async function eventually<T>(run:()=>Promise<T|undefined>,milliseconds:number):Promise<T>{const deadline=Date.now()+milliseconds;for(;;){const value=await run();if(value!==undefined)return value;if(Date.now()>=deadline)fail();await new Promise(res=>setTimeout(res,500));}}
 
 async function exerciseInstalledWorker(context:any,storageKeyring:string){
- const {host,installation,base,scope,owner,pending,qualified,exports}=context;
+ const {host,installation,base,scope,owner,pending,qualified,exports,releaseExports}=context;
  const report:any={version:1,kind:'image-preparation-installed-flow-ci',passed:false,phase:'prerequisites',sourceCommit:host.commit,sourceTree:host.tree,serviceId:host.scope.serviceId,productionQualified:false,syntheticStorageOnly:true,productionCredentialsUsed:false,noProviderCalls:true};
  const network=createImagePreparationInstalledNetworkCi(),pools:pg.Pool[]=[],roles:string[]=[];
  let fixture:Awaited<ReturnType<typeof createImagePreparationInstalledFixture>>|undefined,restore:(()=>void)|undefined,invoke:ReturnType<typeof createImagePreparationInstalledController>|undefined,failed=false,stopAttempted=false;
@@ -155,7 +156,9 @@ async function exerciseInstalledWorker(context:any,storageKeyring:string){
   report.preparation={id:preparation.id,status:result.status,attempt:result.attempt,cleanupConfirmed:true,sourcePreserved:true,sourceSha256:work.sourceSha256,outputSha256:hash(output.bytes),outputBytes:output.bytes.length,outputWidth:16,outputHeight:16,distinctVersion:true,metadataRemoved:true,catalogRevisionAdvancedOnce:true};
   phase('compiled-stop');stopAttempted=true;report.stop=await invoke('stop');check(report.stop.status==='stopped'&&!report.stop.workerEnabled&&report.stop.processStopped&&report.stop.cleanupConfirmed&&report.stop.invocationId===started.invocationId&&report.stop.bootId===started.bootId);
   report.reconciledStop=await invoke('reconcile');check(JSON.stringify(report.reconciledStop)===JSON.stringify(report.stop));
-  const audit=fixture.audit();check(audit.counts.readSource===1&&audit.counts.initiate===1&&audit.counts.part===1&&audit.counts.complete===1&&audit.counts.readOutput===1&&audit.counts.signatureVerified===5&&audit.counts.rejectedEgress===0&&audit.counts.transportRejected===0&&audit.counts.httpRejected===0&&audit.unconfirmedUploads===0);report.transport=audit;report.passed=true;phase('complete');
+  const audit=fixture.audit();check(audit.counts.readSource===1&&audit.counts.initiate===1&&audit.counts.part===1&&audit.counts.complete===1&&audit.counts.readOutput===1&&audit.counts.signatureVerified===5&&audit.counts.rejectedEgress===0&&audit.counts.transportRejected===0&&audit.counts.httpRejected===0&&audit.unconfirmedUploads===0);report.transport=audit;
+  releaseExports.push(await retainCiHostRelease({component:'image-preparation-control',sourceDirectory:root,bundleSha256:build.bundleSha256,commit:host.commit,tree:host.tree,base}));
+  report.passed=true;phase('complete');
  }catch{failed=true;report.passed=false;report.failureCode='IMAGE_PREPARATION_INSTALLED_FLOW_CI_FAILED';}
  finally{
   const cleanupFailure=()=>{failed=true;report.passed=false;report.cleanupFailed=true;};

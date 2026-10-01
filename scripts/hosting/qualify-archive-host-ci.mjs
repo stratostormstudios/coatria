@@ -9,12 +9,13 @@ import {installArchiveHost,acceptArchiveHostQualification,archiveHostQualificati
 import {createArchiveHostCiCommand,ArchiveHostCiCommandError} from './archive-host-ci-command.mjs';
 import {archiveHostJournalFailure} from './archive-host-diagnostics.mjs';
 import {collectImagePreparationCiEvidence,preserveImagePreparationCiEvidence} from './image-preparation-ci-evidence.mjs';
+import {retainCiHostRelease,publishCiHostRelease} from './export-host-release-ci.mjs';
 
 const command=createArchiveHostCiCommand();
 if(process.platform!=='linux'||process.arch!=='x64'||process.getuid?.()!==0||process.env.CI!=='true'||!/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA??''))throw Error('Explicit root disposable Linux CI required.');
 const repo=process.cwd(),output=resolve('.devdata/media-sandbox-linux/evidence'),base='/var/lib/coatria-archive-build-'+randomUUID(),configPath=process.env.COATRIA_MEDIA_QUALIFICATION;
 if(!configPath||!process.env.COATRIA_NPM_CACHE)throw Error('Pinned CI preparation and cache required.');const config=JSON.parse(await archiveHostRead(configPath));await mkdir(base,{mode:0o755});
-const report={qualified:false,noProviderCalls:true,noCredentials:true,phase:'prerequisites'},exports=new Map(),preserved=new Set();let failed=false,bundleIdentity;
+const report={qualified:false,noProviderCalls:true,noCredentials:true,phase:'prerequisites'},exports=new Map(),preserved=new Set();let failed=false,bundleIdentity,retainedRelease;
 async function preserve(label,evidence){
  const prefix='archive-host-'+label;exports.set(prefix+'-evidence.json',evidence.raw);exports.set(prefix+'-qualification.json',evidence.proof);
  preserveImagePreparationCiEvidence(exports,prefix,await collectImagePreparationCiEvidence({directory:join(evidence.path,'..'),qualificationBytes:evidence.proof,hostEvidenceBytes:evidence.raw,...bundleIdentity,invocationId:evidence.host.invocationId}));preserved.add(archiveHostHash(evidence.proof));
@@ -45,6 +46,7 @@ try{
  await acceptArchiveHostQualification(second.path,archiveHostHash(second.raw),archiveHostHash(previous));const receipt=JSON.parse(await archiveHostRead('/etc/coatria-archive/qualified.json'));if(archiveHostReceiptCurrent(receipt,build.bundleSha256,'synthetic-different-boot'))throw Error('ARCHIVE_HOST_CI_STALE_BOOT_ACCEPTED');
  command('stop_qualifier',['stop','coatria-archive-qualify.service'],60000);if(command('read_unit_state',['show','coatria-archive-qualify.service','--property=ActiveState','--value'])!=='inactive')throw Error('ARCHIVE_HOST_CI_QUALIFIER_NOT_STOPPED');
  report.phase='worker-remains-disabled';command('start_disabled_worker',['start','coatria-archive-worker.service']);if(command('read_unit_state',['show','coatria-archive-worker.service','--property=ActiveState','--value'])!=='inactive')throw Error('ARCHIVE_HOST_CI_UNAPPROVED_WORKER_START');
+ retainedRelease=await retainCiHostRelease({component:'archive-host',sourceDirectory:build.output,bundleSha256:build.bundleSha256,commit:build.commit,tree:build.tree,base});
  const unit=await archiveHostRead('/etc/systemd/system/coatria-archive-qualify.service');Object.assign(report,{qualified:true,phase:'complete',commit:build.commit,tree:build.tree,bundleSha256:build.bundleSha256,runtimeManifestSha256:runtime.runtimeManifestSha256,nodeVersion:ARCHIVE_HOST_PINS.nodeVersion,unitSha256:archiveHostHash(unit),aclGuardProved:true,workerRemainedInactive:true,repeatQualificationPassed:true,retainedInvocationProved:true,stoppedEvidenceRejected:true,priorInvocationRejected:true,qualifierStoppedAfterAcceptance:true,receiptCasProved:true,staleBootRejected:true,systemd:command('read_systemd_version',['--version']).split('\n')[0],first:first.host,second:second.host});exports.set('archive-host-qualification.json',second.proof);
 }catch(error){failed=true;report.failureCode='ARCHIVE_HOST_CI_FAILED';if(error instanceof ArchiveHostCiCommandError)report.commandFailure=error.diagnostic;if(error instanceof ArchiveRuntimeExportError)report.exportFailure=error.diagnostic;try{report.unitStatus=command('read_failure_state',['show','coatria-archive-qualify.service','--property=ActiveState,Result,ExecMainStatus']);}catch{report.unitStatus='unavailable';}
  if(report.phase==='systemd-first-qualification'||report.phase==='systemd-repeat-qualification')try{
@@ -64,5 +66,6 @@ finally{
  for(const [name,bytes]of exports)await writeFile(join(base,name),bytes,{flag:'wx',mode:0o444});
  if(!Number.isInteger(config.uid)||config.uid<1||!Number.isInteger(config.gid)||config.gid<1)throw Error('ARCHIVE_HOST_CI_EXPORT_IDENTITY');process.setgroups([]);process.setgid(config.gid);process.setuid(config.uid);
  for(const [name,bytes]of exports)await writeFile(join(output,name),bytes,{flag:'wx',mode:0o600});
+ if(!failed&&retainedRelease)await publishCiHostRelease(retainedRelease);
 }
 if(failed)throw Error('Archive host package/systemd qualification failed; see bounded evidence.');
