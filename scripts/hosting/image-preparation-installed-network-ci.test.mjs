@@ -1,11 +1,35 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
-import {createImagePreparationInstalledNetworkCi,imagePreparationInstalledNetworkCiPlan,imagePreparationNetworkCiEnvironment,imagePreparationNetworkCiHosts,imagePreparationNetworkCiFirewall,assertImagePreparationNetworkCiFirewall} from './image-preparation-installed-network-ci.mjs';
+import {randomUUID,createHash} from 'node:crypto';
+import {spawnSync} from 'node:child_process';
+import {mkdir,readFile,writeFile} from 'node:fs/promises';
+import {createImagePreparationInstalledNetworkCi,imagePreparationInstalledNetworkCiPlan,imagePreparationNetworkCiEnvironment,imagePreparationNetworkCiHosts,imagePreparationNetworkCiFirewall,assertImagePreparationNetworkCiFirewall,imagePreparationNetworkCiNftDiagnostic} from './image-preparation-installed-network-ci.mjs';
 import {imagePreparationHostUnit,imagePreparationHostHash} from './image-preparation-host-package.mjs';
 
 const json=value=>Buffer.from(JSON.stringify(value,null,2)+'\n');
 const rejected=error=>error instanceof Error&&/^IMAGE_PREPARATION_NETWORK_CI_(?:REJECTED|CLEANUP_FAILED)$/.test(error.message);
+const nativeCi=process.platform==='linux'&&process.getuid?.()===0&&process.env.CI==='true';
+test('native nft check validates the exact batch and rejects malformed input without installing a table',{skip:nativeCi?false:'Requires disposable root Linux CI with nftables'},async()=>{
+ assert(/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA??''),'Requires exact CI source commit');
+ const plan={uid:1000,table:'coatria_image_prep_ci_'+randomUUID().replaceAll('-','')};
+ const report={version:1,kind:'image-preparation-network-native-precheck',sourceCommit:process.env.GITHUB_SHA,passed:false,checkOnly:true,noProviderCalls:true,sourceHashes:{},checks:[]};
+ const run=(args,input)=>spawnSync('/usr/sbin/nft',args,{input,env:{PATH:'/usr/sbin:/usr/bin:/sbin:/bin',LANG:'C',LC_ALL:'C'},shell:false,encoding:'utf8',timeout:15000,maxBuffer:131072,killSignal:'SIGKILL',windowsHide:true});
+ const absent=()=>{const value=run(['--numeric','--json','list','tables']);assert(!value.error&&!value.signal&&value.status===0,'Native nft table observation failed');const rows=JSON.parse(value.stdout).nftables;assert(Array.isArray(rows)&&!rows.some(row=>row.table?.family==='inet'&&row.table.name===plan.table),'Dry-run table must remain absent');};
+ // --check validates the transaction with the real parser/kernel but does not
+ // apply it. No live UID rule, host mapping, certificate or provider is changed.
+ // https://netfilter.org/projects/nftables/manpage.html
+ try{
+  for(const file of ['scripts/hosting/image-preparation-installed-network-ci.mjs','scripts/hosting/image-preparation-installed-network-ci.test.mjs','.github/workflows/ci.yml'])report.sourceHashes[file]=createHash('sha256').update(await readFile(file)).digest('hex');
+  absent();
+  for(const [valid,input]of [[true,imagePreparationNetworkCiFirewall(plan)],[false,imagePreparationNetworkCiFirewall(plan).replace('meta skuid','meta invalid_ci_key')]]){
+   const value=run(['--check','--file','-'],input),diagnostic=imagePreparationNetworkCiNftDiagnostic(value.stderr),check={validBatch:valid,status:Number.isInteger(value.status)&&value.status>=0&&value.status<=255?value.status:null,processError:Boolean(value.error),signaled:Boolean(value.signal),tableRemainedAbsent:false,diagnostic};report.checks.push(check);absent();check.tableRemainedAbsent=true;
+   assert(!value.error&&!value.signal,'Native nft validation did not finish');
+   assert.equal(value.status,valid?0:1,JSON.stringify({kind:'image-preparation-network-native-check',validBatch:valid,diagnostic}));
+   if(!valid)assert(diagnostic.categories.includes('syntax-error'),'Malformed batch must reach the parser');
+  }
+  report.passed=true;
+ }finally{await mkdir('.devdata/media-sandbox-linux/evidence',{recursive:true});await writeFile('.devdata/media-sandbox-linux/evidence/image-preparation-network-precheck.json',JSON.stringify(report,null,2)+'\n',{flag:'wx',mode:0o444});}
+});
 function kernelTable(plan,packets=0){
  const match=(left,right)=>({match:{op:'==',left,right}}),owner=match({meta:{key:'skuid'}},plan.uid),rule=(expr,comment)=>({rule:{family:'inet',table:plan.table,chain:'output',expr,comment,handle:4}});
  return {nftables:[{metainfo:{version:'1.0.9',json_schema_version:1}},{table:{family:'inet',name:plan.table,handle:1}},{chain:{family:'inet',table:plan.table,name:'output',handle:2,type:'filter',hook:'output',prio:-300,policy:'accept'}},rule([owner,match({payload:{protocol:'ip',field:'daddr'}},'127.0.0.1'),match({payload:{protocol:'tcp',field:'dport'}},443),{accept:null}],'coatria-ci-loopback-https'),rule([owner,{counter:{packets,bytes:packets*60}},{reject:{type:'icmpx',expr:'admin-prohibited'}}],'coatria-ci-deny-other')]};
@@ -120,4 +144,22 @@ test('successful pgrep no-match is not a failure and unavailable unit fields pro
  const f=fixture(),normal=f.options.exec;const controller=createImagePreparationInstalledNetworkCi({...f.options,exec:(program,args,options)=>{const result=normal(program,args,options);if(program==='/usr/bin/systemctl'&&args[0]==='show')return {...result,stdout:'ActiveState=PRIVATE_ACTIVE\nSubState=PRIVATE_SUB\nMainPID=PRIVATE_PID\nControlPID=0\nJob=PRIVATE_JOB\n'};return result;}});
  await assert.rejects(controller.setup(f.input),rejected);const rejectedState=controller.diagnostic();assert.equal(rejectedState.failure.phase,'setup-units');assert.deepEqual(rejectedState.units,[{mode:'preflight',activeState:'other',subState:'other',mainPidZero:false,controlPidZero:true,jobPresent:true}]);assert(!JSON.stringify(rejectedState).includes('PRIVATE'));
  const good=fixture();await good.controller.setup(good.input);assert.equal(good.controller.diagnostic().failure,null);assert.equal(good.controller.diagnostic().phase,'setup-complete');await good.controller.cleanup();assert.equal(good.controller.diagnostic().failure,null);
+});
+
+test('nft diagnostic keeps only fixed error categories and bounded stdin coordinates',()=>{
+ const raw='/dev/stdin:4:107-110: Error: syntax error, unexpected type\nPRIVATE_CREDENTIAL PRIVATE_PATH PRIVATE_TABLE\n';
+ assert.deepEqual(imagePreparationNetworkCiNftDiagnostic(raw),{categories:['syntax-error','unexpected-type'],locations:[{line:4,column:107,endColumn:110}]});
+ assert.deepEqual(imagePreparationNetworkCiNftDiagnostic('PRIVATE_ERROR -:999:900-999: operation not permitted'),{categories:['operation-not-permitted'],locations:[]});
+ assert.deepEqual(imagePreparationNetworkCiNftDiagnostic('Error: Could not process rule: No such file or directory'),{categories:['missing-object'],locations:[]});
+ assert.deepEqual(imagePreparationNetworkCiNftDiagnostic('PRIVATE_UNKNOWN'),{categories:['unclassified'],locations:[]});
+ assert.deepEqual(imagePreparationNetworkCiNftDiagnostic('x'.repeat(131073)),{categories:['unavailable'],locations:[]});
+});
+
+test('failed nft installation preserves the sanitized rejection reason across restoration',async()=>{
+ const f=fixture(),normal=f.options.exec,controller=createImagePreparationInstalledNetworkCi({...f.options,exec:(program,args,options)=>{
+  if(program==='/usr/sbin/nft'&&args[0]==='-f')return {status:1,stdout:'PRIVATE_STDOUT',stderr:'-:4:1-3: Error: Operation not supported\nPRIVATE_STDERR'};
+  return normal(program,args,options);
+ }});
+ await assert.rejects(controller.setup(f.input),rejected);const before=controller.diagnostic();assert.deepEqual(before.nftError,{categories:['not-supported'],locations:[{line:4,column:1,endColumn:3}]});assert.equal(before.failure.phase,'setup-firewall-install');assert(!JSON.stringify(before).includes('PRIVATE'));
+ await controller.cleanup();assert.deepEqual(controller.diagnostic().nftError,before.nftError);assert.deepEqual(controller.diagnostic().failure,before.failure);assert.equal(controller.diagnostic().finished,true);
 });

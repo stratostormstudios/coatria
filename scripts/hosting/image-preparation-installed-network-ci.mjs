@@ -69,6 +69,17 @@ async function verifyHost(host){const value=await readImagePreparationHostConfig
 const diagnosticErrno=value=>value===undefined||value===null?null:['EACCES','EPERM','ENOENT','EEXIST','ENOSPC','EROFS','EBUSY','EIO','EINVAL','ETIMEDOUT','ENOBUFS','EMFILE','ENFILE','EPIPE','ECONNREFUSED','EHOSTUNREACH','ENETUNREACH'].includes(value)?value:'OTHER';
 const diagnosticSignal=value=>value===undefined||value===null?null:['SIGTERM','SIGKILL','SIGABRT','SIGSEGV','SIGINT'].includes(value)?value:'OTHER';
 const diagnosticCount=value=>Number.isSafeInteger(value)&&value>=0&&value<=1000000?value:null;
+/** The firewall batch has fixed, synthetic input. Still export only recognized
+ * nft error categories and bounded stdin coordinates, never its raw stderr. */
+export function imagePreparationNetworkCiNftDiagnostic(stderr){
+ if(typeof stderr!=='string'||Buffer.byteLength(stderr)>131072)return {categories:['unavailable'],locations:[]};
+ const rules=[['syntax-error',/\bsyntax error\b/i],['unexpected-type',/\bunexpected type\b/i],['unexpected-newline',/\bunexpected newline\b/i],['operation-not-permitted',/\boperation not permitted\b/i],['permission-denied',/\bpermission denied\b/i],['not-supported',/\b(?:operation|protocol) not supported\b/i],['missing-object',/\bno such file or directory\b/i],['already-exists',/\bfile exists\b/i],['invalid-argument',/\binvalid argument\b/i],['out-of-memory',/\b(?:out of memory|cannot allocate memory)\b/i],['identifier-too-long',/\b(?:identifier|name) (?:is )?too long\b/i]];
+ const categories=rules.filter(([,pattern])=>pattern.test(stderr)).map(([label])=>label),locations=[];
+ for(const match of stderr.matchAll(/(?:\/dev\/stdin|<stdin>|stdin|-):(\d{1,3}):(\d{1,3})(?:-(\d{1,3}))?/g)){
+  const line=Number(match[1]),column=Number(match[2]),endColumn=Number(match[3]??match[2]);if(line>=1&&line<=4&&column>=1&&column<=512&&endColumn>=column&&endColumn<=512&&locations.length<4)locations.push({line,column,endColumn});
+ }
+ return {categories:categories.length?categories:['unclassified'],locations};
+}
 function firewallDiagnostic(raw,plan){
  let value;try{value=JSON.parse(raw);}catch{return {jsonValid:false};}
  const rows=Array.isArray(value?.nftables)?value.nftables:[],bounded=rows.length<=8,tables=bounded?rows.filter(v=>v?.table):[],chains=bounded?rows.filter(v=>v?.chain):[],rules=bounded?rows.filter(v=>v?.rule).map(v=>v.rule):[];
@@ -78,14 +89,22 @@ function firewallDiagnostic(raw,plan){
 /** Dependencies are explicit offline-test I/O only, never environment-selected. */
 export function createImagePreparationInstalledNetworkCi({fs=filesystem,exec=spawnSync,runtime=context,readTrustedFile=safeRead,assertHost=verifyHost,certificateHash=bytes=>hash(new X509Certificate(bytes).raw)}={}){
  let plan,host,lock,originalHosts,originalHostsMode,appliedHosts,priorEnvironment,originalCaBundleHash,caHash,firewallAttempted=false,hostsAttempted=false,caAttempted=false,environmentAttempted=false,initialized=false,finished=false,busy=false;
- let phase='idle',firstFailure=null,lastCommand=null,ruleProjection=null;const unitProjection=new Map();
+ let phase='idle',firstFailure=null,lastCommand=null,ruleProjection=null,nftError=null;const unitProjection=new Map();
  const step=value=>{phase=value;};
  const recordFailure=error=>{firstFailure??={phase,lastCommand:lastCommand?{...lastCommand}:null,errno:diagnosticErrno(error?.code)};};
  // Fixed labels and boolean/numeric projections only. Never retain raw command
  // output, arguments, paths, manager values, certificate bytes or exception text.
- const diagnostic=()=>structuredClone({version:1,phase,failure:firstFailure,lastCommand,attempted:{firewall:firewallAttempted,hosts:hostsAttempted,ca:caAttempted,environment:environmentAttempted},initialized,finished,units:[...unitProjection.values()],firewall:ruleProjection});
+ const diagnostic=()=>structuredClone({version:1,phase,failure:firstFailure,lastCommand,attempted:{firewall:firewallAttempted,hosts:hostsAttempted,ca:caAttempted,environment:environmentAttempted},initialized,finished,units:[...unitProjection.values()],firewall:ruleProjection,nftError});
  function category(program,args){if(program==='/usr/bin/systemctl')return ({show:'unit-state','show-environment':'manager-read','set-environment':'manager-set','unset-environment':'manager-unset'})[args[0]]??'other';if(program==='/usr/sbin/nft')return args[0]==='-f'?'firewall-install':args[0]==='delete'?'firewall-delete':args.includes('tables')?'firewall-list-tables':'firewall-read';if(program==='/usr/bin/pgrep')return 'uid-process-check';if(program==='/usr/bin/id')return 'uid-identity';if(program==='/usr/bin/openssl')return 'tls-openssl';if(program==='/usr/sbin/update-ca-certificates')return 'system-ca-update';if(program===host?.node.path)return args[2]===DENY_PROBE?'uid-denial-probe':args[2]===CA_PROBE?'system-ca-probe':'other';return 'other';}
- function command(program,args,{input,timeout=15000,maxBuffer=131072,extraEnv={},acceptStatus=[]}={}){let value;lastCommand={phase,category:category(program,args),status:null,signal:null,errno:null};try{value=exec(program,args,{shell:false,env:{...env,...extraEnv},encoding:'utf8',timeout,maxBuffer,input,killSignal:'SIGKILL',windowsHide:true});}catch(error){lastCommand.errno=diagnosticErrno(error?.code);recordFailure(error);fail();}lastCommand={...lastCommand,status:Number.isInteger(value?.status)&&value.status>=0&&value.status<=255?value.status:null,signal:diagnosticSignal(value?.signal),errno:diagnosticErrno(value?.error?.code)};try{check(value&&!value.error&&!value.signal&&([0,...acceptStatus].includes(value.status))&&typeof value.stdout==='string'&&typeof value.stderr==='string'&&Buffer.byteLength(value.stdout)+Buffer.byteLength(value.stderr)<=maxBuffer);}catch(error){recordFailure(value?.error??error);throw error;}return value;}
+ function command(program,args,{input,timeout=15000,maxBuffer=131072,extraEnv={},acceptStatus=[]}={}){
+  let value;lastCommand={phase,category:category(program,args),status:null,signal:null,errno:null};
+  try{value=exec(program,args,{shell:false,env:{...env,...extraEnv},encoding:'utf8',timeout,maxBuffer,input,killSignal:'SIGKILL',windowsHide:true});}
+  catch(error){lastCommand.errno=diagnosticErrno(error?.code);recordFailure(error);fail();}
+  lastCommand={...lastCommand,status:Number.isInteger(value?.status)&&value.status>=0&&value.status<=255?value.status:null,signal:diagnosticSignal(value?.signal),errno:diagnosticErrno(value?.error?.code)};
+  try{check(value&&!value.error&&!value.signal&&([0,...acceptStatus].includes(value.status))&&typeof value.stdout==='string'&&typeof value.stderr==='string'&&Buffer.byteLength(value.stdout)+Buffer.byteLength(value.stderr)<=maxBuffer);}
+  catch(error){if(lastCommand.category==='firewall-install')nftError=imagePreparationNetworkCiNftDiagnostic(value?.stderr);recordFailure(value?.error??error);throw error;}
+  return value;
+ }
  const manager=()=>imagePreparationNetworkCiEnvironment(command('/usr/bin/systemctl',['show-environment']).stdout);
  const firewall=()=>{const raw=command('/usr/sbin/nft',['--numeric','--json','list','table','inet',plan.table]).stdout;ruleProjection=firewallDiagnostic(raw,plan);return assertImagePreparationNetworkCiFirewall(raw,plan);};
  async function absent(path){try{await fs.lstat(path);}catch(error){if(error.code==='ENOENT')return;throw error;}fail();}

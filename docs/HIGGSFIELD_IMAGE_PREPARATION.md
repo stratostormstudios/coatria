@@ -293,6 +293,8 @@ Cleanup stops all three installed units and requires no queued start job, activa
 
 The network fixture exports bounded diagnostic snapshots before and after cleanup. Fixed phase and command categories, allowlisted process outcomes, mutation-attempt flags, unit-state booleans and kernel-rule shape checks identify a failed setup boundary without exporting command arguments or raw output. The first failure remains unchanged when cleanup advances. A successful cleanup establishes restoration, not successful network setup or worker execution.
 
+A root Linux CI precheck submits the same firewall batch to `nft --check` before expensive service qualification. The real parser and kernel validate it without applying the transaction; the generated table must remain absent before and after both valid and deliberately malformed inputs. Actual installation and UID denial probes remain required later. Failed installation exports only recognized nft error categories and bounded stdin line/column locations. Unknown error text is discarded. This check diagnoses firewall compatibility; it does not authorize broader routes or substitute for the installed-worker HTTPS test.
+
 | Milestone | Deliverable | Acceptance boundary |
 | --- | --- | --- |
 | M1: policy and pure transform | Versioned source/output limits, fixed recipe, binary transform interface and strict output validator | Real local fixture transforms prove resized pixels and metadata absence. Native execution, if used by tests, remains unavailable in production. No storage/provider or agent execution is enabled. |
