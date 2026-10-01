@@ -27,7 +27,7 @@ export function imagePreparationInstalledNetworkCiPlan({host,base,candidate},run
  check(Number.isSafeInteger(host.uid)&&host.uid>0&&Number.isSafeInteger(host.gid)&&host.gid>0&&/^[a-f0-9]{64}$/.test(host.bundleSha256??'')&&host.release==='/var/lib/coatria-image-preparation-releases/'+host.bundleSha256&&host.node?.path===host.release+'/runtime/node'&&/^[a-f0-9]{64}$/.test(host.node.sha256??''));
  for(const mode of ['qualify','preflight','worker'])check(host.units?.[mode]?.name===`coatria-image-preparation-${host.scope.serviceId}-${mode}.service`&&host.units[mode].sha256===imagePreparationHostHash(imagePreparationHostUnit(mode,host.release,host.bundleSha256,host.scope.serviceId)));
  const id=host.scope.serviceId,network=base+'/network',table='coatria_image_prep_ci_'+id.replaceAll('-','');
- return {base,network,candidate,serviceId:id,uid:host.uid,gid:host.gid,table,markerPath:base+'/installed-network-authority.json',caPath:network+'/ca.crt',keyPath:network+'/server.key',certPath:network+'/server.crt',installedCaPath:'/usr/local/share/ca-certificates/coatria-image-preparation-ci-'+id+'.crt',hostsSuffix:`127.0.0.1 ${names.join(' ')} # coatria-image-preparation-ci:${id}\n`,marker:{version:1,kind:'coatria-image-preparation-disposable-network-ci',candidate,serviceId:id,disposableHost:true}};
+ return {base,network,candidate,serviceId:id,uid:host.uid,gid:host.gid,table,rulesPath:network+'/firewall.nft',markerPath:base+'/installed-network-authority.json',caPath:network+'/ca.crt',keyPath:network+'/server.key',certPath:network+'/server.crt',installedCaPath:'/usr/local/share/ca-certificates/coatria-image-preparation-ci-'+id+'.crt',hostsSuffix:`127.0.0.1 ${names.join(' ')} # coatria-image-preparation-ci:${id}\n`,marker:{version:1,kind:'coatria-image-preparation-disposable-network-ci',candidate,serviceId:id,disposableHost:true}};
 }
 /** No broad manager environment is retained or reported. Only absent/0/1 for
  * this boolean is supported; unfamiliar preexisting values fail before changes. */
@@ -73,7 +73,7 @@ const diagnosticCount=value=>Number.isSafeInteger(value)&&value>=0&&value<=10000
  * nft error categories and bounded stdin coordinates, never its raw stderr. */
 export function imagePreparationNetworkCiNftDiagnostic(stderr){
  if(typeof stderr!=='string'||Buffer.byteLength(stderr)>131072)return {categories:['unavailable'],locations:[]};
- const rules=[['syntax-error',/\bsyntax error\b/i],['unexpected-type',/\bunexpected type\b/i],['unexpected-newline',/\bunexpected newline\b/i],['operation-not-permitted',/\boperation not permitted\b/i],['permission-denied',/\bpermission denied\b/i],['not-supported',/\b(?:operation|protocol) not supported\b/i],['missing-object',/\bno such file or directory\b/i],['already-exists',/\bfile exists\b/i],['invalid-argument',/\binvalid argument\b/i],['out-of-memory',/\b(?:out of memory|cannot allocate memory)\b/i],['identifier-too-long',/\b(?:identifier|name) (?:is )?too long\b/i]];
+ const rules=[['stdin-not-regular-file',/^(?:internal:0:0-0: )?(?:Error: )?Not a regular file: "\/dev\/stdin"\r?$/m],['syntax-error',/\bsyntax error\b/i],['unexpected-type',/\bunexpected type\b/i],['unexpected-newline',/\bunexpected newline\b/i],['operation-not-permitted',/\boperation not permitted\b/i],['permission-denied',/\bpermission denied\b/i],['not-supported',/\b(?:operation|protocol) not supported\b/i],['missing-object',/\bno such file or directory\b/i],['already-exists',/\bfile exists\b/i],['invalid-argument',/\binvalid argument\b/i],['out-of-memory',/\b(?:out of memory|cannot allocate memory)\b/i],['identifier-too-long',/\b(?:identifier|name) (?:is )?too long\b/i]];
  const categories=rules.filter(([,pattern])=>pattern.test(stderr)).map(([label])=>label),locations=[];
  for(const match of stderr.matchAll(/(?:\/dev\/stdin|<stdin>|stdin|-):(\d{1,3}):(\d{1,3})(?:-(\d{1,3}))?/g)){
   const line=Number(match[1]),column=Number(match[2]),endColumn=Number(match[3]??match[2]);if(line>=1&&line<=4&&column>=1&&column<=512&&endColumn>=column&&endColumn<=512&&locations.length<4)locations.push({line,column,endColumn});
@@ -88,7 +88,7 @@ function firewallDiagnostic(raw,plan){
 }
 /** Dependencies are explicit offline-test I/O only, never environment-selected. */
 export function createImagePreparationInstalledNetworkCi({fs=filesystem,exec=spawnSync,runtime=context,readTrustedFile=safeRead,assertHost=verifyHost,certificateHash=bytes=>hash(new X509Certificate(bytes).raw)}={}){
- let plan,host,lock,originalHosts,originalHostsMode,appliedHosts,priorEnvironment,originalCaBundleHash,caHash,firewallAttempted=false,hostsAttempted=false,caAttempted=false,environmentAttempted=false,initialized=false,finished=false,busy=false;
+ let plan,host,lock,originalHosts,originalHostsMode,appliedHosts,priorEnvironment,originalCaBundleHash,caHash,rulesIdentity,rulesCreated=false,rulesWritten=false,firewallAttempted=false,hostsAttempted=false,caAttempted=false,environmentAttempted=false,initialized=false,finished=false,busy=false;
  let phase='idle',firstFailure=null,lastCommand=null,ruleProjection=null,nftError=null;const unitProjection=new Map();
  const step=value=>{phase=value;};
  const recordFailure=error=>{firstFailure??={phase,lastCommand:lastCommand?{...lastCommand}:null,errno:diagnosticErrno(error?.code)};};
@@ -96,9 +96,9 @@ export function createImagePreparationInstalledNetworkCi({fs=filesystem,exec=spa
  // output, arguments, paths, manager values, certificate bytes or exception text.
  const diagnostic=()=>structuredClone({version:1,phase,failure:firstFailure,lastCommand,attempted:{firewall:firewallAttempted,hosts:hostsAttempted,ca:caAttempted,environment:environmentAttempted},initialized,finished,units:[...unitProjection.values()],firewall:ruleProjection,nftError});
  function category(program,args){if(program==='/usr/bin/systemctl')return ({show:'unit-state','show-environment':'manager-read','set-environment':'manager-set','unset-environment':'manager-unset'})[args[0]]??'other';if(program==='/usr/sbin/nft')return args[0]==='-f'?'firewall-install':args[0]==='delete'?'firewall-delete':args.includes('tables')?'firewall-list-tables':'firewall-read';if(program==='/usr/bin/pgrep')return 'uid-process-check';if(program==='/usr/bin/id')return 'uid-identity';if(program==='/usr/bin/openssl')return 'tls-openssl';if(program==='/usr/sbin/update-ca-certificates')return 'system-ca-update';if(program===host?.node.path)return args[2]===DENY_PROBE?'uid-denial-probe':args[2]===CA_PROBE?'system-ca-probe':'other';return 'other';}
- function command(program,args,{input,timeout=15000,maxBuffer=131072,extraEnv={},acceptStatus=[]}={}){
+ function command(program,args,{input,stdio,timeout=15000,maxBuffer=131072,extraEnv={},acceptStatus=[]}={}){
   let value;lastCommand={phase,category:category(program,args),status:null,signal:null,errno:null};
-  try{value=exec(program,args,{shell:false,env:{...env,...extraEnv},encoding:'utf8',timeout,maxBuffer,input,killSignal:'SIGKILL',windowsHide:true});}
+  try{value=exec(program,args,{shell:false,env:{...env,...extraEnv},encoding:'utf8',timeout,maxBuffer,input,...(stdio?{stdio}:{}),killSignal:'SIGKILL',windowsHide:true});}
   catch(error){lastCommand.errno=diagnosticErrno(error?.code);recordFailure(error);fail();}
   lastCommand={...lastCommand,status:Number.isInteger(value?.status)&&value.status>=0&&value.status<=255?value.status:null,signal:diagnosticSignal(value?.signal),errno:diagnosticErrno(value?.error?.code)};
   try{check(value&&!value.error&&!value.signal&&([0,...acceptStatus].includes(value.status))&&typeof value.stdout==='string'&&typeof value.stderr==='string'&&Buffer.byteLength(value.stdout)+Buffer.byteLength(value.stderr)<=maxBuffer);}
@@ -108,6 +108,19 @@ export function createImagePreparationInstalledNetworkCi({fs=filesystem,exec=spa
  const manager=()=>imagePreparationNetworkCiEnvironment(command('/usr/bin/systemctl',['show-environment']).stdout);
  const firewall=()=>{const raw=command('/usr/sbin/nft',['--numeric','--json','list','table','inet',plan.table]).stdout;ruleProjection=firewallDiagnostic(raw,plan);return assertImagePreparationNetworkCiFirewall(raw,plan);};
  async function absent(path){try{await fs.lstat(path);}catch(error){if(error.code==='ENOENT')return;throw error;}fail();}
+ function privateRulesFile(info){check(info.isFile()&&!info.isSymbolicLink()&&info.nlink===1&&info.uid===0&&info.gid===0&&(info.mode&0o7777)===0o600);}
+ async function verifyRulesFile(complete=true){
+  await trustedBase(plan.network);check(((await fs.lstat(plan.network)).mode&0o7777)===0o700);
+  const info=await fs.lstat(plan.rulesPath);privateRulesFile(info);check(rulesIdentity&&info.dev===rulesIdentity.dev&&info.ino===rulesIdentity.ino&&await fs.realpath(plan.rulesPath)===plan.rulesPath);
+  const bytes=await readTrustedFile(plan.rulesPath,4096);if(complete)check(bytes.equals(Buffer.from(imagePreparationNetworkCiFirewall(plan))));
+ }
+ async function writeRulesFile(){
+  await trustedBase(plan.network);check(((await fs.lstat(plan.network)).mode&0o7777)===0o700);
+  const file=await fs.open(plan.rulesPath,'wx',0o600);rulesCreated=true;
+  try{rulesIdentity=await file.stat();privateRulesFile(rulesIdentity);await file.writeFile(Buffer.from(imagePreparationNetworkCiFirewall(plan)));rulesWritten=true;await file.sync();}finally{await file.close();}
+  const directory=await fs.open(plan.network,'r');try{await directory.sync();}finally{await directory.close();}
+  await verifyRulesFile();
+ }
  async function stopped(all=false){
   for(const mode of all?['qualify','preflight','worker']:['preflight','worker']){const output=command('/usr/bin/systemctl',['show',host.units[mode].name,'--property=ActiveState,SubState,MainPID,ControlPID,Job']).stdout,lines=output.trim().split('\n');const state={};for(const line of lines){const at=line.indexOf('=');check(at>0&&!Object.hasOwn(state,line.slice(0,at)));state[line.slice(0,at)]=line.slice(at+1);}unitProjection.set(mode,{mode,activeState:['inactive','failed','active','activating','deactivating'].includes(state.ActiveState)?state.ActiveState:'other',subState:['dead','failed','running','exited','start','stop'].includes(state.SubState)?state.SubState:'other',mainPidZero:state.MainPID==='0',controlPidZero:state.ControlPID==='0',jobPresent:state.Job!==''});check(exact(state,['ActiveState','SubState','MainPID','ControlPID','Job'])&&['inactive','failed'].includes(state.ActiveState)&&['dead','failed'].includes(state.SubState)&&state.MainPID==='0'&&state.ControlPID==='0'&&state.Job==='');}
   const processes=command('/usr/bin/pgrep',['-u',String(host.uid)],{acceptStatus:[1]});check(processes.status===1&&!processes.stdout.trim()&&!processes.stderr.trim());
@@ -128,7 +141,7 @@ export function createImagePreparationInstalledNetworkCi({fs=filesystem,exec=spa
    // Keep the UID block if any restoration failed. Disposable CI then fails;
    // there is no automatic repeat setup, service retry or broadened egress.
    if(!failed&&firewallAttempted)try{step('cleanup-firewall');const before=JSON.parse(command('/usr/sbin/nft',['--numeric','--json','list','tables']).stdout);check(Array.isArray(before.nftables));if(before.nftables.some(row=>row.table?.family==='inet'&&row.table.name===plan.table)){firewall();command('/usr/sbin/nft',['delete','table','inet',plan.table]);}const tables=JSON.parse(command('/usr/sbin/nft',['--numeric','--json','list','tables']).stdout);check(Array.isArray(tables.nftables)&&!tables.nftables.some(row=>row.table?.family==='inet'&&row.table.name===plan.table));}catch(error){recordFailure(error);failed=true;}
-   if(!failed){step('cleanup-private-files');for(const name of ['ca.key','server.key','server.csr'])try{await fs.unlink(plan.network+'/'+name);}catch(error){if(error.code!=='ENOENT'){recordFailure(error);failed=true;}}}
+   if(!failed){step('cleanup-private-files');if(rulesCreated)try{await verifyRulesFile(rulesWritten);await fs.unlink(plan.rulesPath);rulesCreated=false;}catch(error){recordFailure(error);failed=true;}for(const name of ['ca.key','server.key','server.csr'])try{await fs.unlink(plan.network+'/'+name);}catch(error){if(error.code!=='ENOENT'){recordFailure(error);failed=true;}}}
    if(failed)fail('IMAGE_PREPARATION_NETWORK_CI_CLEANUP_FAILED');
    step('cleanup-receipt');await fs.writeFile(plan.network+'/cleanup.json',json({version:1,candidate:plan.candidate,serviceId:plan.serviceId,restored:true,firewallRemoved:true,workerStarted:false,remoteConnections:0}),{flag:'wx',mode:0o600});
    step('cleanup-lock');await lock?.close();lock=undefined;await fs.unlink(lockPath);finished=true;step('cleanup-complete');return {restored:true,firewallRemoved:true};
@@ -143,7 +156,10 @@ export function createImagePreparationInstalledNetworkCi({fs=filesystem,exec=spa
    step('setup-manager-snapshot');priorEnvironment=manager();step('setup-hosts-snapshot');originalHosts=await readTrustedFile(hostsPath,1024*1024);const hostsInfo=await fs.lstat(hostsPath);check(hostsInfo.uid===0&&hostsInfo.gid===0);originalHostsMode=hostsInfo.mode&0o7777;appliedHosts=imagePreparationNetworkCiHosts(originalHosts,plan);step('setup-ca-snapshot');originalCaBundleHash=hash(await readTrustedFile(caBundle,4*1024*1024));
    step('setup-firewall-baseline');const tables=JSON.parse(command('/usr/sbin/nft',['--numeric','--json','list','tables']).stdout);check(Array.isArray(tables.nftables)&&!tables.nftables.some(row=>row.table?.family==='inet'&&row.table.name===plan.table));
    step('setup-intent');lock=await fs.open(lockPath,'wx',0o600);initialized=true;await lock.writeFile(json(plan.marker));await lock.sync();await fs.mkdir(plan.network,{mode:0o700});await fs.writeFile(plan.network+'/intent.json',json({...plan.marker,hostsBeforeSha256:hash(originalHosts),caBundleBeforeSha256:originalCaBundleHash,managerValueWasSet:priorEnvironment.prior!==null}),{flag:'wx',mode:0o600});
-   step('setup-firewall-install');firewallAttempted=true;command('/usr/sbin/nft',['-f','-'],{input:imagePreparationNetworkCiFirewall(plan)});step('setup-firewall-verify');const before=firewall();
+   // Node's Unix stdio pipes are sockets; Noble nft rejects that file type for
+   // /dev/stdin. Keep the exact policy in a verified private regular file.
+   step('setup-firewall-file');await writeRulesFile();
+   step('setup-firewall-install');firewallAttempted=true;command('/usr/sbin/nft',['-f',plan.rulesPath],{stdio:['ignore','pipe','pipe']});step('setup-firewall-verify');const before=firewall();
    step('setup-denial-probe');let probe;try{probe=JSON.parse(command(host.node.path,['--input-type=module','-e',DENY_PROBE,String(host.uid),String(host.gid)]).stdout);}catch{fail();}check(exact(probe,['blockedIPv4','blockedIPv6','acceptedConnections','uid','gid','nodeVersion'])&&probe.blockedIPv4===true&&probe.blockedIPv6===true&&probe.acceptedConnections===0&&probe.uid===host.uid&&probe.gid===host.gid&&probe.nodeVersion==='v24.19.0');step('setup-denial-counter');const after=firewall();check(after.packets-before.packets>=2&&after.packets-before.packets<=20);
    step('setup-ca-generate');
    command('/usr/bin/openssl',['req','-x509','-newkey','rsa:2048','-nodes','-days','1','-sha256','-keyout',plan.network+'/ca.key','-out',plan.caPath,'-subj','/CN=Coatria disposable image preparation CI CA','-addext','basicConstraints=critical,CA:TRUE','-addext','keyUsage=critical,keyCertSign,cRLSign'],{timeout:30000});
