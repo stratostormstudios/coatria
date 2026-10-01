@@ -83,10 +83,23 @@ export function characterInstructions(installation){
 
 /** Pure prompt projection shared by direct providers, native CLIs and the
  * managed broker. Workflow metadata never replaces server authorization.
- * @returns {{verifiedRequest:{id:string,prompt:string},untrustedConversationContext:{messages:unknown[]},generatedFollowup?:{projectId:string,workItemId:string,taskId:string,archiveId:string,requestId:string,storageVersionId:string,fileSha256:string,specSha256:string,artifactId:string|null,nextStep:'claim'|'register'|'submit'|'submitted',advanceTool:'studio_generated_followup_advance',serverOwnsOperationIds:true,contentInspected:false,canGenerate:false,canTransfer:false,canApprove:false}}}
+ * @returns {{referenceGenerationFollowup?:{projectId:string,workItemId:string,taskId:string,referenceId:string,handoffSha256:string,requestId:string|null,nextStep:'claim'|'proposal'|'proposed',advanceTool:'studio_reference_generation_followup_advance',serverOwnsOperationIds:true,contentInspected:false,canGenerate:false,canTransfer:false,canApprove:false},verifiedRequest:{id:string,prompt:string},untrustedConversationContext:{messages:unknown[]},generatedFollowup?:{projectId:string,workItemId:string,taskId:string,archiveId:string,requestId:string,storageVersionId:string,fileSha256:string,specSha256:string,artifactId:string|null,nextStep:'claim'|'register'|'submit'|'submitted',advanceTool:'studio_generated_followup_advance',serverOwnsOperationIds:true,contentInspected:false,canGenerate:false,canTransfer:false,canApprove:false}}}
  */
 export function modelRequestContext(run,context){
  const request={verifiedRequest:{id:run.id,prompt:run.prompt},untrustedConversationContext:{messages:context?.messages||[]}};
+ const reference=context?.referenceGenerationFollowup;
+ if(reference!==undefined&&reference!==null){
+  const invalid=()=>{throw new Error('Invalid reference-generation continuation context.');};
+  if(context?.generatedFollowup!==undefined&&context?.generatedFollowup!==null||!object(reference))invalid();
+  const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  for(const key of['projectId','workItemId','taskId','referenceId'])if(!uuid(reference[key]))invalid();
+  if(typeof reference.handoffSha256!=='string'||!/^[a-f0-9]{64}$/.test(reference.handoffSha256)||reference.requestId!==null&&!uuid(reference.requestId))invalid();
+  if(!['claim','proposal','proposed'].includes(reference.nextStep)||reference.advanceTool!=='studio_reference_generation_followup_advance'||reference.serverOwnsOperationIds!==true)invalid();
+  if((reference.nextStep==='proposed')!==(reference.requestId!==null))invalid();
+  for(const key of['contentInspected','canGenerate','canTransfer','canApprove'])if(reference[key]!==false)invalid();
+  const projected={projectId:reference.projectId,workItemId:reference.workItemId,taskId:reference.taskId,referenceId:reference.referenceId,handoffSha256:reference.handoffSha256,requestId:reference.requestId,nextStep:reference.nextStep,advanceTool:reference.advanceTool,serverOwnsOperationIds:reference.serverOwnsOperationIds,contentInspected:reference.contentInspected,canGenerate:reference.canGenerate,canTransfer:reference.canTransfer,canApprove:reference.canApprove};
+  encoded(projected,4096);return {...request,untrustedConversationContext:{messages:[]},referenceGenerationFollowup:projected};
+ }
  const value=context?.generatedFollowup;if(value===undefined||value===null)return request;
  const invalid=()=>{throw new Error('Invalid generated continuation context.');};
  if(!object(value))invalid();
@@ -102,6 +115,15 @@ export function modelRequestContext(run,context){
  // or surrounding conversation messages in a source-bound continuation prompt.
  encoded(projected,4096);
  return {...request,untrustedConversationContext:{messages:[]},generatedFollowup:projected};
+}
+
+// Keep the new server-owned continuation catalog identical on every adapter.
+// This is presentation only; current server scope and argument checks remain final.
+export const referenceGenerationToolNames=Object.freeze(['studio_reference_generation_followup_advance','studio_get','higgsfield_connection_get','higgsfield_reference_get','higgsfield_requests_list','studio_reference_generation_followups_get']);
+export function referenceGenerationToolAllowed(context,name){
+ if(context?.referenceGenerationFollowup===undefined||context?.referenceGenerationFollowup===null)return true;
+ modelRequestContext({id:'scope',prompt:''},context);
+ return referenceGenerationToolNames.includes(name);
 }
 
 // Native CLI adapters may request validation without an HTTP credential. This
@@ -245,7 +267,7 @@ export function createProviderExecutor({settings=process.env,fetch:transport=glo
   if(config.inferenceMode==='coatria_broker_v1'&&typeof inference?.complete!=='function')throw new Error('The explicit broker mode requires the trusted Coatria inference client; direct provider fallback is disabled.');
   const allowedCaps=new Set(Array.isArray(context.capabilities)?context.capabilities:[]);let catalog;try{catalog=await untilAborted(()=>tools.list({signal:active}),active);}catch{throw new Error('The Coatria tool catalog was unavailable or the run stopped.');}active.throwIfAborted();
   if(!Array.isArray(catalog?.tools)||catalog.tools.length>100)throw new Error('Invalid Coatria tool catalog.');
-  const definitions=catalog.tools.filter(tool=>object(tool)&&allowedCaps.has(tool.capability));const allowed=new Map();
+  const definitions=catalog.tools.filter(tool=>object(tool)&&allowedCaps.has(tool.capability)&&referenceGenerationToolAllowed(context,tool.name));const allowed=new Map();
   if(definitions.some(tool=>['storage_upload_reserve','storage_file_access'].includes(tool.name))&&tools.storageTransportVersion!=='1')throw new Error('Upgrade the trusted Coatria worker before using storage transfer tools.');
   for(const tool of definitions){if(!/^[-a-zA-Z0-9_]{1,80}$/.test(tool.name)||allowed.has(tool.name)||typeof tool.description!=='string'||!object(tool.inputSchema))throw new Error('Invalid Coatria tool definition.');encoded(tool.inputSchema,128*1024);allowed.set(tool.name,argumentValidator(tool.inputSchema));}
   const policy=bridgePolicy+characterInstructions(context.installation),prompt=encoded(modelRequestContext(run,context),300000);

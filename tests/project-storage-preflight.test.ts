@@ -23,7 +23,7 @@ test('gateway startup audits the shipped effective permissions without changing 
   await pg.exec(`CREATE ROLE ${role} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`);
   await pg.exec(await readFile('database/storage-gateway-permissions.sql','utf8'));
   await t.test('current contract passes, including exact limited source-classification columns, using SELECT only',async()=>{
-   const result=await asGateway(()=>assertProjectStorageGatewayDatabase(db));assert.equal(result.status,'passed');assert.equal(result.role,role);assert.equal(result.checkedMigrations,37);assert.equal(result.checkedMigrations,result.migrationFloor);assert(queries.length>0&&queries.every(sql=>sql.trim().startsWith('SELECT')));
+   const result=await asGateway(()=>assertProjectStorageGatewayDatabase(db));assert.equal(result.status,'passed');assert.equal(result.role,role);assert.equal(result.checkedMigrations,49);assert.equal(result.checkedMigrations,result.migrationFloor);assert(queries.length>0&&queries.every(sql=>sql.trim().startsWith('SELECT')));
   });
   await t.test('owner and SET ROLE impersonation are rejected',async()=>{
    await assert.rejects(()=>assertProjectStorageGatewayDatabase(db),{code:'STORAGE_DB_IDENTITY'});

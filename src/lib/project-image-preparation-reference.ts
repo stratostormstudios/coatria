@@ -6,6 +6,7 @@ import {getProjectImagePreparation} from './project-image-preparations';
 import {projectImagePreparationReferenceInput,type ProjectImagePreparationActor} from './project-image-preparations-protocol';
 import {projectImagePreparationProvenance} from './project-image-preparation-provenance';
 import {proposeHiggsfieldReference,currentHiggsfieldReferenceHandoff} from './higgsfield-references';
+import {prepareReferenceGenerationHandoff,recordReferenceGenerationHandoff} from './studio-reference-generation-handoffs';
 
 export async function proposeProjectImagePreparationReference(db:PoolClient,actor:ProjectImagePreparationActor,preparationId:string,input:unknown){
  const parsed=projectImagePreparationReferenceInput.safeParse(input);
@@ -19,6 +20,8 @@ export async function proposeProjectImagePreparationReference(db:PoolClient,acto
  if(p.status!=='ready'||p.revokedAt||!p.cleanupConfirmedAt||p.revision!==data.revision||!d||d.sourceVersionId!==p.source.versionId||d.sourceSha256!==p.source.sha256||d.sourceBytes!==p.source.bytes||d.recipeSha256!==p.recipeSha256)fail(409,'The exact prepared derivative is not ready. Refresh its saved state before creating a reference.','IMAGE_PREPARATION_NOT_READY');
  const proof=await projectImagePreparationProvenance(db,actor.companyId,p.projectId,d.outputVersionId);
  if(!proof||proof.id!==p.id||proof.receiptSha256!==d.receiptSha256||proof.sourceVersionId!==p.source.versionId)fail(409,'The stored preparation evidence changed.','IMAGE_PREPARATION_DERIVATION_CHANGED');
- const result=await proposeHiggsfieldReference(db,actor,{clientId:data.clientId,projectId:p.projectId,projectRevision:data.projectRevision,workItemId:data.workItemId,proxyVersionId:d.outputVersionId,proxySha256:d.outputSha256,proxyBytes:d.outputBytes,sourceVersionId:d.sourceVersionId,role:data.role,purpose:data.purpose});
+ const handoff=await prepareReferenceGenerationHandoff(db,actor,p.projectId,data.workItemId,p.id);
+ const result=await proposeHiggsfieldReference(db,actor,{clientId:data.clientId,projectId:p.projectId,projectRevision:data.projectRevision,workItemId:data.workItemId,proxyVersionId:d.outputVersionId,proxySha256:d.outputSha256,proxyBytes:d.outputBytes,sourceVersionId:d.sourceVersionId,role:data.role,purpose:data.purpose},handoff?{generationHandoffId:handoff.id}:undefined);
+ await recordReferenceGenerationHandoff(db,actor,handoff,result.reference.id);
  return {...result,reference:await currentHiggsfieldReferenceHandoff(db,actor,result.reference.id)};
 }

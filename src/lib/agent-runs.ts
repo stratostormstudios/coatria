@@ -2,6 +2,7 @@ import {managedAgentAuthoritySql,managedAgentAuthorityPrincipals} from './studio
 import {coordinationRunAuthority,originalImagePreparationRunAuthority} from './studio-coordination';
 import {planningReviewRunAuthority} from './studio-review-policy';
 import {generatedFollowupRunAuthority,generatedFollowupRunContext} from './studio-generated-followups';
+import {referenceGenerationFollowupRunAuthority,referenceGenerationFollowupRunContext,referenceGenerationFollowupCommitAuthority} from './studio-reference-generation-followups';
 import {createHmac,randomUUID} from 'node:crypto';
 import type {PoolClient} from 'pg';
 import {z} from 'zod';
@@ -48,6 +49,7 @@ async function lockedRun(client:PoolClient,identity:AgentRunIdentity,runId:strin
   // classification is sufficient to deny it; the restricted gateway must not
   // receive generated source evidence merely to authorize unrelated transfers.
   if((await client.query('SELECT child_run_id FROM studio_generated_followups WHERE company_id=$1 AND child_run_id=$2',[identity.company_id,runId])).rowCount)fail(403,'Generated continuations cannot transfer project files.','GENERATED_FOLLOWUP_SCOPE');
+  if((await client.query('SELECT child_run_id FROM studio_reference_generation_followups WHERE company_id=$1 AND child_run_id=$2',[identity.company_id,runId])).rowCount)fail(403,'Reference-generation continuations cannot transfer project files.','REFERENCE_GENERATION_FOLLOWUP_SCOPE');
  }else await assertGeneratedRunAuthority(client,identity.company_id,run);
  // Policy/source checks may wait for locks. A lease read before those waits is
  // not proof that this worker still has time to act when the checks finish.
@@ -65,6 +67,7 @@ function requireLease(run:Record<string,any>,leaseToken:string){
  if(run.status!=='running'||!run.lease_live||run.lease_token_hash!==hashToken(leaseToken))fail(409,'This worker no longer owns a live lease.','RUN_LEASE_LOST');
 }
 async function assertGeneratedRunAuthority(client:PoolClient,companyId:string,run:Record<string,any>){
+ if(!await referenceGenerationFollowupRunAuthority(client,companyId,run))fail(409,'This reference-generation continuation no longer has its exact project, policy or reference approval.','REFERENCE_GENERATION_FOLLOWUP_AUTHORITY_ENDED');
  if(!await generatedFollowupRunAuthority(client,companyId,run))fail(409,'This generated continuation no longer has its exact project, policy or source approval.','STUDIO_GENERATED_FOLLOWUP_AUTHORITY_ENDED');
 }
 /** The caller already holds this run's row lock; refresh time after later waits. */
@@ -76,6 +79,7 @@ async function refreshRunLease(client:PoolClient,companyId:string,run:Record<str
  * locks, while the enclosing transaction can still roll every effect back. */
 export async function assertRunToolCommitAuthority(client:PoolClient,identity:Pick<AgentRunIdentity,'company_id'>,run:Record<string,any>,leaseToken:string){
  await assertGeneratedRunAuthority(client,identity.company_id,run);
+ await referenceGenerationFollowupCommitAuthority(client,identity.company_id,run);
  await originalImagePreparationRunAuthority(client,identity.company_id,run.id);
  await refreshRunLease(client,identity.company_id,run);requireLease(run,leaseToken);
 }
@@ -149,6 +153,7 @@ export async function claimAgentRun(identity:AgentRunIdentity,input:unknown){
   if(run&&!await coordinationRunAuthority(client,identity.company_id,run)){await client.query("UPDATE agent_runs SET status='cancelled',finished_at=clock_timestamp(),error='Project coordination authority ended.' WHERE company_id=$1 AND id=$2",[identity.company_id,run.id]);run=undefined;}
   if(run&&!await planningReviewRunAuthority(client,identity.company_id,run)){await client.query("UPDATE agent_runs SET status='cancelled',finished_at=clock_timestamp(),error='Planning review authority ended.' WHERE company_id=$1 AND id=$2",[identity.company_id,run.id]);run=undefined;}
   if(run&&!await generatedFollowupRunAuthority(client,identity.company_id,run)){await client.query("UPDATE agent_runs SET status='cancelled',finished_at=clock_timestamp(),error='Generated continuation authority ended.' WHERE company_id=$1 AND id=$2",[identity.company_id,run.id]);run=undefined;}
+  if(run&&!await referenceGenerationFollowupRunAuthority(client,identity.company_id,run)){await client.query("UPDATE agent_runs SET status='cancelled',finished_at=clock_timestamp(),error='Reference-generation continuation authority ended.' WHERE company_id=$1 AND id=$2",[identity.company_id,run.id]);run=undefined;}
   if(!run){await client.query('INSERT INTO agent_run_claims(company_id,agent_id,claim_id,worker_id) VALUES($1,$2,$3,$4)',[identity.company_id,identity.id,data.claimId,data.workerId]);return{run:null,replayed:false};}
   const attempt=run.attempts+1,proof=leaseProof(identity,run.id,attempt,data.claimId);
   await client.query("UPDATE agent_runs SET status='running',attempts=$3,worker_id=$4,lease_token_hash=$5,lease_expires_at=clock_timestamp()+interval '60 seconds',started_at=COALESCE(started_at,clock_timestamp()),updated_at=clock_timestamp(),error='' WHERE company_id=$1 AND id=$2",[identity.company_id,run.id,attempt,data.workerId,hashToken(proof)]);
@@ -166,15 +171,15 @@ export async function heartbeatAgentRun(identity:AgentRunIdentity,runId:string,i
 export async function agentRunContext(identity:AgentRunIdentity,runId:string,leaseToken:string){
  parse(leaseInput,{leaseToken});return transaction(async client=>{
   const access=await authorizeRunTool(client,identity,runId,leaseToken);
-  const generatedFollowup=await generatedFollowupRunContext(client,identity.company_id,runId);
+  const generatedFollowup=await generatedFollowupRunContext(client,identity.company_id,runId),referenceGenerationFollowup=await referenceGenerationFollowupRunContext(client,identity.company_id,runId);
   // Source-bound work receives its exact evidence and server-owned steps. Nearby
   // conversation messages cannot expand this continuation's objective or scope.
   let messages:Record<string,any>[]=[];
-  if(generatedFollowup===null){
+  if(generatedFollowup===null&&referenceGenerationFollowup===null){
    await client.query('SELECT id FROM conversations WHERE company_id=$1 AND id=$2 FOR SHARE',[identity.company_id,access.run.conversation_id]);
    if(access.run.purpose!=='connection_test')messages=(await client.query(`SELECT m.id,m.body,m.parent_id AS "parentId",m.sequence::text AS sequence,m.deleted_at AS "deletedAt",m.actor_kind AS "actorKind",COALESCE(m.user_id,m.agent_id) AS "actorId",COALESCE(u.name,a.name,'Former teammate') AS "authorName" FROM messages m LEFT JOIN users u ON u.id=m.user_id LEFT JOIN agents a ON a.company_id=m.company_id AND a.id=m.agent_id WHERE m.company_id=$1 AND m.conversation_id=$2 AND (($3::uuid IS NULL AND m.parent_id IS NULL) OR m.id=$3 OR m.parent_id=$3) ORDER BY (m.id=$3) DESC NULLS LAST,m.sequence DESC LIMIT 30`,[identity.company_id,access.run.conversation_id,access.run.parent_id])).rows.sort((a,b)=>BigInt(a.sequence)<BigInt(b.sequence)?-1:1);
   }
-  const result={run:await project(client,identity.company_id,runId),messages,capabilities:access.capabilities,installation:await installedRuntimeContext(client,identity.company_id,identity.id),...generatedFollowup===null?{}:{generatedFollowup}};
+  const result={run:await project(client,identity.company_id,runId),messages,capabilities:access.capabilities,installation:await installedRuntimeContext(client,identity.company_id,identity.id),...generatedFollowup===null?{}:{generatedFollowup},...referenceGenerationFollowup===null?{}:{referenceGenerationFollowup}};
   await assertRunToolCommitAuthority(client,identity,access.run,leaseToken);return result;
  });
 }
@@ -187,7 +192,8 @@ export async function finishAgentRun(identity:AgentRunIdentity,runId:string,kind
   if(prior){if(prior.payload_hash!==digest||prior.kind!==kind)fail(409,'This completion key was used for another result.','IDEMPOTENCY_CONFLICT');if(prior.lease_token_hash!==hashToken(data.leaseToken))fail(409,'This receipt belongs to another lease.','RUN_LEASE_LOST');return{...prior.response,replayed:true};}
   requireLease(access.run,data.leaseToken);
   if(kind==='complete'&&'result'in data){
-   const continuation=await generatedFollowupRunContext(client,identity.company_id,runId);
+   const continuation=await generatedFollowupRunContext(client,identity.company_id,runId),referenceContinuation=await referenceGenerationFollowupRunContext(client,identity.company_id,runId);
+   if(referenceContinuation!==null&&referenceContinuation.nextStep!=='proposed')fail(409,'Commit the exact generation proposal before completing this continuation. Use fail to report blocked work.','REFERENCE_GENERATION_FOLLOWUP_INCOMPLETE');
    if(continuation!==null&&continuation.nextStep!=='submitted')fail(409,'Submit the pinned generated task before completing this continuation. Use fail to report a blocked or unsuccessful continuation.','GENERATED_FOLLOWUP_INCOMPLETE');
    const channel=(await client.query('SELECT room_id FROM conversations WHERE company_id=$1 AND id=$2',[identity.company_id,access.run.conversation_id])).rows[0];
    const result=await sendRunConversationMessage(client,{kind:'agent',companyId:identity.company_id,userId:identity.created_by,agentId:identity.id,tokenHash:identity.token_hash},channel.room_id||'commons',{clientId:randomUUID(),body:data.result.length>3800?data.result.slice(0,3800)+'\n\nOpen the agent request to read the full result.':data.result,parentId:access.run.parent_id});

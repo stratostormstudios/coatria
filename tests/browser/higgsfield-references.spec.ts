@@ -12,19 +12,20 @@ function fixture(){
  const reference:HiggsfieldReference={id:uuid(106),projectId:ids.project,workItemId:ids.work,projectRevision:7,taskRevision:1,role:'image',purpose:'Approved product shape',status:'awaiting_approval',revision:2,requestHash:'f'.repeat(64),proxy,source,storageConnectionId:ids.storage,storageConnectionRevision:1,bindingId:ids.binding,bindingRevision:1,providerConnectionId:uuid(107),providerConnectionRevision:1,inspection,proposedBy:ids.user,proposedAgentId:null,createdAt:date,approvedBy:null,approvedAt:null,expiresAt:null,approvalHash:null,revokedAt:null,diagnosticCode:null,providerConfirmed:false,originalUploaded:false,bytesSharedUnchanged:true,metadataRemoved:false};
  return {app,reference,references:[reference],enabled:true,preview:true,wrongHash:false,corruptBytes:false,reads:[] as URL[],writes:[] as {path:string;body:any}[],handler:undefined as ((route:Route,url:URL)=>Promise<boolean>)|undefined};
 }
+function processing(state:ReturnType<typeof fixture>){return {enabled:state.enabled,code:state.enabled?'READY':'WORKER_UNAVAILABLE',message:state.enabled?'A qualified reference worker is available.':'Reference processing is unavailable. No qualified worker is active.',expiresAt:new Date(Date.now()+600_000).toISOString(),qualificationSha256:'a'.repeat(64),catalogSha256:'b'.repeat(64)};}
 async function mock(page:Page,state:ReturnType<typeof fixture>){
- const processing=()=>({enabled:state.enabled,code:state.enabled?'READY':'WORKER_UNAVAILABLE',message:state.enabled?'A qualified reference worker is available.':'Reference processing is unavailable. No qualified worker is active.',expiresAt:new Date(Date.now()+600_000).toISOString(),qualificationSha256:'a'.repeat(64),catalogSha256:'b'.repeat(64)});
+ const availability=()=>processing(state);
  state.app.handler=async(route,url)=>{
   const path=url.pathname,method=route.request().method();state.reads.push(url);if(method!=='GET')state.writes.push({path,body:route.request().postDataJSON()});if(await state.handler?.(route,url))return true;let data:unknown;
   if(path==='/api/reference-fixture-preview'){expect(route.request().headers().authorization).toBe('Bearer synthetic_reference_access');await route.fulfill({body:state.corruptBytes?Buffer.from(png.map((value,index)=>index===png.length-1?value^1:value)):png,headers:{'Content-Type':'image/png','Content-Length':String(png.length)}});return true;}
   if(path.endsWith('/files'))data={binding:{id:ids.binding,projectId:ids.project,revision:1,connectionId:ids.storage,connection:{id:ids.storage,status:'configured',revision:1,name:'Fixture volume'}},items:[proxy,source].map(value=>({kind:'file',id:value.fileId,name:value.name,parentId:null,createdAt:date,latestVersion:{id:value.versionId,version:value.version,bytes:value.bytes,sha256:value.sha256,contentType:value.contentType,verified:true}})),breadcrumbs:[],page:{hasMore:false,nextAfter:null},transfers:state.preview?{available:true,gatewayOrigin:url.origin,maxFileBytes:10*1024**2,partBytes:1024}:{available:false,code:'STORAGE_GATEWAY_UNAVAILABLE',message:'No authenticated preview gateway is available.'}};
   else if(path.endsWith('/references/candidates')){const original=url.searchParams.get('fileId')===source.fileId;data={versions:original?[source]:url.searchParams.has('after')?[proxy,oldProxy]:[proxy],hasMore:!original&&!url.searchParams.has('after'),nextAfter:original||url.searchParams.has('after')?null:proxy.versionId};}
   else if(path.endsWith('/higgsfield/references')){
-   if(method==='POST'){const body=route.request().postDataJSON();state.reference={...state.reference,status:'proposed',revision:1,inspection:null,proxy:body.proxyVersionId===oldProxy.versionId?oldProxy:proxy,source:body.sourceVersionId?source:null,workItemId:body.workItemId,role:body.role,purpose:body.purpose};state.references=[state.reference];data={reference:state.reference,processing:processing()};}
-   else data={references:state.references,hasMore:false,nextAfter:null,processing:processing()};
-  }else if(path.endsWith('/references/'+state.reference.id))data={reference:state.reference,processing:processing()};
-  else if(path.endsWith('/references/'+state.reference.id+'/approve')){state.reference={...state.reference,status:'queued',revision:3,approvedBy:ids.user,approvedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+30*60_000).toISOString(),approvalHash:'a'.repeat(64)};state.references=[state.reference];data={reference:state.reference,processing:processing()};}
-  else if(path.endsWith('/references/'+state.reference.id+'/revoke')){state.reference={...state.reference,status:'revoked',revision:state.reference.revision+1,revokedAt:new Date().toISOString()};state.references=[state.reference];data={reference:state.reference,processing:processing()};}
+   if(method==='POST'){const body=route.request().postDataJSON();state.reference={...state.reference,status:'proposed',revision:1,inspection:null,proxy:body.proxyVersionId===oldProxy.versionId?oldProxy:proxy,source:body.sourceVersionId?source:null,workItemId:body.workItemId,role:body.role,purpose:body.purpose};state.references=[state.reference];data={reference:state.reference,processing:availability()};}
+   else data={references:state.references,hasMore:false,nextAfter:null,processing:availability()};
+  }else if(path.endsWith('/references/'+state.reference.id))data={reference:state.reference,processing:availability()};
+  else if(path.endsWith('/references/'+state.reference.id+'/approve')){state.reference={...state.reference,status:'queued',revision:3,approvedBy:ids.user,approvedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+30*60_000).toISOString(),approvalHash:'a'.repeat(64)};state.references=[state.reference];data={reference:state.reference,processing:availability()};}
+  else if(path.endsWith('/references/'+state.reference.id+'/revoke')){state.reference={...state.reference,status:'revoked',revision:state.reference.revision+1,revokedAt:new Date().toISOString()};state.references=[state.reference];data={reference:state.reference,processing:availability()};}
   else if(path.endsWith('/versions/'+proxy.versionId+'/access'))data={access:{url:url.origin+'/api/reference-fixture-preview',headers:{Authorization:'Bearer synthetic_reference_access'},expiresAt:new Date(Date.now()+60_000).toISOString(),bytes:png.length,sha256:state.wrongHash?'0'.repeat(64):sha256,contentType:'image/png',name:proxy.name}};
   else if(path.endsWith('/higgsfield/requests')&&method==='POST')data={request:{id:ids.request},replayed:false};
   else return false;
@@ -68,4 +69,113 @@ test('a revision bump blocks old sharing approval while confirmed selections req
  state.handler=async(route,url)=>{if(!url.pathname.endsWith('/higgsfield/requests')||route.request().method()!=='POST')return false;await route.fulfill({status:409,json:{error:'The project content changed after this reference was approved. Prepare a new reference.'}});return true;};
  await mock(page,state);const panel=await open(page);await page.getByLabel('Generation task',{exact:true}).selectOption(ids.work);await panel.getByRole('article',{name:'Reference '+proxy.name,exact:true}).getByRole('button',{name:'Review reference details'}).click();const review=panel.getByRole('region',{name:'Review reference sharing'});await expect(review).toContainText('project changed after this reference');await expect(review.getByRole('button',{name:'Approve exact reference sharing'})).toBeDisabled();for(const box of await review.getByRole('checkbox').all())await expect(box).toBeDisabled();
  await expect(panel).toContainText('Selection does not confirm compatibility');const selection=panel.getByRole('checkbox',{name:/Use old-approved/});await expect(selection).toBeEnabled();await selection.check();await page.getByLabel('Production purpose',{exact:true}).fill('Reuse accepted reference');await page.getByLabel('Exact tool arguments',{exact:true}).fill(JSON.stringify({params:{model:'fixture',prompt:'Reuse accepted reference'}}));await page.getByRole('button',{name:'Prepare request',exact:true}).click();await expect(page.getByRole('alert').filter({hasText:'project content changed'})).toBeVisible();expect(state.writes.find(value=>value.path.endsWith('/higgsfield/requests'))?.body.referenceIds).toEqual([confirmed.id]);expect(state.writes.filter(value=>value.path.endsWith('/approve')||value.path.endsWith('/execute'))).toHaveLength(0);
+});
+
+// Synthetic metadata fixtures exercise consent and request identity only. They do
+// not inspect media, grant a worker lease or make a provider request.
+function inspectionFixture(){
+ const state=fixture();
+ state.reference={...state.reference,status:'proposed',revision:1,inspection:null,proposedAgentId:uuid(120),referenceGenerationHandoff:{id:uuid(121),handoffSha256:'7'.repeat(64),inspectionAdoption:null}};
+ state.references=[state.reference];
+ return state;
+}
+function inspectionResponse(state:ReturnType<typeof fixture>,expiresInMinutes=30){
+ const handoff=state.reference.referenceGenerationHandoff!;
+ return {reference:{...state.reference,referenceGenerationHandoff:{...handoff,inspectionAdoption:{id:uuid(122),approvedBy:ids.user,approvedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+expiresInMinutes*60_000).toISOString(),approvalHash:'8'.repeat(64),maximumAttempts:1 as const}}},processing:processing(state)};
+}
+async function openInspection(page:Page){
+ const panel=await open(page);
+ await panel.getByRole('button',{name:'Review reference details'}).click();
+ const consent=panel.getByRole('region',{name:'Generation reference inspection consent',exact:true});
+ await expect(consent).toBeVisible();
+ return {panel,consent,authorize:consent.getByRole('button',{name:'Authorize one image inspection',exact:true}),checkbox:consent.getByRole('checkbox')};
+}
+const referenceWrites=(state:ReturnType<typeof fixture>)=>state.writes.filter(value=>value.path.includes('/higgsfield/')||value.path.endsWith('/access'));
+
+test('generation inspection adoption requires explicit finite consent and sends only one exact adoption request',async({page})=>{
+ const state=inspectionFixture();
+ state.handler=async(route,url)=>{
+  if(!url.pathname.endsWith('/adopt-generation-inspection'))return false;
+  const response=inspectionResponse(state,route.request().postDataJSON().expiresInMinutes);
+  state.reference=response.reference;state.references=[state.reference];
+  await route.fulfill({json:response});return true;
+ };
+ await mock(page,state);
+ const {panel,consent,authorize,checkbox}=await openInspection(page);
+ await expect(checkbox).toHaveCount(1);
+ await expect(checkbox).not.toBeChecked();await expect(authorize).toBeDisabled();
+ expect(referenceWrites(state)).toHaveLength(0);
+ await checkbox.check();await expect(authorize).toBeEnabled();
+ await consent.getByLabel('Generation reference inspection permission',{exact:true}).selectOption('10');
+ await expect(checkbox).not.toBeChecked();await expect(authorize).toBeDisabled();
+ await checkbox.check();await authorize.click();
+ await expect(consent).toContainText('Inspection permission recorded');
+ await expect(panel).toContainText('Sharing and generation still require their own approvals.');
+ await expect(authorize).toHaveCount(0);
+ await expect(panel.getByRole('button',{name:'Approve exact reference sharing'})).toHaveCount(0);
+ const writes=referenceWrites(state);expect(writes).toHaveLength(1);
+ expect(writes[0].path).toBe(`/api/companies/${ids.company}/higgsfield/references/${state.reference.id}/adopt-generation-inspection`);
+ expect(writes[0].body).toEqual({referenceRevision:1,requestHash:'f'.repeat(64),handoffSha256:'7'.repeat(64),expiresInMinutes:10,inspectionConsent:true,clientId:expect.stringMatching(/^[0-9a-f-]{36}$/)});
+ expect(state.reads.some(url=>url.pathname==='/api/reference-fixture-preview')).toBe(false);
+ expect(state.app.unexpected).toEqual([]);
+});
+
+test('generation inspection adoption retries an uncertain HTTP result with the same exact client ID',async({page})=>{
+ const state=inspectionFixture();let attempts=0;
+ const saved=inspectionResponse(state);
+ state.handler=async(route,url)=>{
+  if(!url.pathname.endsWith('/adopt-generation-inspection'))return false;
+  // Model a committed adoption whose HTTP response was lost. The second request
+  // returns that same receipt; it must not represent another inspection attempt.
+  if(++attempts===1){await route.fulfill({status:503,json:{error:'The inspection response was not confirmed. Retry the same request.'}});return true;}
+  await route.fulfill({json:saved});return true;
+ };
+ await mock(page,state);
+ const {panel,consent,authorize,checkbox}=await openInspection(page);
+ await expect(checkbox).toHaveCount(1);await checkbox.check();await authorize.click();
+ await expect(panel.getByRole('alert')).toContainText('response was not confirmed');
+ await expect(checkbox).not.toBeChecked();await expect(authorize).toBeDisabled();
+ await checkbox.check();await authorize.click();
+ await expect(consent).toContainText('Inspection permission recorded');
+ const writes=referenceWrites(state);expect(writes).toHaveLength(2);
+ expect(writes.every(value=>value.path.endsWith('/adopt-generation-inspection'))).toBe(true);
+ expect(writes[1].body).toEqual(writes[0].body);
+ expect(writes[0].body.clientId).toMatch(/^[0-9a-f-]{36}$/);
+ expect(state.app.unexpected).toEqual([]);
+});
+
+for(const changed of ['id','handoffSha256'] as const)test(`generation inspection adoption rejects a changed handoff ${changed} in the response`,async({page})=>{
+ const state=inspectionFixture();
+ state.handler=async(route,url)=>{
+  if(!url.pathname.endsWith('/adopt-generation-inspection'))return false;
+  const response=inspectionResponse(state);
+  response.reference.referenceGenerationHandoff[changed]=changed==='id'?uuid(123):'9'.repeat(64);
+  await route.fulfill({json:response});return true;
+ };
+ await mock(page,state);
+ const {panel,consent,authorize,checkbox}=await openInspection(page);
+ await expect(checkbox).toHaveCount(1);await checkbox.check();await authorize.click();
+ await expect(panel.getByRole('alert')).toContainText('does not match the reviewed handoff');
+ await expect(consent).not.toContainText('Inspection permission recorded');
+ await expect(checkbox).not.toBeChecked();await expect(authorize).toBeDisabled();
+ await expect(panel.getByRole('button',{name:'Approve exact reference sharing'})).toHaveCount(0);
+ expect(referenceWrites(state)).toHaveLength(1);
+ expect(referenceWrites(state)[0].path).toMatch(/\/adopt-generation-inspection$/);
+ expect(state.app.unexpected).toEqual([]);
+});
+
+for(const blocked of ['member','worker unavailable'] as const)test(`generation inspection adoption remains unavailable for ${blocked}`,async({page})=>{
+ const state=inspectionFixture();
+ if(blocked==='member')state.app.company.role='member';else state.enabled=false;
+ await mock(page,state);
+ const {panel,consent,authorize,checkbox}=await openInspection(page);
+ if(blocked==='member'){
+  await expect(consent).toContainText('A current administrator can authorize inspection');
+  await expect(authorize).toHaveCount(0);await expect(checkbox).toHaveCount(0);
+ }else{
+  await expect(panel).toContainText('No qualified worker is active');
+  await expect(checkbox).toHaveCount(1);await expect(checkbox).toBeDisabled();await expect(authorize).toBeDisabled();
+ }
+ expect(referenceWrites(state)).toHaveLength(0);
+ expect(state.app.unexpected).toEqual([]);
 });

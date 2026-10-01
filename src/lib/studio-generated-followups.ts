@@ -12,6 +12,7 @@ import {loadVerifiedGeneratedSource,loadStoredGeneratedArtifact,studioGeneratedS
 import {studioGeneratedObservedMediaInput,studioGeneratedFileFactsInput} from './studio-generated-protocol';
 import {studioCoordinationPolicyRow,studioCoordinationConfiguration,studioCoordinationStatus,requireStudioCoordinationApprovalLive} from './studio-coordination';
 import {studioGeneratedFollowupGetInput,studioGeneratedFollowupDispatchInput,studioGeneratedFollowupAdvanceInput,type StudioGeneratedFollowupStep} from './studio-generated-followup-protocol';
+import {referenceGenerationStepHash} from './studio-reference-generation-transition';
 
 type Row=Record<string,any>;
 const required=['studio.read','studio.write','tasks.write','creative.read','creative.write','storage.read'];
@@ -31,23 +32,59 @@ async function policyAuthority(db:PoolClient,companyId:string,receipt:Row){
  if(!p||!p.generatedContinuations||p.revision!==receipt.policy_revision||p.coordinatorAgentId!==receipt.coordinator_agent_id||p.approvedBy!==receipt.approved_by||(receipt.coordinator_agent_id===receipt.specialist_agent_id&&!p.coordinatorGeneration))changed();
  const active=await studioCoordinationStatus(db,companyId,p);if(!['active','exhausted'].includes(active.effectiveStatus))unavailable();return p;
 }
-async function taskEvidence(db:PoolClient,companyId:string,projectId:string,workItemId:string,followupRunId?:string){
- return (await db.query(`SELECT w.task_id,w.role_key,w.stage,w.execution,b.agent_id,b.human_id,t.status AS task_status,t.revision AS task_revision,t.agent_run_id,t.assignee_id,
+async function taskEvidence(db:PoolClient,companyId:string,projectId:string,workItemId:string,archiveId:string,followupRunId?:string){
+ // The archive keeps its actual producer. An ended reference-planning run is
+ // connected to a later producer only by its immutable, once-only continuation.
+ const work=(await db.query(`SELECT w.task_id,w.role_key,w.stage,w.execution,b.agent_id,b.human_id,t.status AS task_status,t.revision AS task_revision,t.agent_run_id,t.assignee_id,
  p.contract_version,p.status AS project_status,p.ai_policy,p.gates,p.revision AS project_revision,
- d.child_run_id AS source_child_run_id,d.specialist_agent_id,source.status AS source_status,
+ produced.run_id AS source_child_run_id,d.child_run_id AS initial_child_run_id,d.specialist_agent_id,source.status AS source_status,
  a.status AS agent_status,a.capabilities,a.expires_at>clock_timestamp() AND ${managedAgentAuthoritySql('a')} AS agent_live,
  EXISTS(SELECT 1 FROM studio_dependencies dep JOIN studio_work_items prior ON prior.company_id=dep.company_id AND prior.id=dep.predecessor_id JOIN tasks pt ON pt.company_id=prior.company_id AND pt.id=prior.task_id WHERE dep.company_id=w.company_id AND dep.work_item_id=w.id AND pt.status<>'done') AS dependencies_pending,
  EXISTS(SELECT 1 FROM studio_dispatches pending JOIN agent_runs r ON r.company_id=pending.company_id AND r.id=pending.run_id WHERE pending.company_id=w.company_id AND pending.work_item_id=w.id AND r.status IN ('queued','running') AND ($4::uuid IS NULL OR r.id<>$4)) AS other_active
  FROM studio_work_items w JOIN studio_projects p ON p.company_id=w.company_id AND p.id=w.project_id
  JOIN studio_role_bindings b ON b.company_id=w.company_id AND b.role_key=w.role_key JOIN tasks t ON t.company_id=w.company_id AND t.id=w.task_id
  JOIN studio_coordination_dispatches d ON d.company_id=w.company_id AND d.project_id=w.project_id AND d.work_item_id=w.id
- JOIN agent_runs source ON source.company_id=d.company_id AND source.id=d.child_run_id JOIN agents a ON a.company_id=d.company_id AND a.id=d.specialist_agent_id
- WHERE w.company_id=$1 AND w.project_id=$2 AND w.id=$3`,[companyId,projectId,workItemId,followupRunId??null])).rows[0] as Row|undefined;
+ JOIN higgsfield_output_archives archive ON archive.company_id=w.company_id AND archive.project_id=w.project_id AND archive.id=$5
+ JOIN higgsfield_requests produced ON produced.company_id=archive.company_id AND produced.project_id=archive.project_id AND produced.id=archive.request_id AND produced.work_item_id=w.id
+ JOIN agent_runs source ON source.company_id=d.company_id AND source.id=produced.run_id JOIN agents a ON a.company_id=d.company_id AND a.id=d.specialist_agent_id
+ WHERE w.company_id=$1 AND w.project_id=$2 AND w.id=$3 AND source.agent_id=d.specialist_agent_id
+ AND (produced.run_id=d.child_run_id OR EXISTS(
+  SELECT 1 FROM studio_reference_generation_followups continued
+  JOIN studio_reference_generation_handoffs handoff ON handoff.company_id=continued.company_id AND handoff.project_id=continued.project_id AND handoff.id=continued.handoff_id AND handoff.reference_id=continued.reference_id
+  JOIN studio_reference_generation_followup_steps claim_step ON claim_step.company_id=continued.company_id AND claim_step.project_id=continued.project_id AND claim_step.child_run_id=continued.child_run_id AND claim_step.step='claim' AND claim_step.request_id=continued.claim_request_id
+  JOIN studio_reference_generation_followup_steps proposal_step ON proposal_step.company_id=continued.company_id AND proposal_step.project_id=continued.project_id AND proposal_step.child_run_id=continued.child_run_id AND proposal_step.step='proposal' AND proposal_step.request_id=continued.proposal_request_id
+  WHERE continued.company_id=w.company_id AND continued.project_id=w.project_id AND continued.work_item_id=w.id
+   AND continued.task_id=w.task_id AND continued.child_run_id=produced.run_id AND continued.source_child_run_id=d.child_run_id
+   AND continued.specialist_agent_id=d.specialist_agent_id AND continued.coordinator_agent_id=d.coordinator_agent_id
+   AND handoff.source_child_run_id=d.child_run_id AND handoff.initial_parent_run_id=d.parent_run_id
+   AND handoff.work_item_id=w.id AND handoff.task_id=w.task_id AND handoff.specialist_agent_id=d.specialist_agent_id
+   AND produced.client_id=continued.proposal_request_id AND produced.reference_ids=ARRAY[continued.reference_id]
+   AND produced.agent_id=continued.specialist_agent_id AND produced.requested_by=continued.approved_by
+   AND produced.task_revision=continued.initial_task_revision+1
+   AND source.max_attempts=1 AND source.attempts=1
+   AND produced.reference_snapshot->>'companyId'=w.company_id::text AND produced.reference_snapshot->>'projectId'=w.project_id::text AND produced.reference_snapshot->>'workItemId'=w.id::text
+   AND jsonb_array_length(CASE WHEN jsonb_typeof(produced.reference_snapshot->'references')='array' THEN produced.reference_snapshot->'references' ELSE '[]'::jsonb END)=1
+   AND produced.reference_snapshot#>>'{references,0,referenceId}'=continued.reference_id::text
+   AND produced.reference_snapshot#>>'{references,0,approvalHash}'=continued.reference_approval_hash
+   AND produced.reference_snapshot#>>'{references,0,mediaId}'=continued.media_id::text
+   AND produced.reference_snapshot#>>'{references,0,requestHash}'=handoff.reference_request_hash
+   AND produced.reference_snapshot#>>'{references,0,proxyVersionId}'=handoff.output_version_id::text
+   AND produced.reference_snapshot#>>'{references,0,sha256}'=handoff.output_sha256
+ ))`,[companyId,projectId,workItemId,followupRunId??null,archiveId])).rows[0] as Row|undefined;
+ if(work&&work.source_child_run_id!==work.initial_child_run_id){
+  const continued=(await db.query(`SELECT f.child_run_id,f.claim_request_id,f.initial_task_revision,r.request_hash,r.response
+   FROM studio_reference_generation_followups f JOIN studio_requests r ON r.company_id=f.company_id AND r.actor_key='agent:'||f.specialist_agent_id::text AND r.client_id=f.claim_request_id
+   WHERE f.company_id=$1 AND f.project_id=$2 AND f.work_item_id=$3 AND f.child_run_id=$4`,[companyId,projectId,workItemId,work.source_child_run_id])).rows[0];
+  const task=continued?.response?.task;
+  if(!continued||continued.request_hash!==referenceGenerationStepHash({...continued,project_id:projectId,work_item_id:workItemId},'claim')
+   ||task?.id!==work.task_id||task.agentRunId!==work.source_child_run_id||task.status!=='doing'||task.assigneeId!==null||task.revision!==continued.initial_task_revision+1)changed();
+ }
+ return work;
 }
 /** Current evidence uses the verified source reader; it never fetches provider
  * bytes. Lifecycle callers take no project write lock across conversation work. */
 async function evidence(db:PoolClient,companyId:string,projectId:string,workItemId:string,archiveId:string,receipt?:Row){
- const work=await taskEvidence(db,companyId,projectId,workItemId,receipt?.child_run_id);
+ const work=await taskEvidence(db,companyId,projectId,workItemId,archiveId,receipt?.child_run_id);
  if(!work||work.contract_version!==2||work.stage!=='generation'||work.execution!=='creative'||work.project_status==='delivered'||work.ai_policy!=='allowed'||work.dependencies_pending||work.other_active||work.assignee_id||work.human_id||work.agent_id!==work.specialist_agent_id||!['succeeded','failed','cancelled'].includes(work.source_status)||work.agent_status!=='active'||!work.agent_live||required.some(cap=>!work.capabilities.includes(cap))||['brief','estimate','production'].some(gate=>work.gates[gate]?.decision!=='approved'))unavailable();
  const source=await loadVerifiedGeneratedSource(db,companyId,projectId,workItemId,archiveId,{requireAvailable:true});
  if(source.sourceSnapshot.agentId!==work.specialist_agent_id||source.sourceSnapshot.runId!==work.source_child_run_id||source.sourceSnapshot.roleAgentId!==work.specialist_agent_id||source.sourceSnapshot.roleHumanId!==null)changed();
@@ -122,7 +159,7 @@ export async function studioGeneratedFollowupSnapshot(db:PoolClient,companyId:st
 }
 export async function dispatchStudioGeneratedFollowup(db:PoolClient,agent:Row,run:Row,input:unknown){
  const data=studioGeneratedFollowupDispatchInput.parse(input),companyId=agent.company_id;
- if((await db.query('SELECT child_run_id FROM studio_coordination_dispatches WHERE company_id=$1 AND child_run_id=$2 UNION ALL SELECT child_run_id FROM studio_coordination_followups WHERE company_id=$1 AND child_run_id=$2 UNION ALL SELECT child_run_id FROM studio_generated_followups WHERE company_id=$1 AND child_run_id=$2 UNION ALL SELECT reviewer_run_id FROM studio_planning_reviews WHERE company_id=$1 AND reviewer_run_id=$2',[companyId,run.id])).rowCount)fail(403,'A delegated specialist cannot start another run.','COORDINATION_NESTED_DISPATCH');
+ if((await db.query('SELECT child_run_id FROM studio_coordination_dispatches WHERE company_id=$1 AND child_run_id=$2 UNION ALL SELECT child_run_id FROM studio_coordination_followups WHERE company_id=$1 AND child_run_id=$2 UNION ALL SELECT child_run_id FROM studio_generated_followups WHERE company_id=$1 AND child_run_id=$2 UNION ALL SELECT child_run_id FROM studio_reference_generation_followups WHERE company_id=$1 AND child_run_id=$2 UNION ALL SELECT reviewer_run_id FROM studio_planning_reviews WHERE company_id=$1 AND reviewer_run_id=$2',[companyId,run.id])).rowCount)fail(403,'A delegated specialist cannot start another run.','COORDINATION_NESTED_DISPATCH');
  const preview=await studioCoordinationPolicyRow(db,companyId,data.projectId);if(!preview||preview.coordinatorAgentId!==agent.id)fail(403,'Only the approved coordinator may resume this generation.','COORDINATION_AGENT_REQUIRED');
  await db.query('SELECT user_id FROM memberships WHERE company_id=$1 AND user_id=$2 FOR SHARE',[companyId,preview.approvedBy]);await studioCoordinationConfiguration(db,companyId,preview.coordinatorAgentId,preview.allowedRoleKeys,true);
  await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`studio-coordination:${companyId}:${data.projectId}`]);const policy=await studioCoordinationPolicyRow(db,companyId,data.projectId,'update');
@@ -132,8 +169,8 @@ export async function dispatchStudioGeneratedFollowup(db:PoolClient,agent:Row,ru
  const existing=(await db.query('SELECT f.*,r.status FROM studio_generated_followups f JOIN agent_runs r ON r.company_id=f.company_id AND r.id=f.child_run_id WHERE f.company_id=$1 AND f.project_id=$2 AND f.work_item_id=$3',[companyId,data.projectId,data.workItemId])).rows[0];
  if(existing){if(existing.archive_id!==data.archiveId||existing.policy_revision!==policy.revision)changed();await policyAuthority(db,companyId,existing);await evidence(db,companyId,data.projectId,data.workItemId,data.archiveId,existing);await deadline(db,companyId,run,policy.expiresAt);return {continuation:publicReceipt(existing),replayed:true};}
  if(policy.runsStarted>=policy.maxRuns)fail(409,'The approved lifetime specialist run limit is exhausted.','COORDINATION_RUN_BUDGET');
- const count=Number((await db.query("SELECT count(*) FROM (SELECT company_id,project_id,child_run_id FROM studio_coordination_dispatches UNION ALL SELECT company_id,project_id,child_run_id FROM studio_coordination_followups UNION ALL SELECT company_id,project_id,child_run_id FROM studio_generated_followups) d JOIN agent_runs r ON r.company_id=d.company_id AND r.id=d.child_run_id WHERE d.company_id=$1 AND d.project_id=$2 AND r.status IN ('queued','running')",[companyId,data.projectId])).rows[0].count);if(count>=policy.maxConcurrentRuns)fail(409,'The approved specialist concurrency limit is reached.','COORDINATION_CONCURRENCY');
- const work=await taskEvidence(db,companyId,data.projectId,data.workItemId);if(!work||!policy.allowedRoleKeys.includes(work.role_key)||(work.specialist_agent_id===agent.id&&!policy.coordinatorGeneration))unavailable();
+ const count=Number((await db.query("SELECT count(*) FROM (SELECT company_id,project_id,child_run_id FROM studio_coordination_dispatches UNION ALL SELECT company_id,project_id,child_run_id FROM studio_coordination_followups UNION ALL SELECT company_id,project_id,child_run_id FROM studio_generated_followups UNION ALL SELECT company_id,project_id,child_run_id FROM studio_reference_generation_followups) d JOIN agent_runs r ON r.company_id=d.company_id AND r.id=d.child_run_id WHERE d.company_id=$1 AND d.project_id=$2 AND r.status IN ('queued','running')",[companyId,data.projectId])).rows[0].count);if(count>=policy.maxConcurrentRuns)fail(409,'The approved specialist concurrency limit is reached.','COORDINATION_CONCURRENCY');
+ const work=await taskEvidence(db,companyId,data.projectId,data.workItemId,data.archiveId);if(!work||!policy.allowedRoleKeys.includes(work.role_key)||(work.specialist_agent_id===agent.id&&!policy.coordinatorGeneration))unavailable();
  const user=(await db.query('SELECT id,name,email FROM users WHERE id=$1',[policy.approvedBy])).rows[0],member={companyId,userId:policy.approvedBy,role:'admin',user} as Membership;
  const prompt=`Continue as the assigned ${work.role_key} specialist for project ${data.projectId}, work ${data.workItemId}, task ${work.task_id}. This run resumes only a verified archived output; it is not a new generation. Read your generatedFollowup run context and studio_get with contractVersion:2, projectId and this workItemId. Read the exact source metadata if needed. Use studio_generated_followup_advance with this projectId/workItemId and nextStep in order: claim, register if required, submit. Coatria supplies canonical operation IDs, current guarded revisions and fixed source metadata; your harness transport IDs may differ. Reuse a pinned existing artifact when registration is skipped. Never generate, transfer files, request download tickets, create or edit tasks, delegate, approve, or claim you inspected pixels. After actual task submission, report the committed artifact/task IDs and stop for independent human review. If authority or source checks fail, stop for reconciliation; do not request another run.`;
  const queued=await createAgentRunInTransaction(db,member,'commons',{clientId:randomUUID(),agentId:work.specialist_agent_id,prompt});

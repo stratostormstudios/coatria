@@ -18,6 +18,7 @@ import {studioHostingRoute} from './studio-hosting';
 import {studioMediaRoute} from './studio-media';
 import {studioCoordinationRoute} from './studio-coordination';
 import {studioGeneratedFollowupRoute} from './studio-generated-followups';
+import {studioReferenceGenerationFollowupRoute} from './studio-reference-generation-followups';
 import {studioGeneratedRevisionRoute} from './studio-generated-revisions';
 import {studioReviewPolicyRoute} from './studio-review-policy';
 import {studioClientDeliveryRoute} from './studio-client-delivery';
@@ -65,7 +66,7 @@ export async function handleApi(request: Request, parts: string[]): Promise<Resp
     if(!['GET','HEAD'].includes(method)&&!bearerEndpoint&&!['auth'].includes(parts[0])) {
       const user=await currentUser(request);if(user)await rateLimit(`write:${user.id}`,240,60);
     }
-    for(const handler of [identityRoute,companyRuntimeRoute,companyRuntimeExecutorRoute,projectGatewayRoute,storageRoute,referenceServiceAdminRoute,projectImagePreparationRoute,higgsfieldReferenceRoute,higgsfieldArchiveRoute,higgsfieldRoute,studioCreativeAssetsRoute,pluginMarketplaceRoute,agentMissionRoute,studioInferenceRoute,agentRunRoute,agentToolsRoute,agentProposalRoute,studioMediaRoute,studioExecutionRoute,studioStaffingRoute,studioHostingRoute,studioHostProvisioningRoute,trustedServiceRoute,studioCoordinationRoute,studioGeneratedFollowupRoute,studioGeneratedRevisionRoute,studioReviewPolicyRoute,studioClientDeliveryRoute,studioRoute,conversationRoute,companyRoute,workRoute,integrationRoute,talentRoute]) {
+    for(const handler of [identityRoute,companyRuntimeRoute,companyRuntimeExecutorRoute,projectGatewayRoute,storageRoute,referenceServiceAdminRoute,projectImagePreparationRoute,higgsfieldReferenceRoute,higgsfieldArchiveRoute,higgsfieldRoute,studioCreativeAssetsRoute,pluginMarketplaceRoute,agentMissionRoute,studioInferenceRoute,agentRunRoute,agentToolsRoute,agentProposalRoute,studioMediaRoute,studioExecutionRoute,studioStaffingRoute,studioHostingRoute,studioHostProvisioningRoute,trustedServiceRoute,studioCoordinationRoute,studioGeneratedFollowupRoute,studioReferenceGenerationFollowupRoute,studioGeneratedRevisionRoute,studioReviewPolicyRoute,studioClientDeliveryRoute,studioRoute,conversationRoute,companyRoute,workRoute,integrationRoute,talentRoute]) {
       const result=await handler(request,parts,method);if(result)return finish(result);
     }
     fail(404,'API endpoint not found.');

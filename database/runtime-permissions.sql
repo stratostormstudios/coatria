@@ -28,6 +28,8 @@ GRANT SELECT,INSERT ON studio_media_files,studio_media_verifications,studio_medi
 GRANT SELECT,INSERT ON studio_deliveries TO coatria_runtime_v1;
 GRANT SELECT,INSERT,UPDATE ON studio_coordination_policies TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON studio_coordination_dispatches,studio_coordination_followups,studio_generated_followups,studio_generated_followup_steps TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON studio_reference_generation_handoffs,studio_reference_generation_inspection_adoptions,studio_reference_generation_followups,studio_reference_generation_followup_steps TO coatria_runtime_v1;
+GRANT SELECT ON studio_reference_generation_adoption_facts TO coatria_runtime_v1;
 GRANT SELECT,INSERT,UPDATE ON studio_review_policies,studio_host_provisions TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON studio_planning_reviews,studio_planning_review_reads,studio_planning_review_decisions,studio_host_compute_reservations,studio_host_provision_requests TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON trusted_service_provisions TO coatria_runtime_v1;
@@ -77,6 +79,7 @@ GRANT SELECT,INSERT ON studio_reference_preparation_dispatches TO coatria_runtim
 GRANT SELECT,INSERT ON higgsfield_model_contracts TO coatria_runtime_v1;
 GRANT UPDATE(connection_id,connection_revision,catalog_sha256,descriptor,descriptor_sha256,observed_at,expires_at) ON higgsfield_model_contracts TO coatria_runtime_v1;
 GRANT UPDATE(status,revision,approved_by,approved_at,expires_at,approval_hash,qualification_sha256,revoked_by,revoked_at,lease_id,lease_expires_at,action_id,action_operation,diagnostic_code,updated_at) ON higgsfield_references TO coatria_runtime_v1;
+GRANT UPDATE(generation_inspection_adoption_id) ON higgsfield_references TO coatria_runtime_v1;
 -- Image preparation is a web control-plane proposal, finite human approval or
 -- revocation. Existing web storage grants do not confer processor authority.
 GRANT SELECT ON project_image_preparations,project_image_preparation_approvals,project_image_preparation_requests,project_image_preparation_receipts,project_image_preparation_allocations,project_image_preparation_derivations,studio_image_preparation_dispatches TO coatria_runtime_v1;

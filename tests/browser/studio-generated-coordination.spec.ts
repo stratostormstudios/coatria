@@ -3,15 +3,15 @@ import {studioCoordinationInput,type StudioCoordinationPolicy,type StudioCoordin
 import {generatedFixture,mockGenerated,openGenerated,noOverflow,ids,uuid,date} from './studio-generated-fixture';
 
 test.beforeEach(({baseURL})=>{test.skip(!baseURL||!['localhost','127.0.0.1'].includes(new URL(baseURL).hostname),'Synthetic fixtures require a local origin.');});
-const coordinator=uuid(70),specialist=uuid(71),option='Allow verified generated output continuations',generationOption='Let the coordinator also handle generation';
+const coordinator=uuid(70),specialist=uuid(71),option='Allow verified generated output continuations',generationOption='Let the coordinator also handle generation',referenceGenerationOption='Allow generation continuation after reference sharing';
 const review=(page:Page)=>page.getByRole('checkbox',{name:/^I reviewed the coordinator/});
 const policyWrites=(fixture:ReturnType<typeof coordinationFixture>)=>fixture.state.writes.filter(write=>write.path.endsWith('/coordination'));
-function coordinationFixture({enabled,generation,singleAgent=false,legacy=false,policy=true,reference=false,referenceCapabilities}:{enabled?:boolean;generation?:boolean;singleAgent?:boolean;legacy?:boolean;policy?:boolean;reference?:boolean;referenceCapabilities?:string[]}={}){
+function coordinationFixture({enabled,generation,referenceGeneration,singleAgent=false,legacy=false,policy=true,reference=false,referenceCapabilities}:{enabled?:boolean;generation?:boolean;referenceGeneration?:boolean;singleAgent?:boolean;legacy?:boolean;policy?:boolean;reference?:boolean;referenceCapabilities?:string[]}={}){
  const state=generatedFixture();
  for(const role of state.detail.roles){if(role.key==='producer'){role.agentId=coordinator;role.humanId=null;role.agentName='Production coordinator';}if(role.key==='comp'){role.agentId=singleAgent?coordinator:specialist;role.humanId=null;role.agentName=singleAgent?'Production coordinator':'Generation specialist';}}
  if(reference){state.detail.workItems[0].stage='references';state.detail.workItems[0].execution='agent';}
  state.detail.workItems[0].agentId=singleAgent?coordinator:specialist;state.detail.workItems[0].humanId=null;
- const initial:StudioCoordinationPolicy={projectId:legacy?state.legacy.id:ids.project,coordinatorAgentId:coordinator,allowedRoleKeys:['comp'],status:'active',effectiveStatus:'active',blocker:null,revision:4,maxRuns:5,runsStarted:2,remainingRuns:3,maxConcurrentRuns:1,approvedBy:ids.user,expiresAt:'2027-01-01T00:00:00.000Z',updatedAt:date,profileRevision:1,...enabled!==undefined?{generatedContinuations:enabled}:{},...generation!==undefined?{coordinatorGeneration:generation}:{}};
+ const initial:StudioCoordinationPolicy={projectId:legacy?state.legacy.id:ids.project,coordinatorAgentId:coordinator,allowedRoleKeys:['comp'],status:'active',effectiveStatus:'active',blocker:null,revision:4,maxRuns:5,runsStarted:2,remainingRuns:3,maxConcurrentRuns:1,approvedBy:ids.user,expiresAt:'2027-01-01T00:00:00.000Z',updatedAt:date,profileRevision:1,...enabled!==undefined?{generatedContinuations:enabled}:{},...generation!==undefined?{coordinatorGeneration:generation}:{},...referenceGeneration!==undefined?{referenceGenerationContinuations:referenceGeneration}:{}};
  const snapshot:StudioCoordinationSnapshot={policy:policy?initial:null,dispatches:[],budgetUnit:'specialist_runs',budgetScope:'coordinator_dispatched_runs_only',startsWorkers:false,startsInference:false};
  let failNext=false,commitBeforeFailure=false;
  state.handler=async(route,url)=>{
@@ -70,6 +70,25 @@ test('loaded false is preserved and changing a true opt-in back to false is expl
  expect(policyWrites(fixture)[2].body.generatedContinuations).toBe(false);expect(fixture.state.unexpected).toEqual([]);
 });
 
+test('reference generation continuation starts off, needs renewed review and preserves exact retry and pause',async({page})=>{
+ const fixture=coordinationFixture({policy:false});await openCoordination(page,fixture);await expect(page.getByText(/Generation after reference sharing:/)).toContainText('Off');
+ await page.getByRole('button',{name:'Set delegation policy',exact:true}).click();const toggle=page.getByRole('checkbox',{name:referenceGenerationOption,exact:true}),save=page.getByRole('button',{name:'Save reviewed policy',exact:true});await expect(toggle).not.toBeChecked();
+ await page.getByRole('checkbox',{name:/Generation specialist/}).check();await page.getByLabel('Policy state',{exact:true}).selectOption('active');await review(page).check();await toggle.check();await expect(review(page)).not.toBeChecked();await expect(save).toBeDisabled();
+ await expect(page.getByRole('dialog')).toContainText('separately inspected and shared');await expect(page.getByRole('dialog')).toContainText('same finite specialist run and concurrency limits');await expect(page.getByRole('dialog')).toContainText('Saving this policy starts no inference and makes no provider call');
+ await page.setViewportSize({width:390,height:844});await noOverflow(page);await review(page).check();fixture.failOnce(true);await save.click();await expect(page.getByRole('dialog').getByRole('alert')).toContainText('Synthetic lost acknowledgement');
+ await page.getByRole('button',{name:'Refresh coordination',exact:true}).click({force:true});await expect(page.getByText(/Generation after reference sharing:/)).toContainText('Opted in');await save.click();await expect(page.getByRole('dialog')).toHaveCount(0);
+ const writes=policyWrites(fixture);expect(writes).toHaveLength(2);expect(writes[1].body).toEqual(writes[0].body);expect(writes[0].body).toMatchObject({revision:0,referenceGenerationContinuations:true,maxRuns:5,maxConcurrentRuns:1});expect(writes[0].body).not.toHaveProperty('generatedContinuations');expect(writes[0].body).not.toHaveProperty('coordinatorGeneration');
+ await page.getByRole('button',{name:'Review policy',exact:true}).click();await expect(toggle).toBeChecked();await review(page).check();await save.click();await expect(page.getByRole('dialog')).toHaveCount(0);
+ await page.getByRole('button',{name:'Pause delegation',exact:true}).click();await expect(page.getByRole('button',{name:'Pause delegation',exact:true})).toHaveCount(0);expect(policyWrites(fixture)[2].body.referenceGenerationContinuations).toBe(true);expect(policyWrites(fixture)[3].body).toMatchObject({referenceGenerationContinuations:true,status:'paused',maxRuns:5,maxConcurrentRuns:1});expect(policyWrites(fixture)).toHaveLength(4);expect(fixture.state.writes.filter(write=>!write.path.endsWith('/presence'))).toEqual(policyWrites(fixture));expect(fixture.state.unexpected).toEqual([]);
+});
+
+for(const initial of [undefined,false])test(`reference generation continuation preserves ${initial===undefined?'omission':'explicit false'} and can be explicitly disabled`,async({page})=>{
+ const fixture=coordinationFixture({referenceGeneration:initial});await openCoordination(page,fixture);await page.getByRole('button',{name:'Review policy',exact:true}).click();const toggle=page.getByRole('checkbox',{name:referenceGenerationOption,exact:true}),save=page.getByRole('button',{name:'Save reviewed policy',exact:true});await expect(toggle).not.toBeChecked();await review(page).check();await save.click();await expect(page.getByRole('dialog')).toHaveCount(0);
+ if(initial===undefined)expect(policyWrites(fixture)[0].body).not.toHaveProperty('referenceGenerationContinuations');else expect(policyWrites(fixture)[0].body.referenceGenerationContinuations).toBe(false);
+ await page.getByRole('button',{name:'Review policy',exact:true}).click();await toggle.check();await review(page).check();await save.click();await expect(page.getByRole('dialog')).toHaveCount(0);
+ await page.getByRole('button',{name:'Review policy',exact:true}).click();await expect(toggle).toBeChecked();await toggle.uncheck();await expect(review(page)).not.toBeChecked();await review(page).check();await save.click();await expect(page.getByRole('dialog')).toHaveCount(0);expect(policyWrites(fixture)[2].body).toMatchObject({referenceGenerationContinuations:false,allowedRoleKeys:['comp'],maxRuns:5,maxConcurrentRuns:1});expect(fixture.state.unexpected).toEqual([]);
+});
+
 test('a background policy refresh keeps the exact reviewed revision and request identity after a lost acknowledgement',async({page})=>{
  await page.clock.install();const fixture=coordinationFixture({enabled:false});await openCoordination(page,fixture);
  await page.getByRole('button',{name:'Review policy',exact:true}).click();await page.getByRole('checkbox',{name:option,exact:true}).check();await review(page).check();fixture.failOnce(true);
@@ -83,8 +102,8 @@ test('a background policy refresh keeps the exact reviewed revision and request 
 
 test('legacy policy saves and pauses keep the original omitted-field contract',async({page})=>{
  const fixture=coordinationFixture({legacy:true});await openCoordination(page,fixture,true);
- await expect(page.getByText(/Verified generated output continuations:|Coordinator-owned generation:/)).toHaveCount(0);
- await page.getByRole('button',{name:'Review policy',exact:true}).click();await expect(page.getByRole('checkbox',{name:option,exact:true})).toHaveCount(0);await expect(page.getByRole('checkbox',{name:generationOption,exact:true})).toHaveCount(0);
+ await expect(page.getByText(/Verified generated output continuations:|Coordinator-owned generation:|Generation after reference sharing:/)).toHaveCount(0);
+ await page.getByRole('button',{name:'Review policy',exact:true}).click();await expect(page.getByRole('checkbox',{name:option,exact:true})).toHaveCount(0);await expect(page.getByRole('checkbox',{name:generationOption,exact:true})).toHaveCount(0);await expect(page.getByRole('checkbox',{name:referenceGenerationOption,exact:true})).toHaveCount(0);
  await review(page).check();await page.getByRole('button',{name:'Save reviewed policy',exact:true}).click();await expect(page.getByRole('dialog')).toHaveCount(0);
  await page.getByRole('button',{name:'Pause delegation',exact:true}).click();await expect(page.getByRole('button',{name:'Pause delegation',exact:true})).toHaveCount(0);
  for(const write of policyWrites(fixture)){expect(write.body).not.toHaveProperty('generatedContinuations');expect(Object.keys(write.body).sort()).toEqual(['allowedRoleKeys','clientId','coordinatorAgentId','expiresAt','maxConcurrentRuns','maxRuns','revision','status'].sort());}
@@ -92,10 +111,10 @@ test('legacy policy saves and pauses keep the original omitted-field contract',a
 });
 
 test('read-only members see generated continuation source history without policy controls',async({page})=>{
- const fixture=coordinationFixture({enabled:true,generation:true,singleAgent:true});fixture.state.company.role='member';
+ const fixture=coordinationFixture({enabled:true,generation:true,referenceGeneration:true,singleAgent:true});fixture.state.company.role='member';
  fixture.snapshot.dispatches=[{workItemId:ids.work,parentRunId:uuid(80),childRunId:uuid(81),coordinatorAgentId:coordinator,specialistAgentId:coordinator,policyRevision:4,createdAt:date,status:'queued',archiveId:ids.archive,sourceChildRunId:uuid(82),artifactId:ids.artifact},{workItemId:ids.work,parentRunId:uuid(83),childRunId:uuid(82),coordinatorAgentId:coordinator,specialistAgentId:specialist,policyRevision:3,createdAt:date,status:'failed'}];
  await openCoordination(page,fixture);await expect(page.getByRole('button',{name:/Review policy|Set delegation policy|Pause delegation/})).toHaveCount(0);
- await expect(page.getByText('Verified generated output continuation',{exact:true})).toHaveCount(1);
+ await expect(page.getByText('Verified generated output continuation',{exact:true})).toHaveCount(1);await expect(page.getByText(/Generation after reference sharing:/)).toContainText('Opted in');
  await expect(page.getByText(/Coordinator-owned generation:/)).toContainText('Opted in');await expect(page.getByText('Coordinator-owned continuation · separate request',{exact:true})).toHaveCount(1);
  const generated=page.getByRole('listitem').filter({has:page.getByText('Verified generated output continuation',{exact:true})});await generated.getByText('Request provenance',{exact:true}).click();
  await expect(generated).toContainText('Verified archive: '+ids.archive);await expect(generated).toContainText('Original specialist request: '+uuid(82));await expect(generated).toContainText('Registered artifact: '+ids.artifact);

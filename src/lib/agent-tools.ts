@@ -1,3 +1,5 @@
+import {studioReferenceGenerationFollowupGetInput,studioReferenceGenerationFollowupDispatchInput,studioReferenceGenerationFollowupAdvanceInput} from './studio-reference-generation-followup-protocol';
+import {assertReferenceGenerationFollowupTool,studioReferenceGenerationFollowupSnapshot,dispatchStudioReferenceGenerationFollowup,advanceStudioReferenceGenerationFollowup} from './studio-reference-generation-followups';
 import {projectStorageListInput,projectStorageFolderInput,projectStorageFolderUpdateInput,projectStorageFolderPlanInput,projectStorageFolderPlanApplyInput,projectStorageUploadInput,projectStorageAccessInput,projectStoragePlanListInput} from './project-storage-protocol';
 import {getProjectStorage,listProjectStorageFiles,createProjectStorageFolder,updateProjectStorageFolder,updateProjectStorageFile,listProjectStorageFolderPlans,getProjectStorageFolderPlan,previewProjectStorageFolderPlan,applyProjectStorageFolderPlan,reserveProjectStorageUpload,accessProjectStorageVersion} from './project-storage';
 import {projectStorageTransfer} from './project-storage-transfer';
@@ -86,6 +88,9 @@ export const AGENT_TOOLS:Record<string,ToolDefinition>={
  studio_storage_references_list:{capability:'infrastructure.read',description:'Read project-bound immutable snapshots of indexed heavy-file references. Shows changed/missing/revoked indices; never mounts storage or exposes file bytes.',mutating:false,schema:page.extend({projectId:uuid}).strict()},
  studio_storage_reference_register:{capability:'studio.write',description:'Pin an existing same-company drive index entry to the exact assigned project/task, checking expected size and modified timestamp. Metadata only: no hashing, file access, provider upload or execution.',mutating:true,schema:studioStorageReferencePlanInput.extend({projectId:uuid}).strict()},
  studio_coordination_get:{capability:'studio.read',description:'Read the exact administrator-approved project coordination policy, remaining lifetime specialist run count, durable parent-child receipts and renderFollowups eligible for one continuation after verified publication and human promotion. A run limit is not a dollar budget. No workers start.',mutating:false,schema:studioCoordinationGetInput},
+ studio_reference_generation_followups_get:{capability:'studio.read',description:'Read exact confirmed-reference continuation eligibility and history for one project. No generation, transfer, approval or worker starts.',mutating:false,schema:studioReferenceGenerationFollowupGetInput},
+ studio_reference_generation_followup_dispatch:{capability:'studio.write',additionalCapabilities:['studio.read','tasks.write'],description:'As the approved coordinator, queue one exact reference-bound generation proposal child under current project and policy revisions. Consumes shared finite limits; no spending, approvals, recursive delegation or automatic failed-child retry.',mutating:true,schema:studioReferenceGenerationFollowupDispatchInput},
+ studio_reference_generation_followup_advance:{capability:'studio.write',additionalCapabilities:['studio.read','tasks.write','creative.read','creative.write','storage.read'],description:'Advance the exact referenceGenerationFollowup context: claim, then proposal. The server owns stable step IDs and pins the confirmed reference. Proposal is for human approval and does not execute generation. Retry identical arguments after uncertainty; no task submission, transfer or approval.',mutating:true,schema:studioReferenceGenerationFollowupAdvanceInput},
  studio_generated_followups_get:{capability:'studio.read',description:'Read generated-media continuation eligibility and durable history for one contractVersion:2 project, optionally one exact archive. Follow nextAfter. A verified archive is not creative approval. No worker starts and no file bytes or provider credentials are exposed.',mutating:false,schema:studioGeneratedFollowupGetInput},
  studio_generated_followup_dispatch:{capability:'studio.write',additionalCapabilities:['studio.read','tasks.write'],description:'As the exact approved coordinator, queue one source-bound specialist continuation for an existing generated work item and verified archive under the explicit current project and policy revisions. Consumes shared finite coordination limits. The child can only read exact metadata and advance claim, register and submit steps. No generation, file transfer, approval, delegation or automatic failed-child retry.',mutating:true,schema:studioGeneratedFollowupDispatchInput},
  studio_generated_followup_advance:{capability:'studio.write',additionalCapabilities:['studio.read','tasks.write','creative.read','creative.write','storage.read'],description:'Advance this source-bound generated continuation through claim, register, then submit. Supply only the exact projectId, workItemId and step from generatedFollowup context. The server owns task revisions, artifact metadata and stable step receipt IDs; retry the same step after an uncertain response. Submission requests independent review and never approves media or delivery. Direct tasks_* tools are unavailable to this continuation.',mutating:true,schema:studioGeneratedFollowupAdvanceInput},
@@ -209,7 +214,7 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
  // profile and inference guard at each credential/cache boundary and on return;
  // a snapshot of earlier permission is never an enduring provider credential.
  const authorize=async(client:PoolClient)=>{
-  const context=await authorizeRunTool(client,agent,command.runId,command.leaseToken);await assertRenderFollowupTool(client,context.agent,context.run,name,args);await assertCreativeFollowupTool(client,context.agent,context.run,name,args);await assertGeneratedFollowupTool(client,context.agent,context.run,name,args);await assertCoordinatorGenerationTool(client,context.agent,context.run,name,args);await assertStudioReferencePreparationTool(client,context.agent,context.run,name,args);await assertStudioOriginalImagePreparationTool(client,context.agent,context.run,name,args);
+  const context=await authorizeRunTool(client,agent,command.runId,command.leaseToken);await assertRenderFollowupTool(client,context.agent,context.run,name,args);await assertCreativeFollowupTool(client,context.agent,context.run,name,args);await assertGeneratedFollowupTool(client,context.agent,context.run,name,args);await assertReferenceGenerationFollowupTool(client,context.agent,context.run,name,args);await assertCoordinatorGenerationTool(client,context.agent,context.run,name,args);await assertStudioReferencePreparationTool(client,context.agent,context.run,name,args);await assertStudioOriginalImagePreparationTool(client,context.agent,context.run,name,args);
   if(![definition.capability,...definition.additionalCapabilities??[]].every(capability=>context.capabilities.includes(capability)))fail(403,'This run does not have permission for this tool.','AGENT_CAPABILITY_REQUIRED');
   if((['studio.write','studio.execute','studio.review','creative.write'].includes(definition.capability)||name==='studio_staffing_get')&&!['owner','admin'].includes(context.requesterRole))fail(403,'Studio changes, planning review and staffing require a current owner or administrator request.','STUDIO_REQUESTER_ACCESS');
   if(name==='higgsfield_connection_get'&&args.refreshModels===true&&!['owner','admin'].includes(context.requesterRole))fail(403,'Refreshing company model metadata requires a current owner or administrator request.','STUDIO_REQUESTER_ACCESS');
@@ -231,7 +236,9 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
    }
    // Transport receipts do not extend a source/policy approval. These services
    // revalidate their exact durable child/step without creating another effect.
+   if(name==='studio_reference_generation_followup_dispatch')await dispatchStudioReferenceGenerationFollowup(client,context.agent,context.run,args);
    if(name==='studio_generated_followup_dispatch')await dispatchStudioGeneratedFollowup(client,context.agent,context.run,args);
+   if(name==='studio_reference_generation_followup_advance')await advanceStudioReferenceGenerationFollowup(client,context.agent,context.run,context.requesterRole,args);
    if(name==='studio_generated_followup_advance')await advanceStudioGeneratedFollowup(client,context.agent,context.run,context.requesterRole,args);
    if(name==='studio_work_dispatch'&&(await client.query('SELECT contract_version FROM studio_projects WHERE company_id=$1 AND id=$2',[agent.company_id,args.projectId])).rows[0]?.contract_version===2)await dispatchStudioWork(client,context.agent,context.run,args);
    // Preparation receipts record an operation, not enduring authority or a
@@ -241,6 +248,7 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
    if(name==='project_image_preparation_propose')replayResponse=await proposeProjectImagePreparation(client,preparationActor,{...args,clientId:command.requestId});
    if(name==='project_image_preparation_reference'){const{preparationId,...input}=args;replayResponse=await proposeProjectImagePreparationReference(client,preparationActor,preparationId,{...input,clientId:command.requestId});}
    const result=await recordStudioInferenceToolReceipt(client,context.agent,command.runId,command.requestId,name,command.arguments,replayResponse);
+   if(name==='studio_reference_generation_followup_dispatch')await dispatchStudioReferenceGenerationFollowup(client,context.agent,context.run,args);
    if(name==='studio_generated_followup_dispatch')await dispatchStudioGeneratedFollowup(client,context.agent,context.run,args);
    await assertRunToolCommitAuthority(client,agent,context.run,command.leaseToken);
    return {result,replayed:true};
@@ -293,6 +301,9 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
    case 'studio_coordination_get':result=await studioCoordinationSnapshot(client,companyId,args.projectId);break;
    case 'studio_generated_revisions_get':{const{projectId,itemAfter,itemLimit,...input}=args;result=studioAgentRevision(await studioGeneratedRevisionSnapshot(client,companyId,projectId,input),{itemAfter,itemLimit});break;}
    case 'studio_generated_revision_draft':{const{projectId,...input}=args;result=studioAgentRevisionDraft(await draftStudioGeneratedRevision(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id,agentSponsorId:agent.created_by},projectId,{...input,clientId:command.requestId}));break;}
+   case 'studio_reference_generation_followups_get':result=await studioReferenceGenerationFollowupSnapshot(client,companyId,args);break;
+   case 'studio_reference_generation_followup_dispatch':result=await dispatchStudioReferenceGenerationFollowup(client,context.agent,run,args);break;
+   case 'studio_reference_generation_followup_advance':result=await advanceStudioReferenceGenerationFollowup(client,context.agent,run,context.requesterRole,args);break;
    case 'studio_generated_followups_get':result=await studioGeneratedFollowupSnapshot(client,companyId,args);break;
    case 'studio_generated_followup_dispatch':result=await dispatchStudioGeneratedFollowup(client,context.agent,run,args);break;
    case 'studio_generated_followup_advance':result=await advanceStudioGeneratedFollowup(client,context.agent,run,context.requesterRole,args);break;
@@ -361,6 +372,7 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
   }
   // A coordinator is not its child: the child lifecycle guard cannot establish
   // this dispatch's policy deadline after outer receipt writes or lock waits.
+  if(name==='studio_reference_generation_followup_dispatch')await dispatchStudioReferenceGenerationFollowup(client,context.agent,run,args);
   if(name==='studio_generated_followup_dispatch')await dispatchStudioGeneratedFollowup(client,context.agent,run,args);
   await assertRunToolCommitAuthority(client,agent,run,command.leaseToken);
   return {result,replayed:false};

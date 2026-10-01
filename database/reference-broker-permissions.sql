@@ -19,7 +19,7 @@ GRANT USAGE ON SCHEMA public TO coatria_higgsfield_reference_broker_v1;
 GRANT SELECT ON schema_migrations TO coatria_higgsfield_reference_broker_v1;
 GRANT SELECT(id) ON companies TO coatria_higgsfield_reference_broker_v1;
 GRANT UPDATE(created_at) ON companies TO coatria_higgsfield_reference_broker_v1;
-GRANT SELECT(company_id,user_id,role,access_revoked_at) ON memberships TO coatria_higgsfield_reference_broker_v1;
+GRANT SELECT(company_id,user_id,role,access_revoked_at,joined_at) ON memberships TO coatria_higgsfield_reference_broker_v1;
 GRANT UPDATE(joined_at) ON memberships TO coatria_higgsfield_reference_broker_v1;
 GRANT SELECT(id,name,email,role_title,avatar_color,avatar_id,email_verified_at) ON users TO coatria_higgsfield_reference_broker_v1;
 GRANT SELECT ON studio_projects TO coatria_higgsfield_reference_broker_v1;
@@ -32,6 +32,9 @@ GRANT UPDATE(updated_at) ON tasks TO coatria_higgsfield_reference_broker_v1;
 GRANT SELECT ON studio_dependencies TO coatria_higgsfield_reference_broker_v1;
 GRANT SELECT ON studio_dispatches TO coatria_higgsfield_reference_broker_v1;
 GRANT SELECT ON studio_reference_preparation_dispatches TO coatria_higgsfield_reference_broker_v1;
+GRANT SELECT ON studio_reference_generation_handoffs TO coatria_higgsfield_reference_broker_v1;
+GRANT SELECT ON studio_reference_generation_inspection_adoptions TO coatria_higgsfield_reference_broker_v1;
+GRANT SELECT ON studio_reference_generation_adoption_facts TO coatria_higgsfield_reference_broker_v1;
 GRANT SELECT(id,company_id,project_id,number,plan_sha256) ON studio_generated_revision_rounds TO coatria_higgsfield_reference_broker_v1;
 GRANT SELECT(company_id,project_id,round_id,work_item_id) ON studio_generated_revision_work TO coatria_higgsfield_reference_broker_v1;
 GRANT SELECT(id,company_id,created_by,token_hash,managed_token_hash,invocation_access,capabilities,status,expires_at) ON agents TO coatria_higgsfield_reference_broker_v1;
@@ -48,6 +51,7 @@ GRANT SELECT ON studio_coordination_dispatches TO coatria_higgsfield_reference_b
 GRANT SELECT ON studio_coordination_policies TO coatria_higgsfield_reference_broker_v1;
 GRANT UPDATE(updated_at) ON studio_coordination_policies TO coatria_higgsfield_reference_broker_v1;
 GRANT SELECT(company_id,revision) ON studio_profiles TO coatria_higgsfield_reference_broker_v1;
+GRANT UPDATE(updated_at) ON studio_profiles TO coatria_higgsfield_reference_broker_v1;
 GRANT SELECT(company_id,child_run_id) ON studio_coordination_followups TO coatria_higgsfield_reference_broker_v1;
 GRANT SELECT(company_id,child_run_id) ON studio_generated_followups TO coatria_higgsfield_reference_broker_v1;
 GRANT SELECT(company_id,run_id) ON agent_mission_cycles TO coatria_higgsfield_reference_broker_v1;
@@ -137,3 +141,7 @@ ALTER ROLE coatria_higgsfield_reference_broker_v1 SET search_path=pg_catalog,pub
 DROP TRIGGER IF EXISTS coatria_reference_broker_lock_guard ON public.studio_coordination_policies;
 CREATE TRIGGER coatria_reference_broker_lock_guard BEFORE UPDATE ON public.studio_coordination_policies FOR EACH ROW EXECUTE FUNCTION public.coatria_reference_broker_readonly_lock_guard('coatria_higgsfield_reference_broker_v1');
 ALTER TABLE public.studio_coordination_policies ENABLE ALWAYS TRIGGER coatria_reference_broker_lock_guard;
+
+DROP TRIGGER IF EXISTS coatria_reference_broker_lock_guard ON public.studio_profiles;
+CREATE TRIGGER coatria_reference_broker_lock_guard BEFORE UPDATE ON public.studio_profiles FOR EACH ROW EXECUTE FUNCTION public.coatria_reference_broker_readonly_lock_guard('coatria_higgsfield_reference_broker_v1');
+ALTER TABLE public.studio_profiles ENABLE ALWAYS TRIGGER coatria_reference_broker_lock_guard;

@@ -16,17 +16,19 @@ export const higgsfieldReferenceListInput=z.object({projectId:uuid,after:uuid.op
 export const higgsfieldReferenceCandidatesInput=z.object({projectId:uuid,fileId:uuid.optional(),after:uuid.optional(),limit:z.coerce.number().int().min(1).max(50).default(20)}).strict();
 export const higgsfieldReferenceApproveInput=z.object({clientId:uuid,revision,requestHash:sha,inspectionHash:sha,expiresInMinutes:z.number().int().min(1).max(60),referenceSharingConsent:z.literal(true),preparedProxyConsent:z.literal(true),rightsConsent:z.literal(true),allBytesConsent:z.literal(true)}).strict();
 export const higgsfieldReferenceRevokeInput=z.object({clientId:uuid,revision,note:z.string().trim().max(1000).default('')}).strict();
+export const referenceGenerationInspectionAdoptInput=z.object({clientId:uuid,referenceRevision:revision,requestHash:sha,handoffSha256:sha,expiresInMinutes:z.number().int().min(1).max(60),inspectionConsent:z.literal(true)}).strict();
 export type HiggsfieldReferenceActor={companyId:string;userId:string;agentId?:string;runId?:string};
 export type HiggsfieldReferenceVersion={versionId:string;fileId:string;name:string;version:number;bytes:number;sha256:string;contentType:string};
 export type HiggsfieldReferenceInspection={descriptor:Extract<HiggsfieldMediaDescriptor,{kind:'image'}>;profileSha256:string;inspectionHash:string;inspectedAt:string};
 export type HiggsfieldReferenceAvailability={enabled:boolean;code:string;message:string;expiresAt:string|null;qualificationSha256:string|null;catalogSha256:string|null};
 export type HiggsfieldReference={
+ referenceGenerationHandoff?:{id:string;handoffSha256:string;inspectionAdoption:null|{id:string;approvedBy:string;approvedAt:string;expiresAt:string;approvalHash:string;maximumAttempts:1}};
  id:string;projectId:string;workItemId:string;projectRevision:number;taskRevision:number;role:typeof HIGGSFIELD_REFERENCE_ROLES[number];purpose:string;
  status:typeof HIGGSFIELD_REFERENCE_STATUSES[number];revision:number;requestHash:string;proxy:HiggsfieldReferenceVersion;source:HiggsfieldReferenceVersion|null;
  storageConnectionId:string;storageConnectionRevision:number;bindingId:string;bindingRevision:number;providerConnectionId:string;providerConnectionRevision:number;
  inspection:HiggsfieldReferenceInspection|null;proposedBy:string;proposedAgentId:string|null;createdAt:string;approvedBy:string|null;approvedAt:string|null;expiresAt:string|null;approvalHash:string|null;revokedAt:string|null;diagnosticCode:string|null;
  providerConfirmed:boolean;originalUploaded:false;bytesSharedUnchanged:true;metadataRemoved:false;
- inspectionAuthorityMode?:'live_run'|'prepared_image_v1';inspectionExpiresAt?:string;inspectionAttempts?:number;
+ inspectionAuthorityMode?:'live_run'|'prepared_image_v1'|'adopted_generation_v1';inspectionExpiresAt?:string;inspectionAttempts?:number;
  preparation?:{id:string;sourceVersionId:string;outputVersionId:string;recipeSha256:string;receiptSha256:string;metadataRemoved:true;outputWidth:number;outputHeight:number};
 };
 export type HiggsfieldReferencePage={references:HiggsfieldReference[];hasMore:boolean;nextAfter:string|null};

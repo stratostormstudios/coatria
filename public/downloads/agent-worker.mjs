@@ -8,7 +8,7 @@ import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const terminalCodes=new Set(['RUN_LEASE_LOST','RUN_CANCELLED','COORDINATION_AUTHORITY_ENDED','STUDIO_REVIEW_AUTHORITY_ENDED']);
+const terminalCodes=new Set(['RUN_LEASE_LOST','RUN_CANCELLED','COORDINATION_AUTHORITY_ENDED','STUDIO_REVIEW_AUTHORITY_ENDED','STUDIO_GENERATED_FOLLOWUP_AUTHORITY_ENDED','REFERENCE_GENERATION_FOLLOWUP_AUTHORITY_ENDED']);
 // Failure of external execution is not evidence that replay is safe.
 // Never copy arbitrary Error.message, code, stack, cause or CLI diagnostics.
 const terminalClaudeFailures=new Set(['CLAUDE_REPLAY_UNSAFE','CLAUDE_CONFIGURATION','CLAUDE_CONTEXT_LIMIT','CLAUDE_TOOL_CATALOG','CLAUDE_START_FAILED','CLAUDE_CANCELLED','CLAUDE_TIMEOUT','CLAUDE_TOKEN_LIMIT','CLAUDE_OUTPUT_LIMIT','CLAUDE_PROTOCOL_INVALID','CLAUDE_MCP_UNAVAILABLE','CLAUDE_TOOL_SCOPE','CLAUDE_RESULT_INVALID','CLAUDE_TURN_LIMIT','CLAUDE_COST_LIMIT','CLAUDE_EXIT_FAILED']);
@@ -77,7 +77,7 @@ export function createRuntimeClient({token=process.env.COATRIA_AGENT_TOKEN,url=p
     if(response.ok)return data;
     const retry=Number(response.headers.get('retry-after'));throw new RuntimeError(response.status,data.code,Number.isFinite(retry)&&retry>0?retry:0);
    }catch(caught){if(signal?.aborted)throw signal.reason;error=caught instanceof RuntimeError?caught:new RuntimeError(0,'NETWORK_ERROR');}
-   if(attempt>=2||!(error.status===0||error.status===429||error.status>=500))throw error;
+   if(attempt>=2||!(error.status===0||error.status===429||error.status>=500||error.status===409&&error.code==='REFERENCE_GENERATION_AUTHORITY_BUSY'))throw error;
    const delay=error.retryAfter?error.retryAfter*1000:retryBaseMs*2**attempt;
    if(delay>10000)throw error;await pause(delay,signal);
   }
