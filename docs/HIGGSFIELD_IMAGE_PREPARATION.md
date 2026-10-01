@@ -2,7 +2,7 @@
 
 ## Status and intended result
 
-This document specifies the next stage after [managed prepared-image references](HIGGSFIELD_REFERENCES.md). M1 now has a native fixture implementation and real pixel tests, described below. M2–M6 remain outstanding: automatic preparation is not deployed, qualified on a live host, or enabled for a company. Existing reference sharing remains disabled without its separately qualified runtime. This work does not activate workers, provision resources, change existing agent grants, or authorize provider spending.
+This document specifies the next stage after [managed prepared-image references](HIGGSFIELD_REFERENCES.md). M1 has a native fixture implementation and real pixel tests. M2 adds the durable preparation schema, service and metadata API described below. M3–M6 remain outstanding: automatic preparation is not deployed, qualified on a live host, or enabled for a company. Existing reference sharing remains disabled without its separately qualified runtime. This work does not activate workers, provision resources, change existing agent grants, or authorize provider spending.
 
 The intended result is: choose an exact original image already in project storage, create a bounded derivative with verified metadata removal, save it as a separate verified project-storage version, review that exact derivative, then use the existing finite Higgsfield sharing approval. The original remains unchanged. Preparing an image is not permission to share it with Higgsfield, approve its creative content, generate paid media, or accept a client delivery.
 
@@ -36,7 +36,40 @@ node --import tsx --test tests/higgsfield-image-preparation*.test.ts
 node node_modules/typescript/bin/tsc --noEmit
 ```
 
-These tests prove the local transformation and validation layer. They do not establish derivative storage verification, agent processing authority, production containment, remote binary transport, Higgsfield sharing, or a live studio delivery. Those remain M2–M6.
+These tests prove the local transformation and validation layer. They do not establish derivative storage verification, production containment, remote binary transport, Higgsfield sharing, or a live studio delivery. Those remain M3–M6.
+
+### Implemented M2 boundary
+
+Migration [045](../database/045_project_image_preparations.sql) adds preparation proposals, immutable human approvals, phase receipts, idempotency requests and the future verified-derivation relation. The [service](../src/lib/project-image-preparations.ts) pins the exact verified source, project/task/role, destination ancestry, storage connection and binding revisions, recipe, proposing credential and sponsoring memberships. Membership snapshots preserve PostgreSQL timestamp precision so a removed and re-invited identity cannot revive old consent. Existing storage files are never overwritten.
+
+The [metadata route](../src/lib/project-image-preparation-api.ts) supports:
+
+| Method | Path | Authority |
+| --- | --- | --- |
+| GET / POST | `/api/companies/:companyId/image-preparations` | Current member; list by `projectId`, or propose an exact image |
+| GET | `/api/companies/:companyId/image-preparations/:id` | Current member of the same company |
+| POST | `/api/companies/:companyId/image-preparations/:id/approve` | Current human administrator; exact revision/hash, processor qualification and three explicit consents |
+| POST | `/api/companies/:companyId/image-preparations/:id/revoke` | Current human administrator; exact revision |
+
+Preparation approval is separate from Higgsfield sharing, generation, quality review and delivery acceptance. Approval lasts at most 60 minutes, cannot outlive its processor qualification and records a maximum cost of at most $1; this record alone is not a spending reservation or provider cap. The default runtime resolver is absent, so public approval returns `IMAGE_PREPARATION_UNAVAILABLE` and no worker is started. A caller cannot submit its own runtime, success receipt, object key or private lease through these routes.
+
+Service-level agent proposals require the existing `storage.read`, `studio.read`, `studio.write` and `tasks.write` grants, a live authenticated run and its reserved assigned task. The future agent-tool wrapper must first prove the lease with `authorizeRunTool` and repeat commit authority; there is no new agent tool or grant in M2. Explicit administrator adoption permits the proposing run to finish successfully while the finite preparation remains authorized. Agent credentials, grants, sponsors and the exact task snapshot must remain current. Task submission/revision changes currently require a new proposal; this slice does not silently permit a changed objective.
+
+The queue allows at most eight unclaimed proposed/queued preparations per company. A company admits one active attempt, limited to 120 seconds. Transform intent is recorded before external work; a repeated transform request is rejected. The metadata completion API inside the service validates exact source/recipe/processor facts, supported dimensions and the fixed output shape, then stops at `validating`. It does not transform bytes itself, establish storage verification or publish `ready`. Production callers must eventually provide actual qualified transform evidence; test fixtures are explicitly synthetic control-plane evidence.
+
+Expired or unauthorized unclaimed jobs become blocked so later queued work can proceed. An already claimed job continues occupying its company slot until trusted cleanup is recorded, including timeout, revocation and unknown outcomes. Unknown transform/write outcomes become `uncertain`; expiry never resets an attempt or authorizes a replacement. Database guards reject a `ready` state without the exact separately stored and verified derivative, immutable transform evidence and cleanup. M2 has no public cleanup, storage allocation or final publication method; these belong to M3/M5 and need independent verification.
+
+All methods require a caller-owned transaction. Runtime resolution is a trusted database-only dependency, with complete authority and expiry checks repeated after it returns. Provider I/O is forbidden inside these transactions. Company admission uses a nonblocking advisory lock to avoid waiting on a worker that is itself waiting for an authenticated agent's run lock; callers can retry the same idempotent metadata operation after `IMAGE_PREPARATION_BUSY`. Workers return no claim when busy. Agent/run locks precede project/job locks.
+
+No new database role, login or grants are created. The future dedicated preparation role and its real PostgreSQL permission tests remain part of M5. The new migration is staged repository work, not proof that production schema 45 has been applied.
+
+Focused control-plane and route checks use isolated synthetic databases:
+
+```text
+node --import tsx --test tests/project-image-preparations.test.ts tests/project-image-preparation-api.test.ts
+```
+
+Without `COATRIA_INTEGRATION_DATABASE_URL`, the tests use disposable PGlite. Native PostgreSQL tests accept only a localhost URL, create their own disposable database and never modify an existing company. Multi-connection locking checks require native PostgreSQL; emulator results are not native concurrency evidence.
 
 ## Existing foundations and limits
 
@@ -121,7 +154,7 @@ Retain the existing separate human review and finite sharing approval. The shari
 | Milestone | Deliverable | Acceptance boundary |
 | --- | --- | --- |
 | M1: policy and pure transform | Versioned source/output limits, fixed recipe, binary transform interface and strict output validator | Real local fixture transforms prove resized pixels and metadata absence. Native execution, if used by tests, remains unavailable in production. No storage/provider or agent execution is enabled. |
-| M2: durable preparation control plane | Exact proposal/read/status contract, lease/phase state, immutable derivation schema and restricted grants | Database tests prove tenant isolation, conflicting replay, concurrency, expiry/revocation, queue progress and immutable evidence. No synthetic receipt is presented as real transform proof. |
+| M2: durable preparation control plane | Exact proposal/read/status contract, lease/phase state and immutable derivation schema; no worker grant yet | Database tests cover tenant isolation, conflicting replay, expiry/revocation, queue progress and immutable evidence. Native PostgreSQL separately verifies concurrent locking. No synthetic receipt is presented as real transform proof. |
 | M3: scoped storage worker | Exact source reader, transform adapter and derivative publication using existing provider mechanics | Real transform plus isolated storage/DB integration proves original preservation, new verified version, read-back equality and uncertain-mutation fencing. Credentials remain outside the decoder. |
 | M4: UI and agent handoff | Prepared result preview, exact original/proxy provenance, progress and failure states, explicit agent tool/profile/grant review | Browser/agent tests prove no premature sharing, no hidden original substitution and only ready verified derivative IDs handed to reference proposal. Existing identities are not silently upgraded. |
 | M5: runtime qualification | Source-pinned service build, dedicated preparation role, reviewed processor transport and actual-host qualification evidence | The exact deployed binary-transform boundary passes isolation/resource/cleanup tests. All older inspection-only qualification is distinguished. Defaults remain disabled until this evidence and finite company/project authorization exist. |
