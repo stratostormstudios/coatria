@@ -22,6 +22,12 @@ The receipt locator/hash is excluded from the configuration identity to avoid a 
 
 ## Required activation sequence
 
+Prepare a clean target using the [production prerequisite runbook](PRODUCTION_MEDIA_HOST_PREREQUISITES.md).
+Keep CI runtime construction separate from target installation and qualification;
+the target must not impersonate a CI job. Keep its successful qualifier retained
+through enrollment and the finite worker lifetime, rather than copying archive's
+stop-after-acceptance procedure.
+
 1. **Build and install immutable artifacts.** Build `reference` and `reference-qualification` from the same reviewed commit with `build-trusted-service-bundle.mjs`. `build-reference-host-bundle.mjs` combines those components with a verified native runtime export, pinned Node, decoder closure, launcher, source and original synthetic fixtures. It excludes runtime `node_modules`. `install-reference-host.mjs` defaults to a read-only plan and requires explicit root installation with hash-pinned scope. Installation requires prepared systemd, bubblewrap, enforcing AppArmor and an unused dedicated account; it does not install packages, add credentials or start services. One reference service is supported per host until per-service OS identities exist.
 2. **Run credential-free qualification.** Explicitly start the installed service-specific qualifier. It verifies installed artifacts, actual Node path, UID/GID, loaded unit and delegated aggregate limits before running real isolation, resource, cleanup and prepared-image cases. A compiled child exercises supervisor death without a source loader. Qualification uses synthetic authority/storage and makes no provider requests. The worker's `--preflight` remains separate because it requires accepted evidence and an enrolled token.
 3. **Accept evidence through a trusted operator path.** Run the compiled qualifier's root-only acceptance command with the exact reviewed evidence hash. Acceptance checks the full detailed report, immutable host identity and current successful retained systemd invocation, including its trusted journal emission. It rejects running, failed, stopped, stale-boot or previous-invocation evidence. Receipt replacement compares the exact previous receipt hash and retains history and detailed reports. Acceptance does not enroll or start work.
