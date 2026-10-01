@@ -4,6 +4,9 @@ import {projectStorageTransfer} from './project-storage-transfer';
 import {higgsfieldArchiveProposalInput,higgsfieldArchiveListInput} from './higgsfield-archive-protocol';
 import {higgsfieldReferenceProposalInput,higgsfieldReferenceListInput,higgsfieldReferenceCandidatesInput,HIGGSFIELD_REFERENCE_PREPARATION_CAPABILITIES} from './higgsfield-references-protocol';
 import {proposeHiggsfieldReference,listHiggsfieldReferences,getHiggsfieldReference,listHiggsfieldReferenceCandidates} from './higgsfield-references';
+import {projectImagePreparationProposalInput,projectImagePreparationListInput,projectImagePreparationReferenceInput} from './project-image-preparations-protocol';
+import {proposeProjectImagePreparation,listProjectImagePreparations,getProjectImagePreparation} from './project-image-preparations';
+import {proposeProjectImagePreparationReference} from './project-image-preparation-reference';
 import {proposeHiggsfieldArchive,listHiggsfieldArchives,getHiggsfieldArchive} from './higgsfield-archives';
 import {managedAgentAuthoritySql,managedAgentAuthorityPrincipals} from './studio-hosting';
 import {createHash} from 'node:crypto';
@@ -31,7 +34,7 @@ import {proposeStudioStaffing,getStudioStaffingProposal,listStudioStaffingPropos
 import {executionPlanInput} from './studio-execution-protocol';
 import {studioExecutionSnapshot,studioExecutionJob,studioExecutionInput,submitStudioExecution} from './studio-execution';
 import {studioCoordinationGetInput,studioWorkDispatchInput} from './studio-coordination-protocol';
-import {studioCoordinationSnapshot,dispatchStudioWork,assertCoordinatorGenerationTool,assertStudioReferencePreparationTool} from './studio-coordination';
+import {studioCoordinationSnapshot,dispatchStudioWork,assertCoordinatorGenerationTool,assertStudioReferencePreparationTool,assertStudioOriginalImagePreparationTool} from './studio-coordination';
 import {assertRenderFollowupTool} from './studio-render-followups';
 import {assertCreativeFollowupTool} from './studio-creative-followup';
 import {studioGeneratedFollowupGetInput,studioGeneratedFollowupDispatchInput,studioGeneratedFollowupAdvanceInput} from './studio-generated-followup-protocol';
@@ -53,6 +56,10 @@ const openingInput=z.object({title:text(160),description:text(12000),type:z.enum
 const taskVersion={taskId:uuid,revision:z.number().int().min(1).max(2147483646)};
 type ToolDefinition={capability:AgentCapability;additionalCapabilities?:AgentCapability[];description:string;mutating:boolean;schema:z.ZodType};
 export const AGENT_TOOLS:Record<string,ToolDefinition>={
+ project_image_preparations_list:{capability:'studio.read',additionalCapabilities:['storage.read','studio.write','tasks.write'],description:'Page this project\'s original-image preparation metadata and durable status. Requires a live agent run and current grants. No file bytes, credentials or processing permission. Follow nextAfter; ready means a separate verified derivative exists, not sharing, media QC or client acceptance.',mutating:false,schema:projectImagePreparationListInput},
+ project_image_preparation_get:{capability:'studio.read',additionalCapabilities:['storage.read','studio.write','tasks.write'],description:'Read an exact company-scoped preparation, original identity, finite processing approval and verified derivative evidence. A historical plan or completed run is not current agent authority. No provider or file access.',mutating:false,schema:z.object({preparationId:uuid}).strict()},
+ project_image_preparation_propose:{capability:'studio.write',additionalCapabilities:['storage.read','studio.read','tasks.write'],description:'Propose preparing one exact verified PNG/JPEG/WebP original (up to 32 MiB) into a separate PNG in the chosen project folder. Preserve the original. Requires this live run to reserve its assigned task. Explicit submitted_plan_v1 permits later human processing consent after this reference plan is submitted and independently accepted. Processing and derivative writing require separate finite human approval; this tool cannot execute, share, generate or approve.',mutating:true,schema:projectImagePreparationProposalInput.omit({clientId:true})},
+ project_image_preparation_reference:{capability:'studio.write',additionalCapabilities:['storage.read','studio.read','tasks.write','creative.read','creative.write'],description:'Propose an exact ready preparation result as a Higgsfield reference for this current assigned downstream task. The server selects the derivative and recorded original; caller-supplied file IDs, hashes or metadata-removal claims are forbidden. Requires current creative grants, live lease and task reservation. Finite inspection and separate human sharing approval remain required. Never impersonates the completed original preparation run.',mutating:true,schema:projectImagePreparationReferenceInput.omit({clientId:true}).extend({preparationId:uuid}).strict()},
  storage_get:{capability:'storage.read',description:'Read this project storage binding and transfer availability. No provider credentials or original bytes.',mutating:false,schema:z.object({projectId:uuid}).strict()},
  storage_files_list:{capability:'storage.read',description:'Browse project folders and immutable file-version summaries. Follow page.nextAfter. Verified means server-read bytes passed integrity checks, not creative approval.',mutating:false,schema:projectStorageListInput.extend({projectId:uuid}).strict()},
  storage_folder_create:{capability:'storage.organize',description:'Create a named logical project folder against the current storage catalog revision. Does not create provider buckets or purchase storage.',mutating:true,schema:projectStorageFolderInput.omit({clientId:true}).extend({projectId:uuid}).strict()},
@@ -202,7 +209,7 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
  // profile and inference guard at each credential/cache boundary and on return;
  // a snapshot of earlier permission is never an enduring provider credential.
  const authorize=async(client:PoolClient)=>{
-  const context=await authorizeRunTool(client,agent,command.runId,command.leaseToken);await assertRenderFollowupTool(client,context.agent,context.run,name,args);await assertCreativeFollowupTool(client,context.agent,context.run,name,args);await assertGeneratedFollowupTool(client,context.agent,context.run,name,args);await assertCoordinatorGenerationTool(client,context.agent,context.run,name,args);await assertStudioReferencePreparationTool(client,context.agent,context.run,name,args);
+  const context=await authorizeRunTool(client,agent,command.runId,command.leaseToken);await assertRenderFollowupTool(client,context.agent,context.run,name,args);await assertCreativeFollowupTool(client,context.agent,context.run,name,args);await assertGeneratedFollowupTool(client,context.agent,context.run,name,args);await assertCoordinatorGenerationTool(client,context.agent,context.run,name,args);await assertStudioReferencePreparationTool(client,context.agent,context.run,name,args);await assertStudioOriginalImagePreparationTool(client,context.agent,context.run,name,args);
   if(![definition.capability,...definition.additionalCapabilities??[]].every(capability=>context.capabilities.includes(capability)))fail(403,'This run does not have permission for this tool.','AGENT_CAPABILITY_REQUIRED');
   if((['studio.write','studio.execute','studio.review','creative.write'].includes(definition.capability)||name==='studio_staffing_get')&&!['owner','admin'].includes(context.requesterRole))fail(403,'Studio changes, planning review and staffing require a current owner or administrator request.','STUDIO_REQUESTER_ACCESS');
   if(name==='higgsfield_connection_get'&&args.refreshModels===true&&!['owner','admin'].includes(context.requesterRole))fail(403,'Refreshing company model metadata requires a current owner or administrator request.','STUDIO_REQUESTER_ACCESS');
@@ -227,7 +234,13 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
    if(name==='studio_generated_followup_dispatch')await dispatchStudioGeneratedFollowup(client,context.agent,context.run,args);
    if(name==='studio_generated_followup_advance')await advanceStudioGeneratedFollowup(client,context.agent,context.run,context.requesterRole,args);
    if(name==='studio_work_dispatch'&&(await client.query('SELECT contract_version FROM studio_projects WHERE company_id=$1 AND id=$2',[agent.company_id,args.projectId])).rows[0]?.contract_version===2)await dispatchStudioWork(client,context.agent,context.run,args);
-   const result=await recordStudioInferenceToolReceipt(client,context.agent,command.runId,command.requestId,name,command.arguments,previous.response);
+   // Preparation receipts record an operation, not enduring authority or a
+   // current status. Re-enter the service with the same id before returning it.
+   let replayResponse=previous.response;
+   const preparationActor={companyId:agent.company_id,userId:context.run.requested_by,agentId:agent.id,runId:context.run.id};
+   if(name==='project_image_preparation_propose')replayResponse=await proposeProjectImagePreparation(client,preparationActor,{...args,clientId:command.requestId});
+   if(name==='project_image_preparation_reference'){const{preparationId,...input}=args;replayResponse=await proposeProjectImagePreparationReference(client,preparationActor,preparationId,{...input,clientId:command.requestId});}
+   const result=await recordStudioInferenceToolReceipt(client,context.agent,command.runId,command.requestId,name,command.arguments,replayResponse);
    if(name==='studio_generated_followup_dispatch')await dispatchStudioGeneratedFollowup(client,context.agent,context.run,args);
    await assertRunToolCommitAuthority(client,agent,context.run,command.leaseToken);
    return {result,replayed:true};
@@ -235,6 +248,10 @@ export async function executeAgentTool(agent:AgentRunIdentity&Record<string,any>
   if(definition.mutating&&Number((await client.query('SELECT count(*) FROM agent_tool_receipts WHERE company_id=$1 AND run_id=$2',[agent.company_id,command.runId])).rows[0].count)>=200)fail(409,'This run reached its limit of 200 committed tool actions. Start a new reviewed request.','AGENT_TOOL_BUDGET');
   const run=context.run,companyId=agent.company_id,limit=args.limit||50,values=[companyId,args.after||null,limit+1];let result:unknown,staffingRejected=false;
   switch(name){
+   case 'project_image_preparations_list':result=await listProjectImagePreparations(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id},args);break;
+   case 'project_image_preparation_get':result=await getProjectImagePreparation(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id},args.preparationId);break;
+   case 'project_image_preparation_propose':result=await proposeProjectImagePreparation(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id},{...args,clientId:command.requestId});break;
+   case 'project_image_preparation_reference':{const{preparationId,...input}=args;result=await proposeProjectImagePreparationReference(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id},preparationId,{...input,clientId:command.requestId});break;}
    case 'storage_get':result=await getProjectStorage(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id},args.projectId,projectStorageTransfer);break;
    case 'storage_files_list':{const{projectId,...input}=args;result=await listProjectStorageFiles(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id},projectId,input,projectStorageTransfer);break;}
    case 'storage_folder_create':{const{projectId,...input}=args;result=await createProjectStorageFolder(client,{companyId,userId:run.requested_by,agentId:agent.id,runId:run.id},projectId,{...input,clientId:command.requestId});break;}

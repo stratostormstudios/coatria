@@ -32,7 +32,7 @@ test('prepared dispatch is an explicit human option, not a new default or coordi
  assert(schema.safeParse({modelId:'provider.model-1'}).success);
  for(const modelId of['','https://untrusted.invalid/model','a'.repeat(129)])assert(!schema.safeParse({modelId}).success);
  const operation=(agentRuntimeOpenApi.paths as Row)['/api/companies/{companyId}/studio/projects/{projectId}/dispatch'].post,schemaDoc=operation.requestBody.content['application/json'].schema;
- assert.deepEqual(operation['x-coatria-roles'],['owner','admin']);assert.equal(schemaDoc.properties.preparationProfile.const,'prepared_image_v1');assert(!schemaDoc.required.includes('preparationProfile'));
+ assert.deepEqual(operation['x-coatria-roles'],['owner','admin']);assert.deepEqual(schemaDoc.properties.preparationProfile.enum,['prepared_image_v1','original_image_v1']);assert(!schemaDoc.required.includes('preparationProfile'));
  const proposal=(agentRuntimeOpenApi.paths as Row)['/api/agent/tools/higgsfield_reference_propose'].post;assert(!proposal['x-coatria-required-capabilities'].includes('creative.write'));assert.match(proposal.description,/markerless legacy proposals additionally require creative.write/);
 });
 

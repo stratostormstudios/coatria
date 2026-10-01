@@ -1,5 +1,5 @@
 import {managedAgentAuthoritySql,managedAgentAuthorityPrincipals} from './studio-hosting';
-import {coordinationRunAuthority} from './studio-coordination';
+import {coordinationRunAuthority,originalImagePreparationRunAuthority} from './studio-coordination';
 import {planningReviewRunAuthority} from './studio-review-policy';
 import {generatedFollowupRunAuthority,generatedFollowupRunContext} from './studio-generated-followups';
 import {createHmac,randomUUID} from 'node:crypto';
@@ -72,10 +72,11 @@ async function refreshRunLease(client:PoolClient,companyId:string,run:Record<str
  const current=(await client.query("SELECT status,lease_token_hash,lease_expires_at,lease_expires_at>clock_timestamp() AND started_at>clock_timestamp()-interval '30 minutes' AS lease_live FROM agent_runs WHERE company_id=$1 AND id=$2",[companyId,run.id])).rows[0];
  if(!current)fail(404,'Agent request not found.');Object.assign(run,current);
 }
-/** Recheck generated source/policy and DB-time lease after tool effects/receipt
+/** Recheck generated/original source policy and DB-time lease after tool effects/receipt
  * locks, while the enclosing transaction can still roll every effect back. */
 export async function assertRunToolCommitAuthority(client:PoolClient,identity:Pick<AgentRunIdentity,'company_id'>,run:Record<string,any>,leaseToken:string){
  await assertGeneratedRunAuthority(client,identity.company_id,run);
+ await originalImagePreparationRunAuthority(client,identity.company_id,run.id);
  await refreshRunLease(client,identity.company_id,run);requireLease(run,leaseToken);
 }
 /** Caller owns the transaction. Locks company -> sorted memberships -> agent -> run. */

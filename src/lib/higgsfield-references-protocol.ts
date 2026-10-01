@@ -27,6 +27,7 @@ export type HiggsfieldReference={
  inspection:HiggsfieldReferenceInspection|null;proposedBy:string;proposedAgentId:string|null;createdAt:string;approvedBy:string|null;approvedAt:string|null;expiresAt:string|null;approvalHash:string|null;revokedAt:string|null;diagnosticCode:string|null;
  providerConfirmed:boolean;originalUploaded:false;bytesSharedUnchanged:true;metadataRemoved:false;
  inspectionAuthorityMode?:'live_run'|'prepared_image_v1';inspectionExpiresAt?:string;inspectionAttempts?:number;
+ preparation?:{id:string;sourceVersionId:string;outputVersionId:string;recipeSha256:string;receiptSha256:string;metadataRemoved:true;outputWidth:number;outputHeight:number};
 };
 export type HiggsfieldReferencePage={references:HiggsfieldReference[];hasMore:boolean;nextAfter:string|null};
 export type HiggsfieldReferenceCandidatePage={versions:HiggsfieldReferenceVersion[];hasMore:boolean;nextAfter:string|null};

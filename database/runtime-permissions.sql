@@ -77,6 +77,44 @@ GRANT SELECT,INSERT ON studio_reference_preparation_dispatches TO coatria_runtim
 GRANT SELECT,INSERT ON higgsfield_model_contracts TO coatria_runtime_v1;
 GRANT UPDATE(connection_id,connection_revision,catalog_sha256,descriptor,descriptor_sha256,observed_at,expires_at) ON higgsfield_model_contracts TO coatria_runtime_v1;
 GRANT UPDATE(status,revision,approved_by,approved_at,expires_at,approval_hash,qualification_sha256,revoked_by,revoked_at,lease_id,lease_expires_at,action_id,action_operation,diagnostic_code,updated_at) ON higgsfield_references TO coatria_runtime_v1;
+-- Image preparation is a web control-plane proposal, finite human approval or
+-- revocation. Existing web storage grants do not confer processor authority.
+GRANT SELECT ON project_image_preparations,project_image_preparation_approvals,project_image_preparation_requests,project_image_preparation_receipts,project_image_preparation_allocations,project_image_preparation_derivations,studio_image_preparation_dispatches TO coatria_runtime_v1;
+GRANT INSERT(company_id,project_id,work_item_id,project_revision,project_snapshot,work_snapshot,source_version_id,source_snapshot,destination_folder_id,destination_name,destination_snapshot,storage_binding_id,storage_binding_revision,storage_connection_id,storage_connection_revision,storage_sponsor_id,recipe_sha256,request_hash,purpose,proposed_by,proposed_agent_id,proposed_run_id,proposer_snapshot,continuation_mode) ON project_image_preparations TO coatria_runtime_v1;
+GRANT INSERT ON project_image_preparation_approvals TO coatria_runtime_v1;
+GRANT INSERT(company_id,actor_key,client_id,request_hash,response) ON project_image_preparation_requests TO coatria_runtime_v1;
+GRANT INSERT(company_id,project_id,preparation_id,action_id,operation,phase,detail) ON project_image_preparation_receipts TO coatria_runtime_v1;
+GRANT UPDATE(status,revision,revoked_by,revoked_at,updated_at) ON project_image_preparations TO coatria_runtime_v1;
+GRANT INSERT(company_id,project_id,work_item_id,run_id,authority_version,coordination) ON studio_image_preparation_dispatches TO coatria_runtime_v1;
+-- Column grants cannot distinguish a control receipt from a worker intent, or
+-- an approval from a processor transition. Keep both guarded by the actual
+-- SQL role. No new role, SECURITY DEFINER function or worker grant is created.
+CREATE OR REPLACE FUNCTION public.coatria_runtime_preparation_control_guard()
+ RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,public AS $guard$
+BEGIN
+ IF current_user=TG_ARGV[0] THEN
+  IF TG_TABLE_NAME='project_image_preparation_receipts' THEN
+   IF NOT ((NEW.operation='approve' AND NEW.phase='returned') OR (NEW.operation='revoke' AND NEW.phase='revoked')) THEN
+    RAISE EXCEPTION 'The web runtime cannot record preparation worker evidence' USING ERRCODE='42501';
+   END IF;
+  ELSIF NEW IS DISTINCT FROM OLD AND NOT (
+   NEW.revision=OLD.revision+1 AND (
+    (OLD.status='proposed' AND NEW.status='queued' AND NEW.revoked_at IS NULL AND NEW.revoked_by IS NULL)
+    OR (OLD.status<>'revoked' AND NEW.status='revoked' AND NEW.revoked_at IS NOT NULL AND NEW.revoked_by IS NOT NULL)
+   )
+  ) THEN
+   RAISE EXCEPTION 'The web runtime cannot advance preparation worker state' USING ERRCODE='42501';
+  END IF;
+ END IF;
+ RETURN NEW;
+END
+$guard$;
+DROP TRIGGER IF EXISTS coatria_runtime_preparation_control ON public.project_image_preparations;
+CREATE TRIGGER coatria_runtime_preparation_control BEFORE UPDATE ON public.project_image_preparations FOR EACH ROW EXECUTE FUNCTION public.coatria_runtime_preparation_control_guard('coatria_runtime_v1');
+ALTER TABLE public.project_image_preparations ENABLE ALWAYS TRIGGER coatria_runtime_preparation_control;
+DROP TRIGGER IF EXISTS coatria_runtime_preparation_control ON public.project_image_preparation_receipts;
+CREATE TRIGGER coatria_runtime_preparation_control BEFORE INSERT ON public.project_image_preparation_receipts FOR EACH ROW EXECUTE FUNCTION public.coatria_runtime_preparation_control_guard('coatria_runtime_v1');
+ALTER TABLE public.project_image_preparation_receipts ENABLE ALWAYS TRIGGER coatria_runtime_preparation_control;
 GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO coatria_runtime_v1;
 ALTER ROLE coatria_runtime_v1 SET statement_timeout='15s';
 ALTER ROLE coatria_runtime_v1 SET idle_in_transaction_session_timeout='20s';
