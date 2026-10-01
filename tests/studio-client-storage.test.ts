@@ -15,7 +15,7 @@ import {updateProjectStorageFile} from '../src/lib/project-storage';
 import {issueStudioClientStorageAccess,authorizeStudioClientStorageGrant} from '../src/lib/studio-client-storage';
 import {createProjectStorageGateway} from '../src/lib/project-storage-gateway';
 import {trustedServiceHash} from '../src/lib/trusted-service-config';
-import {verifyAndBindProjectGateway,revokeProjectGateway} from '../src/lib/project-gateway-bindings';
+import {verifyAndBindProjectGateway,revokeProjectGateway,verifiedGatewayOriginsForUser} from '../src/lib/project-gateway-bindings';
 import type {GatewayIdentity} from '../src/lib/project-gateway-identity';
 import {authorityReader} from '../src/lib/project-storage-stream';
 import type {RunpodProjectStorage,RunpodProjectStorageConfig} from '../src/lib/project-storage-runpod';
@@ -60,6 +60,14 @@ test('external client gateway serves only approved exact versions through isolat
   const request=async(a:Awaited<ReturnType<typeof access>>,range?:string,signal?:AbortSignal)=>{gateway=own;return fetch(a.url,{headers:{...a.headers,Origin:origin,...range?{Range:range}:{}},signal});};
   return{...f,companyId,shareId,counts,hooks,own,providerFactory,access,request,get lastSignal(){return lastSignal;}};
  }
+ async function managedFixture(f:Awaited<ReturnType<typeof fixture>>){
+   const provisionId=randomUUID(),expiresAt=new Date(Date.now()+45000).toISOString(),configuration={version:1,companyId:f.companyId,projectIds:[f.projectId],sourceCommit:'b'.repeat(40),expiresAt,appOrigin:'https://coatria.com',host:'0.0.0.0',port:4190,maxTransfers:8,verifierConcurrency:1},preset={service:'gateway',companyId:f.companyId,projectIds:[f.projectId],releaseCommit:configuration.sourceCommit,expiresAt,configuration,configurationHash:trustedServiceHash(configuration)},plan={preset:{hash:trustedServiceHash(preset)}};
+   await db.query("INSERT INTO trusted_service_provisions(id,company_id,service,created_by,client_id,request_hash,preset,plan,plan_hash,pod_name,pod_id,expires_at,phase,provider_status,last_reconciled_at) VALUES($1,$2,'gateway',$3,$4,$5,$6,$7,$8,$9,$10,$11,'running','RUNNING',clock_timestamp())",[provisionId,f.companyId,users.owner,randomUUID(),'c'.repeat(64),JSON.stringify(preset),JSON.stringify(plan),trustedServiceHash(plan),'client-gateway-'+provisionId,provisionId.replaceAll('-',''),expiresAt]);
+   const identity:GatewayIdentity={version:1,companyId:f.companyId,projectIds:[f.projectId],provisionId,configurationHash:preset.configurationHash,sourceCommit:configuration.sourceCommit,expiresAt},member={companyId:f.companyId,userId:users.owner,role:'owner' as const,user:{id:users.owner,name:'Fixture',email:'fixture@example.invalid',roleTitle:'Owner',avatarColor:'#000000',avatarId:null,emailVerified:true}},managed=createProjectStorageGateway({providerFactory:f.providerFactory,allowedOrigins:[origin],scope:{companyId:f.companyId,projectIds:[f.projectId]},identity});
+   const transport:typeof fetch=(url,init)=>managed.handle(new Request(String(url),init));
+   const binding=(await transaction(c=>verifyAndBindProjectGateway(c,member,f.projectId,{provisionId,expectedBindingId:null},transport))).gateway!;
+   return {managed,binding,expiresAt,provisionId,member};
+ }
  async function activateRevision(f:Awaited<ReturnType<typeof fixture>>){
   const prefix=`companies/${f.companyId}/studio/projects/${f.projectId}`,portal='client-deliveries/'+f.shareId;
   const change=await call(portal+'/responses','POST',{clientId:randomUUID(),revision:1,decision:'changes_requested',note:'A separately approved correction is required.'},'client',201),share=(await db.query('SELECT package_hash FROM studio_client_deliveries WHERE id=$1',[f.shareId])).rows[0],unit=(await db.query('SELECT shot_id FROM studio_work_items WHERE id=$1',[f.workItemId])).rows[0];
@@ -79,6 +87,23 @@ test('external client gateway serves only approved exact versions through isolat
 
   await t.test('gateway readiness requires the storage baseline and external recipient migration',async()=>{
    gateway=createProjectStorageGateway();let r=await fetch(gatewayOrigin+'/health');assert.equal(r.status,503);await r.body?.cancel();await db.query("INSERT INTO schema_migrations(name) VALUES('027_project_storage.sql')");r=await fetch(gatewayOrigin+'/health');assert.equal(r.status,503);await r.body?.cancel();await db.query("INSERT INTO schema_migrations(name) VALUES('032_studio_generated_client_delivery.sql')");r=await fetch(gatewayOrigin+'/health');assert.equal(r.status,503);await r.body?.cancel();await db.query("INSERT INTO schema_migrations(name) VALUES('033_studio_generated_revisions.sql')");r=await fetch(gatewayOrigin+'/health');assert.equal(r.status,503);await r.body?.cancel();await db.query("INSERT INTO schema_migrations(name) VALUES('034_studio_coordinator_generation.sql')");r=await fetch(gatewayOrigin+'/health');assert.equal(r.status,503);await r.body?.cancel();await db.query("INSERT INTO schema_migrations(name) VALUES('035_trusted_services.sql'),('036_company_runtime_configuration.sql'),('037_project_gateway_bindings.sql')");r=await fetch(gatewayOrigin+'/health');assert.equal(r.status,200);assert.deepEqual(await r.json(),{service:'coatria-storage-gateway',status:'ready',schemaVersion:7});
+  });
+  await t.test('active deliveries retain managed and legacy CSP origins independently of revoked ordinary membership',async()=>{
+   // These real package/share/access services use synthetic stored bytes. The
+   // external download still requires no membership row, even a revoked one;
+   // CSP separately preserves the explicit active delivery branch.
+   for(const mode of ['managed','legacy'] as const){
+    const f=await fixture(),managed=mode==='managed'?await managedFixture(f):null,access=await f.access(),expectedOrigin=managed?.binding.origin??gatewayOrigin;
+    assert((await transaction(c=>verifiedGatewayOriginsForUser(c,users.client))).includes(expectedOrigin),mode);
+    const response=managed?await managed.managed.handle(new Request(access.url,{headers:access.headers})):await f.request(access);
+    assert.equal(response.status,200);assert.deepEqual(Buffer.from(await response.arrayBuffer()),f.body);
+    assert.equal((await db.query('SELECT count(*)::int AS count FROM memberships WHERE company_id=$1 AND user_id=$2',[f.companyId,users.client])).rows[0].count,0);
+    await db.query("INSERT INTO memberships(company_id,user_id,role,access_revoked_at) VALUES($1,$2,'member',clock_timestamp())",[f.companyId,users.client]);
+    assert((await transaction(c=>verifiedGatewayOriginsForUser(c,users.client))).includes(expectedOrigin),'An active delivery is an independent CSP grant.');
+    await assert.rejects(f.access(),(error:any)=>error.code==='CLIENT_STORAGE_UNAVAILABLE','The external-only download contract remains unchanged.');
+    await db.query("UPDATE studio_client_deliveries SET status='revoked',revision=revision+1,revoked_at=clock_timestamp() WHERE id=$1",[f.shareId]);
+    assert(!(await transaction(c=>verifiedGatewayOriginsForUser(c,users.client))).includes(expectedOrigin),'A revoked ordinary membership cannot retain the origin after its independent delivery ends.');
+   }
   });
   await t.test('image/video/audio exact range and full downloads use isolated capabilities after historical archive expiry',async()=>{
    for(const kind of['image','video','audio'] as const){const f=await fixture(kind),a=await f.access();assert.equal(a.transport,'project_storage');assert.equal(a.storageVersionId,f.versionId);assert.equal(a.sha256,f.fileHash);assert.equal(a.contentType,f.contentType);assert.equal(a.bytes,f.bytes);
@@ -107,11 +132,7 @@ test('external client gateway serves only approved exact versions through isolat
    const response=await scoped.handle(new Request(a.url,{headers:a.headers}));assert.equal(response.status,200);assert.deepEqual(Buffer.from(await response.arrayBuffer()),f.body);assert.equal(f.counts.get,1);assert.equal(f.counts.close,1);
   });
   await t.test('client grants pin a signed project gateway epoch, clamp expiry and stop on revoke',async()=>{
-   const f=await fixture(),provisionId=randomUUID(),expiresAt=new Date(Date.now()+45000).toISOString(),configuration={version:1,companyId:f.companyId,projectIds:[f.projectId],sourceCommit:'b'.repeat(40),expiresAt,appOrigin:'https://coatria.com',host:'0.0.0.0',port:4190,maxTransfers:8,verifierConcurrency:1},preset={service:'gateway',companyId:f.companyId,projectIds:[f.projectId],releaseCommit:configuration.sourceCommit,expiresAt,configuration,configurationHash:trustedServiceHash(configuration)},plan={preset:{hash:trustedServiceHash(preset)}};
-   await db.query("INSERT INTO trusted_service_provisions(id,company_id,service,created_by,client_id,request_hash,preset,plan,plan_hash,pod_name,pod_id,expires_at,phase,provider_status,last_reconciled_at) VALUES($1,$2,'gateway',$3,$4,$5,$6,$7,$8,$9,$10,$11,'running','RUNNING',clock_timestamp())",[provisionId,f.companyId,users.owner,randomUUID(),'c'.repeat(64),JSON.stringify(preset),JSON.stringify(plan),trustedServiceHash(plan),'client-gateway-'+provisionId,provisionId.replaceAll('-',''),expiresAt]);
-   const identity:GatewayIdentity={version:1,companyId:f.companyId,projectIds:[f.projectId],provisionId,configurationHash:preset.configurationHash,sourceCommit:configuration.sourceCommit,expiresAt},member={companyId:f.companyId,userId:users.owner,role:'owner' as const,user:{id:users.owner,name:'Fixture',email:'fixture@example.invalid',roleTitle:'Owner',avatarColor:'#000000',avatarId:null,emailVerified:true}},managed=createProjectStorageGateway({providerFactory:f.providerFactory,allowedOrigins:[origin],scope:{companyId:f.companyId,projectIds:[f.projectId]},identity});
-   const transport:typeof fetch=(url,init)=>managed.handle(new Request(String(url),init));
-   const binding=(await transaction(c=>verifyAndBindProjectGateway(c,member,f.projectId,{provisionId,expectedBindingId:null},transport))).gateway!;
+   const f=await fixture(),{managed,binding,expiresAt,provisionId,member}=await managedFixture(f);
    const access=await f.access(),row=(await db.query('SELECT service_binding_id,service_provision_id,expires_at FROM studio_client_storage_grants WHERE token_hash=$1',[hashToken(access.headers.Authorization.slice(7))])).rows[0];assert.equal(row.service_binding_id,binding.bindingId);assert.equal(row.service_provision_id,provisionId);assert(+new Date(row.expires_at)<=Date.parse(expiresAt));assert.equal(access.gatewayOrigin,binding.origin);
    const successful=await managed.handle(new Request(access.url,{headers:access.headers}));assert.equal(successful.status,200);assert.deepEqual(Buffer.from(await successful.arrayBuffer()),f.body);
    await transaction(c=>revokeProjectGateway(c,member,f.projectId,{bindingId:binding.bindingId}));const rejected=await managed.handle(new Request(access.url,{headers:access.headers}));assert.equal(rejected.status,403);assert.equal(f.counts.get,1);await assert.rejects(f.access());

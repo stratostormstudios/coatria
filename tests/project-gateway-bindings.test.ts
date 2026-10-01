@@ -13,6 +13,7 @@ import {verifyAndBindProjectGateway,verifiedProjectGateway,resolveProjectGateway
 import {createProjectStorageConnection,bindProjectStorage,reserveProjectStorageUpload} from '../src/lib/project-storage';
 import {projectStorageTransfer} from '../src/lib/project-storage-transfer';
 import {hashToken} from '../src/lib/security';
+import {openImagePreparationServiceDatabase,imagePreparationServiceFixture} from './fixtures/image-preparation-service';
 
 const keyring=JSON.stringify({activeKeyId:'test-gateway',keys:{'test-gateway':Buffer.alloc(32,47).toString('base64')}});
 const baseIdentity=():GatewayIdentity=>({version:1,companyId:randomUUID(),projectIds:[randomUUID()],provisionId:randomUUID(),configurationHash:'a'.repeat(64),sourceCommit:'b'.repeat(40),expiresAt:new Date(Date.now()+600000).toISOString()});
@@ -59,4 +60,51 @@ test('project routes require a real signed HTTP handshake; epochs stop both toke
   active=b.identity;const bound=(await verifyAndBindProjectGateway(client,b.member,b.projectId,{provisionId:b.provisionId,expectedBindingId:null},transport)).gateway!;await db.query("UPDATE project_gateway_bindings SET expires_at=verified_at+interval '1 millisecond' WHERE id=$1",[bound.bindingId]);await new Promise(resolve=>setTimeout(resolve,5));assert.equal(await verifiedProjectGateway(client,b.companyId,b.projectId),null);
   const row=(await db.query<Record<string,any>>('SELECT * FROM trusted_service_provisions WHERE id=$1',[a.provisionId])).rows[0];assert.equal(projectGatewayServiceIdentity({...row,last_reconciled_at:new Date(Date.now()-120001)},a.projectId,Date.now()),null);
  }finally{if(server)await new Promise<void>(resolve=>server!.close(()=>resolve()));await db.close();for(const[k,v]of Object.entries(env)){if(v===undefined)delete process.env[k];else process.env[k]=v;}}
+});
+
+
+// Reuse only synthetic relational source/gateway metadata; no processor is
+// enrolled and no source bytes or live provider are contacted in these checks.
+test('timestamp-only gateway sponsor revocation stops resolution, grants and CSP without legacy fallback',{timeout:120000},async()=>{
+ const database=await openImagePreparationServiceDatabase(),prior={COATRIA_STORAGE_GATEWAY_ENABLED:process.env.COATRIA_STORAGE_GATEWAY_ENABLED,COATRIA_STORAGE_GATEWAY_URL:process.env.COATRIA_STORAGE_GATEWAY_URL};
+ process.env.COATRIA_STORAGE_GATEWAY_ENABLED='true';process.env.COATRIA_STORAGE_GATEWAY_URL='https://legacy.example.invalid';
+ try{
+  for(const principal of ['provisionSponsorId','verifierId'] as const){
+   const f=await database.tx(db=>imagePreparationServiceFixture(db,{enroll:false,propose:false,preparationGateway:false,distinctGatewayPrincipals:true}));
+   assert.notEqual(f.userId,f.gateway[principal]);assert.notEqual(f.gateway.provisionSponsorId,f.gateway.verifierId);
+   const grant={company_id:f.companyId,project_id:f.projectId,service_binding_id:f.gateway.bindingId,service_provision_id:f.gateway.provisionId};
+   const identity:GatewayIdentity={version:1,companyId:f.companyId,projectIds:[f.projectId],provisionId:f.gateway.provisionId,configurationHash:f.gateway.configurationHash,sourceCommit:'b'.repeat(40),expiresAt:f.gateway.expiresAt};
+   assert.equal((await verifiedProjectGateway(database.db,f.companyId,f.projectId))?.origin,f.gateway.origin);
+   assert.equal((await resolveProjectGateway(database.db,f.companyId,f.projectId))?.origin,f.gateway.origin);
+   assert.deepEqual(await verifiedGatewayOriginsForUser(database.db,f.userId),[f.gateway.origin]);
+   await authorizeProjectGatewayGrant(database.db,grant,identity);
+   await database.db.query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[f.companyId,f.gateway[principal]]);
+   assert.equal((await database.db.query('SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2',[f.companyId,f.gateway[principal]])).rows[0].role,'admin');
+   assert.equal(await verifiedProjectGateway(database.db,f.companyId,f.projectId),null,principal);
+   assert.equal(await resolveProjectGateway(database.db,f.companyId,f.projectId),null,'Historical managed routing must not fall back to the legacy endpoint.');
+   assert.deepEqual(await verifiedGatewayOriginsForUser(database.db,f.userId),[],principal);
+   await assert.rejects(authorizeProjectGatewayGrant(database.db,grant,identity),(error:any)=>error.code==='STORAGE_ACCESS_DENIED');
+   await assert.rejects(authorizeProjectGatewayGrant(database.db,{...grant,service_binding_id:null,service_provision_id:null}),(error:any)=>error.code==='STORAGE_ACCESS_DENIED');
+   if(principal==='provisionSponsorId'){
+    let calls=0;const member={companyId:f.companyId,userId:f.userId,role:'owner' as const,user:{id:f.userId,name:'Fixture',email:'fixture@example.invalid',roleTitle:'Owner',avatarColor:'#000000',avatarId:null,emailVerified:true}};
+    await assert.rejects(database.tx(db=>verifyAndBindProjectGateway(db,member,f.projectId,{provisionId:f.gateway.provisionId,expectedBindingId:null},async()=>{calls++;return new Response('{}');})),(error:any)=>error.code==='STORAGE_GATEWAY_UNAVAILABLE');assert.equal(calls,0,'Revoked provisioning authority is denied before the signed handshake.');
+   }
+  }
+ }finally{await database.close();for(const[key,value]of Object.entries(prior)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
+});
+
+test('timestamp-only ordinary membership revocation removes managed and legacy CSP origins',{timeout:120000},async()=>{
+ const database=await openImagePreparationServiceDatabase(),prior={COATRIA_STORAGE_GATEWAY_ENABLED:process.env.COATRIA_STORAGE_GATEWAY_ENABLED,COATRIA_STORAGE_GATEWAY_URL:process.env.COATRIA_STORAGE_GATEWAY_URL};
+ process.env.COATRIA_STORAGE_GATEWAY_ENABLED='true';process.env.COATRIA_STORAGE_GATEWAY_URL='https://legacy.example.invalid';
+ try{
+  const f=await database.tx(db=>imagePreparationServiceFixture(db,{enroll:false,propose:false,preparationGateway:false,distinctGatewayPrincipals:true})),viewer=randomUUID(),legacyProject=randomUUID();
+  await database.db.query("INSERT INTO users(id,name,email,password_hash) VALUES($1,'Ordinary gateway viewer',$2,'fixture')",[viewer,viewer+'@example.invalid']);
+  await database.db.query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'member')",[f.companyId,viewer]);
+  await database.db.query("INSERT INTO studio_projects(id,company_id,name,client_name,brief,spec,ai_policy,production_path,created_by) SELECT $1,company_id,'Legacy project',client_name,brief,spec,ai_policy,production_path,created_by FROM studio_projects WHERE id=$2",[legacyProject,f.projectId]);
+  assert.deepEqual(await verifiedGatewayOriginsForUser(database.db,viewer),[f.gateway.origin,'https://legacy.example.invalid'].sort());
+  await database.db.query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[f.companyId,viewer]);
+  assert.equal((await database.db.query('SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2',[f.companyId,viewer])).rows[0].role,'member');
+  assert.deepEqual(await verifiedGatewayOriginsForUser(database.db,viewer),[]);
+  assert(await verifiedProjectGateway(database.db,f.companyId,f.projectId),'Revoking an unrelated viewer does not revoke the gateway sponsors.');
+ }finally{await database.close();for(const[key,value]of Object.entries(prior)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
 });

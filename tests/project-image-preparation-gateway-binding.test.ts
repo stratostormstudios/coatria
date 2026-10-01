@@ -36,9 +36,9 @@ test('preparation gateway authority rejects independent timestamp-revoked verifi
    await database.db.query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[fixture.companyId,fixture.gateway[principal]]);
    assert.equal((await database.db.query('SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2',[fixture.companyId,fixture.gateway[principal]])).rows[0].role,'admin');
    assert.equal((await database.db.query('SELECT access_revoked_at FROM memberships WHERE company_id=$1 AND user_id=$2',[fixture.companyId,fixture.userId])).rows[0].access_revoked_at,null);
-   // The generic legacy resolver still sees a live admin role. The image-only
-   // wrapper must independently fence revocation of this different principal.
-   assert(await database.tx(db=>verifiedProjectGateway(db,fixture.companyId,fixture.projectId)));
+   // Both shared lookup and the image wrapper reject this distinct sponsor.
+   // The wrapper retains its stronger ordered membership locks and recheck.
+   assert.equal(await database.tx(db=>verifiedProjectGateway(db,fixture.companyId,fixture.projectId)),null);
    assert.equal(await database.tx(db=>verifiedImagePreparationGateway(db,fixture.companyId,fixture.projectId)),null);
   }
   await assert.rejects(database.tx(db=>enrollImagePreparationService(db,unregistered.enrollment)),{code:'IMAGE_PREPARATION_ENROLLMENT_GATEWAY_CHANGED'});
