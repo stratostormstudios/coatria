@@ -20,7 +20,7 @@ test('unconfigured deployments expose setup state and never accept accounts or f
 
 test('readiness requires every current migration, including archive and generated-media schemas',async()=>{
  const previous=process.env.DATABASE_URL,pool=(globalThis as any).coatriaPool,files=(await readdir('database')).filter(name=>/^\d.*\.sql$/.test(name)).sort();
- let missing:string|null='049_studio_reference_generation_continuations.sql',requested:string[]=[];process.env.DATABASE_URL='postgresql://fixture.invalid/not-used';
+ let missing:string|null='050_project_image_preparation_services.sql',requested:string[]=[];process.env.DATABASE_URL='postgresql://fixture.invalid/not-used';
  (globalThis as any).coatriaPool={query:async(sql:string,values?:unknown[])=>{
   if(sql==='SELECT 1')return {rows:[{}]};
   assert.match(sql,/schema_migrations/);requested=[...(values![0] as string[])].sort();
@@ -29,10 +29,10 @@ test('readiness requires every current migration, including archive and generate
   return {rows:files.filter(name=>name!==missing&&requested.includes(name)).map(name=>({name}))};
  }};
  try{
-  const at48=await health();assert.equal(at48.status,503,'Schema 48 cannot serve reference-generation continuation code');
-  assert.deepEqual(await at48.json(),{status:'setup_required',configured:true});assert.deepEqual(requested,files);
+  const at49=await health();assert.equal(at49.status,503,'Schema 49 cannot serve hosted image-preparation service code');
+  assert.deepEqual(await at49.json(),{status:'setup_required',configured:true});assert.deepEqual(requested,files);
   for(const name of files){missing=name;assert.equal((await health()).status,503,`${name} must be present before readiness`);}
-  missing=null;const at49=await health();assert.equal(at49.status,200);assert.deepEqual(await at49.json(),{status:'ready',configured:true});
+  missing=null;const at50=await health();assert.equal(at50.status,200);assert.deepEqual(await at50.json(),{status:'ready',configured:true});
  }
  finally{if(previous===undefined)delete process.env.DATABASE_URL;else process.env.DATABASE_URL=previous;if(pool===undefined)delete(globalThis as any).coatriaPool;else(globalThis as any).coatriaPool=pool;}
 });
