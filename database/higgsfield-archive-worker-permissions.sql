@@ -20,7 +20,7 @@ $archive_grants$;
 GRANT USAGE ON SCHEMA public TO coatria_higgsfield_archive_worker_v1;
 GRANT SELECT ON schema_migrations TO coatria_higgsfield_archive_worker_v1;
 GRANT SELECT(id) ON companies TO coatria_higgsfield_archive_worker_v1;
-GRANT SELECT(company_id,user_id,role) ON memberships TO coatria_higgsfield_archive_worker_v1;
+GRANT SELECT(company_id,user_id,role,access_revoked_at) ON memberships TO coatria_higgsfield_archive_worker_v1;
 GRANT SELECT(id,company_id,revision,status,ai_policy,gates,production_path) ON studio_projects TO coatria_higgsfield_archive_worker_v1;
 GRANT SELECT(company_id,role_key,agent_id,human_id) ON studio_role_bindings TO coatria_higgsfield_archive_worker_v1;
 GRANT SELECT(id,company_id,project_id,task_id,role_key,stage,execution) ON studio_work_items TO coatria_higgsfield_archive_worker_v1;

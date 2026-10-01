@@ -7,6 +7,9 @@ import {memberMutation} from './company';
 import {ApiError,assertOrigin,body,fail,hashToken,id,json,rateLimit} from './security';
 import {canonicalStudioMedia,createStudioMediaProvider,type StudioMediaProvider} from './studio-media';
 import {studioProjectDetail} from './studio';
+import {buildGeneratedClientPackage,validateGeneratedClientPackage} from './studio-generated-client-package';
+import {issueStudioClientStorageAccess} from './studio-client-storage';
+import {assertGeneratedDeliveryCurrent} from './studio-generated-rounds';
 import {STUDIO_CLIENT_DELIVERY_MAX_DAYS,STUDIO_CLIENT_DELIVERY_MAX_FILES,studioClientDeliveryCreateInput,studioClientDeliveryRevokeInput,studioClientDeliveryAccessInput,studioClientDeliveryResponseInput,studioClientDeliveryListInput,type StudioClientPackage,type StudioClientDeliveryFile} from './studio-client-delivery-protocol';
 
 type Row=Record<string,any>;
@@ -59,12 +62,16 @@ async function activeGrant(client:PoolClient,user:User,shareId:string,options:{w
  if(options.project)await client.query('SELECT id FROM studio_projects WHERE company_id=$1 AND id=$2 FOR UPDATE',[located.company_id,located.project_id]);
  const grant=(await client.query(`SELECT * FROM studio_client_deliveries WHERE id=$1 AND recipient_user_id=$2 FOR ${options.write?'UPDATE':'SHARE'}`,[shareId,user.id])).rows[0];
  if(!grant||grant.status!=='active')fail(410,'This client delivery access has expired or been revoked.','CLIENT_GRANT_UNAVAILABLE');
+ const project=(await client.query('SELECT contract_version FROM studio_projects WHERE company_id=$1 AND id=$2',[grant.company_id,grant.project_id])).rows[0];
+ if(project?.contract_version===2||grant.package_snapshot?.schemaVersion===2)await validateGeneratedClientPackage(client,grant,{requireReady:false,requireAvailable:false});
  await assertGrantDeadline(client,shareId);
  return grant;
 }
 async function eligibleDelivery(client:PoolClient,companyId:string,projectId:string,deliveryId:string){
  const delivery=(await client.query('SELECT * FROM studio_deliveries WHERE company_id=$1 AND project_id=$2 AND id=$3',[companyId,projectId,deliveryId])).rows[0];if(!delivery)fail(404,'Delivery package not found.');
- const detail=await studioProjectDetail(client,companyId,projectId);
+ const project=(await client.query('SELECT contract_version,status,gates FROM studio_projects WHERE company_id=$1 AND id=$2',[companyId,projectId])).rows[0];
+ if(project?.contract_version===2){const scope=await assertGeneratedDeliveryCurrent(client,companyId,projectId,deliveryId),tasks=(await client.query('SELECT w.id,t.status FROM studio_work_items w JOIN tasks t ON t.company_id=w.company_id AND t.id=w.task_id WHERE w.company_id=$1 AND w.project_id=$2 AND w.id=ANY($3::uuid[])',[companyId,projectId,scope.workItemIds])).rows;if(project.gates?.production?.decision!=='approved'||tasks.length!==scope.workItemIds.length||tasks.some(task=>task.status!=='done'))fail(409,'Production and independent delivery-handoff review must be complete before client delivery.','CLIENT_DELIVERY_NOT_READY');return {delivery,detail:{project}};}
+ const detail=await studioProjectDetail(client,companyId,projectId,project?.contract_version===2?2:1);
  if(detail.project.gates.production?.decision!=='approved'||detail.workItems.some(work=>work.status!=='done'))fail(409,'Production and independent delivery-handoff review must be complete before client delivery.','CLIENT_DELIVERY_NOT_READY');
  const selected=delivery.manifest?.artifacts;
  if(!Array.isArray(selected)||!selected.length||selected.length>100||new Set(selected.map((a:Row)=>a.id)).size!==selected.length)fail(409,'This delivery package has no valid approved artifact snapshot.','CLIENT_PACKAGE_UNAVAILABLE');
@@ -98,18 +105,19 @@ async function packageSnapshot(client:PoolClient,companyId:string,projectId:stri
 async function createShare(client:PoolClient,companyId:string,actorId:string,projectId:string,data:z.infer<typeof studioClientDeliveryCreateInput>){
  const recipient=await externalAccount(client,companyId,data.recipientUserId);
  const result=await once(client,companyId,actorId,data.clientId,'create:'+projectId,data,async()=>{
-  const project=(await client.query('SELECT revision,status,created_by FROM studio_projects WHERE company_id=$1 AND id=$2 FOR UPDATE',[companyId,projectId])).rows[0];if(!project)fail(404,'Studio project not found.');if(project.revision!==data.revision)fail(409,'The studio project changed. Refresh before sharing.','STUDIO_REVISION_CONFLICT');
+  const project=(await client.query('SELECT revision,status,created_by,contract_version FROM studio_projects WHERE company_id=$1 AND id=$2 FOR UPDATE',[companyId,projectId])).rows[0];if(!project)fail(404,'Studio project not found.');if(project.revision!==data.revision)fail(409,'The studio project changed. Refresh before sharing.','STUDIO_REVISION_CONFLICT');
   if(project.status==='delivered')fail(409,'Create follow-up work for a project already accepted by the client.','CLIENT_DELIVERY_CLOSED');
   await assertClientExpiry(client,data.expiresAt);
   if(data.recipientUserId===actorId||data.recipientUserId===project.created_by)fail(403,'The studio operator cannot act as the external client.','CLIENT_IDENTITY_REQUIRED');
   if(Number((await client.query('SELECT count(*) FROM studio_client_deliveries WHERE company_id=$1 AND project_id=$2',[companyId,projectId])).rows[0].count)>=100)fail(409,'This project reached its client invitation limit.');
   const {delivery}=await eligibleDelivery(client,companyId,projectId,data.deliveryId);if(delivery.status!=='prepared')fail(409,'Use an unacknowledged delivery package.','CLIENT_DELIVERY_CLOSED');
-  const snapshot=await packageSnapshot(client,companyId,projectId,delivery,data.recipientUserId),shareId=randomUUID();
+  const snapshot=project.contract_version===2?await buildGeneratedClientPackage(client,companyId,projectId,delivery,data.recipientUserId):await packageSnapshot(client,companyId,projectId,delivery,data.recipientUserId),shareId=randomUUID();
   const saved=await client.query("WITH instant AS MATERIALIZED (SELECT clock_timestamp() AS at) INSERT INTO studio_client_deliveries(id,company_id,project_id,delivery_id,recipient_user_id,recipient_name,identity_basis,email_verified_at_creation,created_by,expires_at,source_manifest_hash,package_hash,package_snapshot,created_at) SELECT $1,$2,$3,$4,$5,$6,'account_confirmed_out_of_band',$7,$8,$9,$10,$11,$12,instant.at FROM instant WHERE $9::timestamptz>instant.at AND $9::timestamptz<=instant.at+($13::int*86400*interval '1 second')",[shareId,companyId,projectId,delivery.id,recipient.id,recipient.name,recipient.verified,actorId,data.expiresAt,snapshot.sourceManifestSha256,digest(snapshot),JSON.stringify(snapshot),STUDIO_CLIENT_DELIVERY_MAX_DAYS]);
   if(!saved.rowCount)fail(400,'Client access must expire within 30 days.','CLIENT_EXPIRY_INVALID');
-  await client.query('INSERT INTO studio_client_delivery_files(company_id,project_id,share_id,file_id,artifact_id) SELECT $1,$2,$3,files.file_id,files.artifact_id FROM unnest($4::uuid[],$5::uuid[]) AS files(file_id,artifact_id)',[companyId,projectId,shareId,snapshot.files.map(file=>file.fileId),snapshot.files.map(file=>file.artifactId)]);
+  if(snapshot.schemaVersion===2)await client.query('INSERT INTO studio_client_delivery_files(company_id,project_id,share_id,file_id,artifact_id,storage_version_id,storage_sha256,storage_bytes,storage_content_type,storage_name,review_id) SELECT $1,$2,$3,f.version_id,f.artifact_id,f.version_id,f.sha256,f.bytes,f.content_type,f.name,f.review_id FROM unnest($4::uuid[],$5::uuid[],$6::text[],$7::bigint[],$8::text[],$9::text[],$10::uuid[]) AS f(version_id,artifact_id,sha256,bytes,content_type,name,review_id)',[companyId,projectId,shareId,snapshot.files.map(f=>f.storageVersionId),snapshot.files.map(f=>f.artifactId),snapshot.files.map(f=>f.sha256),snapshot.files.map(f=>f.bytes),snapshot.files.map(f=>f.contentType),snapshot.files.map(f=>f.path),snapshot.files.map(f=>delivery.manifest.reviewReceipts.find((r:Row)=>r.artifactId===f.artifactId).id)]);
+  else await client.query('INSERT INTO studio_client_delivery_files(company_id,project_id,share_id,file_id,artifact_id) SELECT $1,$2,$3,files.file_id,files.artifact_id FROM unnest($4::uuid[],$5::uuid[]) AS files(file_id,artifact_id)',[companyId,projectId,shareId,snapshot.files.map(file=>file.fileId),snapshot.files.map(file=>file.artifactId)]);
   await client.query('INSERT INTO activity(company_id,actor_id,kind,description) VALUES($1,$2,$3,$4)',[companyId,actorId,'studio.client_access_created','An administrator granted one externally confirmed client account access to an exact approved package. No invitation was sent and no download was observed.']);return {shareId};
- });return {share:await shareView(client,companyId,result.shareId),replayed:result.replayed};
+ });const grant=(await client.query('SELECT * FROM studio_client_deliveries WHERE company_id=$1 AND id=$2',[companyId,result.shareId])).rows[0];if(grant?.package_snapshot?.schemaVersion===2){await assertGeneratedDeliveryCurrent(client,companyId,projectId,grant.delivery_id);await validateGeneratedClientPackage(client,grant,{requireReady:false,requireAvailable:false});}return {share:await shareView(client,companyId,result.shareId),replayed:result.replayed};
 }
 export async function studioClientDeliveryList(client:PoolClient,companyId:string,projectId:string,input:z.infer<typeof studioClientDeliveryListInput>){
  if(!(await client.query('SELECT id FROM studio_projects WHERE company_id=$1 AND id=$2',[companyId,projectId])).rowCount)fail(404,'Studio project not found.');
@@ -127,17 +135,19 @@ async function detail(client:PoolClient,user:User,shareId:string,input:z.infer<t
  if(input.after&&!(await client.query('SELECT id FROM studio_client_delivery_receipts WHERE company_id=$1 AND share_id=$2 AND id=$3',[grant.company_id,grant.id,input.after])).rowCount)fail(404,'Receipt page cursor not found.');
  const rows=(await client.query('SELECT id,kind,actor_user_id AS "actorUserId",file_id AS "fileId",note,package_hash AS "packageSha256",created_at AS "createdAt" FROM studio_client_delivery_receipts WHERE company_id=$1 AND share_id=$2 AND ($3::uuid IS NULL OR id>$3) ORDER BY id LIMIT $4',[grant.company_id,grant.id,input.after??null,input.limit+1])).rows;
  let responseBlockedReason:string|null=share.response!=='awaiting_response'?'Your response to this exact package is already recorded. Ask the studio for a new version if further changes are needed.':null;
- if(!responseBlockedReason){try{const ready=await eligibleDelivery(client,grant.company_id,grant.project_id,grant.delivery_id);if(ready.detail.project.status==='delivered')responseBlockedReason='This project already has recorded acceptance. Ask the studio for follow-up work.';}catch(error){if(!(error instanceof ApiError)||error.status>=500)throw error;responseBlockedReason=error.message;}}
+ if(!responseBlockedReason){try{if(grant.package_snapshot?.schemaVersion===2)await validateGeneratedClientPackage(client,grant);const ready=await eligibleDelivery(client,grant.company_id,grant.project_id,grant.delivery_id);if(ready.detail.project.status==='delivered')responseBlockedReason='This project already has recorded acceptance. Ask the studio for follow-up work.';}catch(error){if(!(error instanceof ApiError)||error.status>=500)throw error;responseBlockedReason=error.message;}}
  await assertGrantDeadline(client,grant.id);
  return {share,package:grant.package_snapshot,receipts:rows.slice(0,input.limit),receiptPage:{hasMore:rows.length>input.limit,nextAfter:rows.length>input.limit?rows[input.limit-1].id:null,limit:input.limit},canRespond:responseBlockedReason===null,responseBlockedReason,identity:{userId:user.id,name:user.name,emailVerified:user.emailVerified}};
 }
 async function recordClientResponse(client:PoolClient,user:User,shareId:string,data:z.infer<typeof studioClientDeliveryResponseInput>){
  const grant=await activeGrant(client,user,shareId,{write:true,project:true});
+ if(grant.package_snapshot?.schemaVersion===2)await assertGeneratedDeliveryCurrent(client,grant.company_id,grant.project_id,grant.delivery_id);
  const response=await once(client,grant.company_id,user.id,data.clientId,'respond:'+shareId,data,async()=>{
   if(grant.revision!==data.revision)fail(409,'Client delivery access changed. Refresh before responding.','CLIENT_DELIVERY_REVISION_CONFLICT');
   if((await client.query("SELECT id FROM studio_client_delivery_receipts WHERE company_id=$1 AND share_id=$2 AND kind IN ('acknowledged','changes_requested')",[grant.company_id,grant.id])).rowCount)fail(409,'Your response to this package is already recorded.','CLIENT_RESPONSE_RECORDED');
   const project=(await client.query('SELECT * FROM studio_projects WHERE company_id=$1 AND id=$2',[grant.company_id,grant.project_id])).rows[0];
   if(project.status==='delivered')fail(409,'A client acceptance is already recorded for this project. Ask the studio for follow-up work.','CLIENT_DELIVERY_CLOSED');
+  if(grant.package_snapshot?.schemaVersion===2)await validateGeneratedClientPackage(client,grant);
   const {delivery}=await eligibleDelivery(client,grant.company_id,grant.project_id,grant.delivery_id);if(digest(delivery.manifest)!==grant.source_manifest_hash)fail(409,'This package no longer matches its immutable invitation snapshot.','CLIENT_PACKAGE_UNAVAILABLE');
   const result=await receipt(client,grant,user.id,data.decision,data.note),gate={decision:data.decision==='acknowledged'?'approved':'changes_requested',note:data.note,recordedBy:user.id,at:new Date().toISOString(),deliveryId:grant.delivery_id,source:'authenticated_external_client',clientDeliveryId:grant.id,clientReceiptId:result.id,packageSha256:grant.package_hash};
   await client.query('INSERT INTO studio_gate_events(company_id,project_id,gate,decision,note,recorded_by,delivery_id) VALUES($1,$2,$3,$4,$5,$6,$7)',[grant.company_id,grant.project_id,'client_acceptance',gate.decision,data.note,user.id,grant.delivery_id]);
@@ -175,10 +185,19 @@ export async function studioClientDeliveryRoute(request:Request,parts:string[],m
  }
  if(parts.length===5&&parts[2]==='files'&&parts[4]==='access'&&method==='POST'){
   const fileId=id(parts[3]),data=await body(request,studioClientDeliveryAccessInput);await rateLimit(`client-delivery-file:${user.id}`,120,60);
-  const prepared=await transaction(async client=>{const grant=await activeGrant(client,user,shareId);const file=(await client.query('SELECT f.* FROM studio_client_delivery_files g JOIN studio_media_files f ON f.company_id=g.company_id AND f.id=g.file_id JOIN studio_media_verifications v ON v.company_id=f.company_id AND v.file_id=f.id AND v.sha256=f.sha256 AND v.bytes=f.bytes WHERE g.company_id=$1 AND g.share_id=$2 AND g.file_id=$3',[grant.company_id,grant.id,fileId])).rows[0];if(!file)fail(404,'This file is not in your approved delivery package.');const window=(await client.query("SELECT floor(extract(epoch FROM LEAST(expires_at,clock_timestamp()+interval '60 seconds'))*1000)::float8 AS expires_ms FROM studio_client_deliveries WHERE id=$1",[grant.id])).rows[0];await assertGrantDeadline(client,grant.id,window.expires_ms);return {file,expiresAt:window.expires_ms as number};});
-  let url:string;try{url=await provider.signRead(prepared.file.blob_pathname,prepared.expiresAt);}catch{fail(503,'Private file access is temporarily unavailable. Retry without changing the package.','CLIENT_MEDIA_UNAVAILABLE');}
-  const result=await transaction(async client=>{const grant=await activeGrant(client,user,shareId,{write:true});await assertGrantDeadline(client,grant.id,prepared.expiresAt);const result=await once(client,grant.company_id,user.id,data.clientId,'file:'+shareId+':'+fileId,data,async()=>({receipt:await receipt(client,grant,user.id,'download_access_issued',null,fileId)}));await assertGrantDeadline(client,grant.id,prepared.expiresAt);return result;});
-  return json({...result,access:{url,expiresAt:new Date(prepared.expiresAt).toISOString(),status:'download_access_issued',bytesReceivedByClient:'not_observed'}},200,{'Referrer-Policy':'no-referrer'});
+  const prepared=await transaction(async client=>{const grant=await activeGrant(client,user,shareId,{write:true,project:true});
+   if(grant.package_snapshot?.schemaVersion===2){
+    await validateGeneratedClientPackage(client,grant);
+    const file=(await client.query('SELECT file_id FROM studio_client_delivery_files WHERE company_id=$1 AND share_id=$2 AND file_id=$3 AND storage_version_id=$3',[grant.company_id,grant.id,fileId])).rows[0];if(!file)fail(404,'This file is not in your approved delivery package.');
+    const result=await once(client,grant.company_id,user.id,data.clientId,'file:'+shareId+':'+fileId,data,async()=>({receipt:await receipt(client,grant,user.id,'download_access_issued',null,fileId)}));
+    const access=await issueStudioClientStorageAccess(client,{shareId:grant.id,recipientUserId:user.id,versionId:fileId});await assertGrantDeadline(client,grant.id,Date.parse(access.expiresAt));return {transport:'generated' as const,payload:{...result,access}};
+   }
+   const file=(await client.query('SELECT f.* FROM studio_client_delivery_files g JOIN studio_media_files f ON f.company_id=g.company_id AND f.id=g.file_id JOIN studio_media_verifications v ON v.company_id=f.company_id AND v.file_id=f.id AND v.sha256=f.sha256 AND v.bytes=f.bytes WHERE g.company_id=$1 AND g.share_id=$2 AND g.file_id=$3',[grant.company_id,grant.id,fileId])).rows[0];if(!file)fail(404,'This file is not in your approved delivery package.');const window=(await client.query("SELECT floor(extract(epoch FROM LEAST(expires_at,clock_timestamp()+interval '60 seconds'))*1000)::float8 AS expires_ms FROM studio_client_deliveries WHERE id=$1",[grant.id])).rows[0];await assertGrantDeadline(client,grant.id,window.expires_ms);return {transport:'legacy' as const,file,expiresAt:window.expires_ms as number};});
+  if(prepared.transport==='generated')return json(prepared.payload,200,{'Referrer-Policy':'no-referrer'});
+  const {file,expiresAt}=prepared;
+  let url:string;try{url=await provider.signRead(file.blob_pathname,expiresAt);}catch{fail(503,'Private file access is temporarily unavailable. Retry without changing the package.','CLIENT_MEDIA_UNAVAILABLE');}
+  const result=await transaction(async client=>{const grant=await activeGrant(client,user,shareId,{write:true});await assertGrantDeadline(client,grant.id,expiresAt);const result=await once(client,grant.company_id,user.id,data.clientId,'file:'+shareId+':'+fileId,data,async()=>({receipt:await receipt(client,grant,user.id,'download_access_issued',null,fileId)}));await assertGrantDeadline(client,grant.id,expiresAt);return result;});
+  return json({...result,access:{url,expiresAt:new Date(expiresAt).toISOString(),status:'download_access_issued',bytesReceivedByClient:'not_observed'}},200,{'Referrer-Policy':'no-referrer'});
  }
  if(parts.length===3&&parts[2]==='responses'&&method==='POST'){const data=await body(request,studioClientDeliveryResponseInput),result=await transaction(client=>recordClientResponse(client,user,shareId,data));return json(result,result.replayed?200:201);}
  return null;

@@ -10,6 +10,8 @@ Approval covers an explicit subset of `estimate`, `breakdown`, and `ingest`, onl
 
 The policy expires within 24 hours and permits 1–100 reviewer runs over its lifetime. The counter is reserved in the same transaction that creates the reviewer request. Failed, cancelled, and uncertain attempts remain charged to that **number-of-runs** allowance; it is not a dollar budget. Reapproval never resets usage. Reviewer requests have one attempt, with no automatic inference retry after failure or lease expiry. This allowance is separate from the specialist coordination allowance and the coordinator's own inference limits.
 
+Each newly dispatched reviewer run is restricted to `studio.review`, exposing only `studio_review_read` and `studio_review_decide`. The installation retains its approved grants, but the child run cannot use unrelated studio tools. This limits authority and model context without increasing the configured token budget.
+
 The default disallows a reviewer with the same human sponsor as the producing agent, or whose sponsor previously authored the task. An administrator may explicitly enable `allowSharedSponsor` for machine review. This never permits the same agent to review its own current or historical contribution, and never represents the result as independent human review.
 
 ## Exact submission and outcome

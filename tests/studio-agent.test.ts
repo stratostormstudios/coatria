@@ -11,7 +11,7 @@ import {agentRuntimeOpenApi} from '../src/lib/agent-runtime-openapi';
 import {handleApi} from '../src/lib/api';
 import {database,query} from '../src/lib/db';
 import {hashToken} from '../src/lib/security';
-import {studioSetupInput,studioProjectInput,studioProjectPatchInput,studioDispatchInput,studioGateInput,studioArtifactInput,studioReviewInput,studioDeliveryInput} from '../src/lib/studio-protocol';
+import {studioSetupInput,studioVersionedProjectInput,studioProjectPatchInput,studioDispatchInput,studioGateInput,studioArtifactInput,studioReviewInput,studioDeliveryInput} from '../src/lib/studio-protocol';
 
 const plan={name:'Synthetic studio project',clientName:'Fixture client',brief:'Prepare a governed two-frame compositing plan.',spec:{width:1920,height:1080,fpsNumerator:24,fpsDenominator:1,format:'exr',colorSpace:'ACEScg'},shots:[{code:'SH010',description:'Synthetic plate with a reviewed composite.',frameStart:1001,frameEnd:1002,disciplines:['compositing']}]} as const;
 const artifact={projectId:randomUUID(),revision:1,workItemId:randomUUID(),name:'Fixture composite',url:'https://example.invalid/fixture.exr',sha256:'a'.repeat(64),frameStart:1001,frameEnd:1002,width:1920,height:1080,fpsNumerator:24,fpsDenominator:1,colorSpace:'ACEScg',format:'exr'};
@@ -46,11 +46,11 @@ test('studio OpenAPI retains leases and explicitly disclaims agent approval auth
 
 test('human studio administration uses the shared strict schemas and never accepts agent credentials for approval or worker dispatch',()=>{
  const spec:any=agentRuntimeOpenApi,base='/api/companies/{companyId}/studio',project=base+'/projects/{projectId}';
- for(const[path,method,schema]of [[base+'/setup','post',studioSetupInput],[base+'/projects','post',studioProjectInput],[project,'patch',studioProjectPatchInput],[project+'/dispatch','post',studioDispatchInput],[project+'/gates','post',studioGateInput],[project+'/artifacts','post',studioArtifactInput],[project+'/reviews','post',studioReviewInput],[project+'/deliveries','post',studioDeliveryInput]]as const){
+ for(const[path,method,schema]of [[base+'/setup','post',studioSetupInput],[base+'/projects','post',studioVersionedProjectInput],[project,'patch',studioProjectPatchInput],[project+'/dispatch','post',studioDispatchInput],[project+'/gates','post',studioGateInput],[project+'/artifacts','post',studioArtifactInput],[project+'/reviews','post',studioReviewInput],[project+'/deliveries','post',studioDeliveryInput]]as const){
   const operation=spec.paths[path][method],body=operation.requestBody.content['application/json'].schema;
-  assert.deepEqual(body,z.toJSONSchema(schema,{io:'input',unrepresentable:'any'}) as any);assert.equal(body.additionalProperties,false);assert(body.required.includes('clientId'));
+  assert.deepEqual(body,z.toJSONSchema(schema,{io:'input',unrepresentable:'any'}) as any);const variants=body.anyOf??[body];for(const variant of variants){assert.equal(variant.additionalProperties,false);assert(variant.required.includes('clientId'));}
   assert.deepEqual(operation.security,[{sessionCookie:[]}]);assert.deepEqual(operation['x-coatria-roles'],['owner','admin']);assert(operation.parameters.some((parameter:any)=>parameter.name==='Origin'&&parameter.in==='header'&&parameter.required));
-  for(const key of ['apiKey','token','command','script','companyId','approvedBy'])assert.equal(key in body.properties,false);
+  for(const variant of variants)for(const key of ['apiKey','token','command','script','companyId','approvedBy'])assert.equal(key in variant.properties,false);
  }
  for(const path of[base,project])assert.deepEqual(spec.paths[path].get.security,[{sessionCookie:[]}]);
  const work=spec.components.schemas.StudioWorkItem;assert(work.properties.readiness.enum.includes('queued'));assert.deepEqual(work.properties.runId.anyOf,[{type:'string',format:'uuid'},{type:'null'}]);
@@ -148,6 +148,41 @@ test('studio agent APIs retain grant snapshots, requester authority, receipts an
     const stored=(await query('SELECT request_hash,response FROM agent_tool_receipts WHERE company_id=$1 AND agent_id=$2 AND request_id=$3',[companyId,agentId,requestId])).rows[0];assert.equal(stored.request_hash,hash);assert.deepEqual(stored.response,response);
    }
    assert.deepEqual((await query('SELECT (SELECT count(*) FROM studio_projects WHERE company_id=$1)::int AS projects,(SELECT count(*) FROM studio_staffing_proposals WHERE company_id=$1)::int AS proposals',[companyId])).rows[0],before);
+  });
+  await t.test('versioned agent plans round-trip all three media kinds without leaking them to legacy reads',async()=>{
+   await start();const createdIds:string[]=[];
+   for(const kind of ['image','video','audio']as const){
+    const spec=kind==='audio'?{kind,format:'wav',codec:'pcm_s16le',sampleRateHz:48000,channels:1}:{kind,format:kind==='image'?'png':'mp4',width:16,height:16,color:{mode:'not_required'},...kind==='video'?{codec:'h264',frameRate:{mode:'constant',numerator:48,denominator:2},audio:{mode:'none'}}:{}};
+    const args={contractVersion:2,productionPath:'higgsfield',name:'Generated '+kind,clientName:'Synthetic',brief:'An exact synthetic generated media plan.',spec,shots:[{kind,code:'GEN001',description:'One bounded deliverable.',...kind==='image'?{}:{durationMs:{min:999,max:1001}}}]};
+    const requestId=randomUUID(),created=await tool('studio_plan',args,200,requestId),replay=await tool('studio_plan',args,200,requestId);assert.equal(replay.replayed,true);assert.deepEqual(replay.result,created.result);const projectId=created.result.project.id;createdIds.push(projectId);
+    assert.equal(created.result.project.contractVersion,2);assert.equal(created.result.project.spec.kind,kind);assert.equal(created.result.project.productionPath,'higgsfield');
+    const denied=await tool('studio_get',{projectId},409);assert.equal(denied.code,'STUDIO_CONTRACT_UNSUPPORTED');
+    const detail=(await tool('studio_get',{projectId,contractVersion:2})).result;assert.equal(detail.project.contractVersion,2);assert.equal(detail.shots[0].kind,kind);for(const key of ['frameStart','frameEnd','handles','disciplines'])assert.equal(key in detail.shots[0],false);
+    const exact=(await tool('studio_get',{projectId,contractVersion:2,workItemId:detail.workItems[0].id})).result;assert.equal(exact.project.contractVersion,2);assert.equal(exact.projection.contentInspectedByThisResponse,false);
+    await tool('studio_plan',{...args,contractVersion:3},400);await tool('studio_plan',{...args,contractVersion:undefined},400);await tool('studio_plan',{...args,name:'Changed'},409,requestId);
+    assert.equal((await query("SELECT count(*)::int AS count FROM agent_tool_receipts WHERE run_id=$1 AND request_id=$2 AND tool='studio_plan'",[runId,requestId])).rows[0].count,1);
+   }
+   const legacy=(await tool('studio_get',{})).result;assert(legacy.projects.every((project:any)=>!createdIds.includes(project.id)));
+   const versioned=(await tool('studio_get',{contractVersion:2})).result;assert(createdIds.every(id=>versioned.projects.some((project:any)=>project.id===id&&project.contractVersion===2)));
+   await tool('studio_get',{contractVersion:1},400);await tool('studio_get',{contractVersion:2,projectId:foreignProjectId},404);
+   const registerArgs={projectId:createdIds[0],workItemId:(await query("SELECT id FROM studio_work_items WHERE company_id=$1 AND project_id=$2 AND stage='generation'",[companyId,createdIds[0]])).rows[0].id,archiveId:randomUUID(),revision:1,name:'Unpublished synthetic source'};
+   for(const missing of ['studio.write','creative.read','creative.write','storage.read']){
+    const reduced=AGENT_CAPABILITIES.filter(cap=>cap!==missing);
+    await query('UPDATE agents SET capabilities=$2 WHERE id=$1',[agentId,JSON.stringify(reduced)]);
+    assert(!(await call('agent/tools')).tools.some((entry:any)=>entry.name==='studio_generated_artifact_register'));
+    assert.equal((await tool('studio_generated_artifact_register',registerArgs,403)).code,'AGENT_CAPABILITY_REQUIRED');
+    await query('UPDATE agents SET capabilities=$2 WHERE id=$1',[agentId,JSON.stringify(AGENT_CAPABILITIES)]);
+    await query('UPDATE agent_runs SET capabilities=$2 WHERE id=$1',[runId,JSON.stringify(reduced)]);
+    assert.equal((await tool('studio_generated_artifact_register',registerArgs,403)).code,'AGENT_CAPABILITY_REQUIRED');
+    await query('UPDATE agent_runs SET capabilities=$2 WHERE id=$1',[runId,JSON.stringify(AGENT_CAPABILITIES)]);
+   }
+   // Historical outer tool evidence alone must not bypass the service's current
+   // source/project checks. There is deliberately no verified archive here.
+   const requestId=randomUUID(),args=AGENT_TOOLS.studio_generated_artifact_register.schema.parse(registerArgs),canonical=(value:any):string=>value===null||typeof value!=='object'?JSON.stringify(value):Array.isArray(value)?'['+value.map(canonical).join(',')+']':'{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+canonical(value[key])).join(',')+'}';
+   const hash=createHash('sha256').update(canonical({tool:'studio_generated_artifact_register',runId,arguments:args})).digest('hex');
+   await query('INSERT INTO agent_tool_receipts(company_id,agent_id,run_id,request_id,tool,request_hash,response) VALUES($1,$2,$3,$4,$5,$6,$7)',[companyId,agentId,runId,requestId,'studio_generated_artifact_register',hash,JSON.stringify({mustNotReplay:true})]);
+   const refused=await tool('studio_generated_artifact_register',registerArgs,409,requestId);assert.equal(refused.result,undefined);assert(refused.code.startsWith('STUDIO_'));
+   assert.equal((await query('SELECT count(*)::int AS count FROM studio_generated_artifact_sources WHERE company_id=$1',[companyId])).rows[0].count,0);
   });
   await t.test('draft creation is receipted and a demoted requester cannot replay an authorized write',async()=>{
    await start();const requestId=randomUUID(),created=await tool('studio_plan',plan,200,requestId),replay=await tool('studio_plan',plan,200,requestId);assert.equal(replay.replayed,true);assert.deepEqual(replay.result,created.result);

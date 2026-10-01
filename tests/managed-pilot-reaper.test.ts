@@ -192,3 +192,73 @@ test('malformed or unconfirmed provider mutation responses do not report success
   const malformed = transport([new Response('{', { status: 200 }), pod('EXITED', 0)]);
   assert.equal((await reapManagedPilot(request(), { env, now, fetch: malformed.fetcher })).status, 503);
 });
+
+test('a finite inference handoff leaves the exact old CPU cutoff unchanged and never touches GPU capacity early', async () => {
+  const inferenceExpiresAt = '2026-09-17T20:00:00.000Z';
+  const handoff = { ...env, MANAGED_PILOT_CONFIG: JSON.stringify({ ...config, inferenceExpiresAt }) };
+  const before = transport([]);
+  assert.deepEqual(await (await reapManagedPilot(request(), { env: handoff, now: () => now() - 1, fetch: before.fetcher })).json(), { status: 'waiting', expired: false });
+  assert.equal(before.calls.length, 0);
+  for (const clock of [now(), Date.parse(inferenceExpiresAt) - 1]) {
+    const mock = transport([pod(), pod('EXITED', 0)]);
+    const response = await reapManagedPilot(request(), { env: handoff, now: () => clock, fetch: mock.fetcher });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { status: 'inference_waiting', expired: true, billingVerified: false, inference: { status: 'waiting', expiresAt: inferenceExpiresAt }, harness: { status: 'stopped', hourlyQuoteUsd: 0 } });
+    assert.deepEqual(mock.calls.map(call => [new URL(call.url).pathname, call.init.method]), [['/v2/pods/cpu-pilot', 'GET'], ['/v2/pods/cpu-pilot/action', 'POST']]);
+    assert.deepEqual(JSON.parse(String(mock.calls[1].init.body)), { action: 'stop' });
+  }
+});
+
+test('the exact inference handoff deadline disables the pinned GPU and still reconciles the old CPU', async () => {
+  const inferenceExpiresAt = '2026-09-17T20:00:00.000Z';
+  for (const clock of [Date.parse(inferenceExpiresAt), Date.parse(inferenceExpiresAt) + 86_400_000]) {
+    const mock = transport([endpoint(), endpoint(0, 0), pod('EXITED', 0)]);
+    const response = await reapManagedPilot(request(), { env: { ...env, MANAGED_PILOT_CONFIG: JSON.stringify({ ...config, inferenceExpiresAt }) }, now: () => clock, fetch: mock.fetcher });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).inference.status, 'disabled');
+    assert.deepEqual(mock.calls.map(call => call.init.method), ['GET', 'PATCH', 'GET']);
+    assert.deepEqual(JSON.parse(String(mock.calls[1].init.body)), { workers: { min: 0, max: 0 } });
+  }
+});
+
+test('a closed historical pilot can hand off inference without reviving its days-old CPU deadline', async () => {
+  const mock = transport([pod('EXITED')]);
+  const inferenceExpiresAt = '2026-09-23T14:00:00.000Z';
+  const response = await reapManagedPilot(request(), { env: { ...env, MANAGED_PILOT_CONFIG: JSON.stringify({ ...config, inferenceExpiresAt }) }, now: () => Date.parse('2026-09-23T12:00:00.000Z'), fetch: mock.fetcher });
+  const result = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(result.inference, { status: 'waiting', expiresAt: inferenceExpiresAt });
+  assert.equal(result.harness.status, 'stopped');
+  assert.deepEqual(mock.calls.map(call => [new URL(call.url).pathname, call.init.method]), [['/v2/pods/cpu-pilot', 'GET']]);
+});
+
+test('invalid and unbounded inference handoffs are rejected while both original cleanups still run', async () => {
+  for (const inferenceExpiresAt of [null, 42, {}, '', 'never', '2026-02-30T18:00:00Z', '2026-09-17T17:59:59Z', new Date(now() + 86_400_001).toISOString()]) {
+    const mock = transport([endpoint(), endpoint(0, 0), pod(), pod('EXITED', 0)]);
+    const response = await reapManagedPilot(request(), { env: { ...env, MANAGED_PILOT_CONFIG: JSON.stringify({ ...config, inferenceExpiresAt }) }, now, fetch: mock.fetcher });
+    assert.equal(response.status, 503);
+    const result = await response.json();
+    assert.equal(result.code, 'REAPER_INVALID_INFERENCE_EXPIRY');
+    assert.equal(result.inference.status, 'disabled');
+    assert.equal(result.harness.status, 'stopped');
+    assert.deepEqual(mock.calls.map(call => call.init.method), ['GET', 'PATCH', 'GET', 'POST']);
+  }
+  const before = transport([]);
+  const response = await reapManagedPilot(request(), { env: { ...env, MANAGED_PILOT_CONFIG: JSON.stringify({ ...config, inferenceExpiresAt: 'never' }) }, now: () => now() - 1, fetch: before.fetcher });
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).code, 'REAPER_INVALID_INFERENCE_EXPIRY');
+  assert.equal(before.calls.length, 0);
+});
+
+test('exactly 24 hours is finite and CPU failures remain retryable during an inference handoff', async () => {
+  const inferenceExpiresAt = new Date(now() + 86_400_000).toISOString();
+  const mock = transport([new Response(null, { status: 503 })]);
+  const response = await reapManagedPilot(request(), { env: { ...env, MANAGED_PILOT_CONFIG: JSON.stringify({ ...config, inferenceExpiresAt }) }, now, fetch: mock.fetcher });
+  assert.equal(response.status, 503);
+  const result = await response.json();
+  assert.equal(result.code, 'REAPER_CLEANUP_INCOMPLETE');
+  assert.deepEqual(result.inference, { status: 'waiting', expiresAt: inferenceExpiresAt });
+  assert.equal(result.harness.status, 'retry_required');
+  assert.equal(mock.calls.length, 1);
+  assert.equal(new URL(mock.calls[0].url).pathname, '/v2/pods/cpu-pilot');
+});

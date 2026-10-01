@@ -5,7 +5,7 @@ import {mkdtemp,mkdir,writeFile,readFile,stat,realpath,rm} from 'node:fs/promise
 import {tmpdir} from 'node:os';
 import {resolve,dirname,basename} from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {parseLoadOptions,summarizeRequests,assertUnusedPort,loadPosition,validateLoadDatabaseUrl,assertEmptyLoadDatabase,meetsLoadBudget,loadFloorDocument,loadOfficeMetadata,prepareLoadCheckout,releaseLoadCheckoutDependencies,OFFICE_LOAD_POLICY,readLoadResponse} from '../scripts/load-office.mjs';
+import {parseLoadOptions,summarizeRequests,summarizeRequestWindows,assertUnusedPort,loadPosition,validateLoadDatabaseUrl,assertEmptyLoadDatabase,meetsLoadBudget,loadFloorDocument,loadOfficeMetadata,prepareLoadCheckout,releaseLoadCheckoutDependencies,OFFICE_LOAD_POLICY,readLoadResponse} from '../scripts/load-office.mjs';
 import {OFFICE_50_PRESET} from '../src/lib/office-presets';
 
 test('load harness refuses remote targets, existing databases and unbounded traffic',()=>{
@@ -36,6 +36,41 @@ test('load error metrics reject malformed or truncated successful response bodie
  const stream=new ReadableStream({start(controller){controller.error(new Error('Truncated body'));}});
  assert.equal((await readLoadResponse(new Response(stream),200)).ok,false);
  assert.equal((await readLoadResponse(new Response('{"error":"Not found"}',{status:404}),404)).ok,true);
+});
+
+test('five-second diagnostics use unrounded start boundaries even when responses finish in another window',()=>{
+ const records=[
+  {startedMs:10000,operation:'workspace-read',ms:300,ok:true,bytes:30},
+  {startedMs:4999.9999,operation:'presence-write',ms:9000,ok:true,bytes:20},
+  {startedMs:0,operation:'presence-write',ms:100,ok:true,bytes:10},
+  {startedMs:9999.9999,operation:'presence-read',ms:20,ok:false,bytes:4},
+  {startedMs:5000,operation:'presence-read',ms:10,ok:true,bytes:3},
+  {startedMs:59999.9999,operation:'conversation-events',ms:5000,ok:true,bytes:50},
+  {startedMs:60000,operation:'conversation-events',ms:1000,ok:true,bytes:60},
+ ];
+ const before=structuredClone(records),overall=summarizeRequests(records),result=summarizeRequestWindows(records);
+ assert.deepEqual(result.windows.map(w=>[w.startMs,w.endMs,w.requests]),[[0,5000,2],[5000,10000,2],[10000,15000,1],[55000,60000,1],[60000,65000,1]]);
+ assert.equal(result.windows[0].p50Ms,100);assert.equal(result.windows[0].p95Ms,9000);assert.equal(result.windows[1].unexpectedErrors,1);
+ assert.equal(result.windows.reduce((n,w)=>n+w.requests,0),records.length);assert.equal(result.windows.reduce((n,w)=>n+w.bytesReceived,0),overall.bytesReceived);assert.equal(result.windows.reduce((n,w)=>n+w.unexpectedErrors,0),overall.unexpectedErrors);
+ assert.deepEqual(summarizeRequests(records),overall);assert.deepEqual(records,before);assert.deepEqual(summarizeRequestWindows([...records].reverse()),result);
+});
+
+test('window operation summaries partition every request without exposing identities or raw records',()=>{
+ const records=Array.from({length:100},(_,i)=>({startedMs:i*650,operation:i%2?'workspace-read':'presence-write',ms:i+1,ok:i!==0,bytes:10,clientId:'private-client',token:'private-session',body:'private-body',url:'https://private.example/path'}));
+ const result=summarizeRequestWindows(records),windows=result.windows;
+ assert.equal(windows.flatMap(w=>w.operations).reduce((n,op)=>n+op.requests,0),100);
+ for(const window of windows){assert.equal(window.operations.reduce((n,op)=>n+op.requests,0),window.requests);assert.equal(window.operations.reduce((n,op)=>n+op.bytesReceived,0),window.bytesReceived);assert.deepEqual(window.operations.map(op=>op.operation),['presence-write','workspace-read']);}
+ for(const operation of ['presence-write','workspace-read'])assert.equal(windows.flatMap(w=>w.operations).filter(op=>op.operation===operation).reduce((n,op)=>n+op.requests,0),50);
+ assert.doesNotMatch(JSON.stringify(result),/private-|clientId|token|body|https:|startedMs/);
+ assert.deepEqual(summarizeRequests(records),{requests:100,unexpectedErrors:1,errorRate:.01,p50Ms:50,p95Ms:95,maxMs:100,bytesReceived:1000});
+});
+
+test('window diagnostics use monotonic offsets without wall-clock reads and reject unknown operation labels',t=>{
+ t.mock.method(Date,'now',()=>{throw Error('Wall clock must not assign load buckets');});
+ assert.deepEqual(summarizeRequestWindows([]),{windowMs:5000,clock:'performance.now',assignment:'request-start',interval:'start-inclusive-end-exclusive',emptyWindowsOmitted:true,windows:[]});
+ assert.equal(summarizeRequestWindows([{startedMs:5000,operation:'session-read',ms:3,ok:true,bytes:1}]).windows[0].startMs,5000);
+ for(const startedMs of [-1,NaN,Infinity,undefined])assert.throws(()=>summarizeRequestWindows([{startedMs,operation:'presence-read',ms:1,ok:true,bytes:1}]),/monotonic/);
+ assert.throws(()=>summarizeRequestWindows([{startedMs:1,operation:'https://private.example/session',ms:1,ok:true,bytes:1}]),/known measured operations/);
 });
 test('load harness refuses to take over an existing loopback server',async()=>{
  const server=createServer();await new Promise<void>(yes=>server.listen(0,'127.0.0.1',yes));

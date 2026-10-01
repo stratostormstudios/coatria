@@ -14,6 +14,7 @@ const credentials={accessKeyId:['user','synthetic'].join('_'),secretAccessKey:['
 function fixture(){
  const plan=prepareStorageConformance('synthetic-volume','US-NC-2'),events:ConformanceEvent[]=[],calls:string[]=[],objects=new Map<string,Buffer>(),parts=new Map<string,Map<number,Buffer>>();let clients=0,failStep='',corrupt=false;
  const factory=(config:RunpodProjectStorageConfig):RunpodProjectStorage=>{clients++;return {
+  async verifyBucketAccess(){calls.push('bucket-access');if(failStep==='bucket-access')throw new RunpodStorageError('STORAGE_PROVIDER_UNAVAILABLE');},
   async head(id){calls.push('head');const bytes=objects.get(id);return bytes?{versionId:id,bytes:bytes.length,etag:'"stored"',contentType:'application/octet-stream',modifiedAt:null}:null;},
   async createMultipart(input){calls.push('create');if(failStep==='create')throw new RunpodStorageError('STORAGE_PROVIDER_UNCERTAIN');parts.set(input.versionId,new Map());return {scope:'synthetic',versionId:input.versionId,uploadId:'private-'+input.versionId,bytes:input.bytes,partBytes:config.partBytes!};},
   validateMultipart(input){return input as any;},
@@ -36,6 +37,11 @@ test('qualification records exact write intents, streams two parts and verifies 
 });
 test('uncertain create, part or complete never retries or automatically aborts another operation',async()=>{
  for(const step of ['create','part','complete']){const f=fixture();f.failAt(step);await assert.rejects(runStorageConformance(f.plan,{credentials,factory:f.factory,record:f.record}),e=>e instanceof RunpodStorageError&&e.code==='STORAGE_PROVIDER_UNCERTAIN');assert.equal(f.calls.filter(x=>x===step).length,1);assert(!f.calls.includes('abort'));assert.equal(f.events.at(-1)?.detail?.automaticRetry,false);}
+});
+
+test('missing object HEAD responses cannot pass a denied known-volume access preflight',async()=>{
+ const f=fixture();f.failAt('bucket-access');await assert.rejects(runStorageConformance(f.plan,{credentials,factory:f.factory,record:f.record}),e=>e instanceof RunpodStorageError&&e.code==='STORAGE_PROVIDER_UNAVAILABLE');assert.deepEqual(f.calls,['bucket-access','close']);assert(!f.events.some(e=>e.phase==='intent'));assert.equal(f.events.at(-1)?.step,'known-bucket-access');
+ const allowed=fixture();await runStorageConformance(allowed.plan,{credentials,factory:allowed.factory,record:allowed.record});assert.deepEqual(allowed.calls.slice(0,4),['bucket-access','head','head','create']);assert.deepEqual(allowed.events[0],{step:'known-bucket-access',phase:'passed',detail:{operation:'HeadBucket',writePermissionEstablished:false}});
 });
 test('failed durable intent blocks the provider mutation and pre-existing object blocks all writes',async()=>{
  const f=fixture();await assert.rejects(runStorageConformance(f.plan,{credentials,factory:f.factory,record:async(e)=>{if(e.phase==='intent')throw Error('disk unavailable');await f.record(e);}}));assert(!f.calls.includes('create'));

@@ -18,7 +18,7 @@ test('unconfigured deployments expose setup state and never accept accounts or f
   } finally {if(previous===undefined)delete process.env.DATABASE_URL;else process.env.DATABASE_URL=previous;}
 });
 
-test('readiness requires every current migration, including the archive schema',async()=>{
+test('readiness requires every current migration, including archive and generated-media schemas',async()=>{
  const previous=process.env.DATABASE_URL,pool=(globalThis as any).coatriaPool,files=(await readdir('database')).filter(name=>/^\d.*\.sql$/.test(name)).sort();
  let missing:string|null='029_higgsfield_archives.sql';process.env.DATABASE_URL='postgresql://fixture.invalid/not-used';
  (globalThis as any).coatriaPool={query:async(sql:string,values?:unknown[])=>{
@@ -26,6 +26,6 @@ test('readiness requires every current migration, including the archive schema',
   assert.match(sql,/schema_migrations/);assert.deepEqual([...(values![0] as string[])].sort(),files);
   return {rows:files.filter(name=>name!==missing).map(name=>({name}))};
  }};
- try{assert.equal((await health()).status,503);missing=null;assert.equal((await health()).status,200);}
+ try{for(const name of files){missing=name;assert.equal((await health()).status,503,`${name} must be present before readiness`);}missing=null;assert.equal((await health()).status,200);}
  finally{if(previous===undefined)delete process.env.DATABASE_URL;else process.env.DATABASE_URL=previous;if(pool===undefined)delete(globalThis as any).coatriaPool;else(globalThis as any).coatriaPool=pool;}
 });

@@ -1,3 +1,4 @@
+import {currentTaskPatchForFixture} from './task-fixture-revision';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -26,6 +27,7 @@ test('real database API: tenant isolation, invitations, independent approvals, p
   type Client={cookie:string;userId:string;email:string;ip:string};
   let checks=0;
   async function call(client:Client|null,path:string,method='GET',data?:unknown,expected=200,token?:string,originOverride?:string) {
+    data=await currentTaskPatchForFixture(path,method,data);
     const headers:Record<string,string>={Origin:originOverride??origin,'x-forwarded-for':client?.ip||`test-${run}`};
     if(client)headers.Cookie=client.cookie;if(data!==undefined)headers['Content-Type']='application/json';if(token)headers.Authorization=`Bearer ${token}`;
     const response=await handleApi(new Request(`${origin}/api/${path}`,{method,headers,...(data!==undefined?{body:JSON.stringify(data)}:{})}),path.split('/'));

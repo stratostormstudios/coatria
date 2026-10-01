@@ -12,7 +12,7 @@ const configSchema = z.object({
 type PilotConfig = z.infer<typeof configSchema>;
 type Environment = Pick<NodeJS.ProcessEnv, 'VERCEL_ENV' | 'CRON_SECRET' | 'MANAGED_PILOT_CONFIG' | 'MANAGED_RUNPOD_API_KEY'>;
 type ProviderObject = Record<string, unknown>;
-type CleanupResult = { status: string; code?: string; hourlyQuoteUsd?: number };
+type CleanupResult = { status: string; code?: string; hourlyQuoteUsd?: number; expiresAt?: string };
 type Dependencies = { env?: Environment; fetch?: typeof fetch; now?: () => number };
 
 const providerOrigin = 'https://api.runpod.io/v2';
@@ -131,28 +131,55 @@ export async function reapManagedPilot(request: Request, dependencies: Dependenc
   if (env.VERCEL_ENV !== 'production') return reply({ code: 'REAPER_PRODUCTION_ONLY' }, 503);
 
   let config: PilotConfig;
+  let inferenceExpiry: unknown;
+  let hasInferenceExpiry = false;
   try {
     const raw = env.MANAGED_PILOT_CONFIG;
     if (!raw || raw.length > 8192) throw new Error();
-    config = configSchema.parse(JSON.parse(raw));
+    const decoded: unknown = JSON.parse(raw);
+    if (!isObject(decoded)) throw new Error();
+    const { inferenceExpiresAt, ...legacy } = decoded;
+    config = configSchema.parse(legacy);
+    hasInferenceExpiry = Object.hasOwn(decoded, 'inferenceExpiresAt');
+    inferenceExpiry = inferenceExpiresAt;
   } catch { return reply({ code: 'REAPER_INVALID_CONFIG' }, 503); }
 
   const now = (dependencies.now ?? Date.now)();
   if (!Number.isFinite(now)) return reply({ code: 'REAPER_INVALID_CLOCK' }, 503);
-  if (now < Date.parse(config.expiresAt)) return reply({ status: 'waiting', expired: false });
+  const cpuDeadline = Date.parse(config.expiresAt);
+  let inferenceDeadline = cpuDeadline;
+  let invalidInferenceExpiry = false;
+  if (hasInferenceExpiry) {
+    const parsed = z.iso.datetime({ offset: true }).safeParse(inferenceExpiry);
+    const deadline = parsed.success ? Date.parse(parsed.data) : NaN;
+    invalidInferenceExpiry = !Number.isFinite(deadline) || deadline < cpuDeadline || deadline > now + 86_400_000;
+    if (!invalidInferenceExpiry) inferenceDeadline = deadline;
+    // A malformed handoff cannot postpone either original cleanup. Keep the
+    // old cutoff and report the rejected override even if cleanup succeeds.
+  }
+  if (now < cpuDeadline && now < inferenceDeadline) {
+    return invalidInferenceExpiry
+      ? reply({ code: 'REAPER_INVALID_INFERENCE_EXPIRY' }, 503)
+      : reply({ status: 'waiting', expired: false });
+  }
   const key = env.MANAGED_RUNPOD_API_KEY;
   if (!key || /[\r\n]/.test(key)) return reply({ code: 'REAPER_NOT_CONFIGURED' }, 503);
 
   const client = providerClient(dependencies.fetch ?? fetch, key);
-  // Always attempt both resources; an unavailable inference API must not keep the CPU running.
-  const inference = await attempt(() => disableInference(config, client));
-  const harness = await attempt(() => stopHarness(config, client));
-  const retryRequired = inference.status === 'retry_required' || harness.status === 'retry_required';
+  // Independent deadlines: a reviewed GPU handoff never postpones the old CPU
+  // cutoff, and neither waiting nor cleanup can enable provider capacity.
+  const inference: CleanupResult = now >= inferenceDeadline
+    ? await attempt(() => disableInference(config, client))
+    : { status: 'waiting', expiresAt: new Date(inferenceDeadline).toISOString() };
+  const harness: CleanupResult = now >= cpuDeadline
+    ? await attempt(() => stopHarness(config, client))
+    : { status: 'waiting', expiresAt: config.expiresAt };
+  const retryRequired = invalidInferenceExpiry || inference.status === 'retry_required' || harness.status === 'retry_required';
   return reply({
-    status: retryRequired ? 'retry_required' : 'cutoff_applied',
-    expired: true,
+    status: retryRequired ? 'retry_required' : inference.status === 'waiting' ? 'inference_waiting' : 'cutoff_applied',
+    expired: now >= cpuDeadline,
     billingVerified: false,
-    ...(retryRequired ? { code: 'REAPER_CLEANUP_INCOMPLETE' } : {}),
+    ...(retryRequired ? { code: invalidInferenceExpiry ? 'REAPER_INVALID_INFERENCE_EXPIRY' : 'REAPER_CLEANUP_INCOMPLETE' } : {}),
     inference,
     harness,
   }, retryRequired ? 503 : 200);

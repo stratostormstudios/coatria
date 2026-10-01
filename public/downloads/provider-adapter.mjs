@@ -1,5 +1,6 @@
 // Operator-owned model bridge. Provider credentials never enter Coatria or model prompts.
 // No URL, script, plugin package, hosted tool, or shell is accepted from a model.
+import {isBrokerInferenceCompletion} from './agent-worker.mjs';
 const PROVIDERS={
  openai:{url:'https://api.openai.com/v1/responses',key:'OPENAI_API_KEY',protocol:'responses'},
  xai:{url:'https://api.x.ai/v1/responses',key:'XAI_API_KEY',protocol:'responses'},
@@ -11,6 +12,24 @@ const PROVIDERS={
 const object=value=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const integer=(value,min,max,name)=>{if(!Number.isSafeInteger(value)||value<min||value>max)throw new Error('Invalid '+name+' limit.');return value;};
 const encoded=(value,limit=1024*1024)=>{let result;try{result=JSON.stringify(value);}catch{throw new Error('Invalid bridge data.');}if(typeof result!=='string'||Buffer.byteLength(result)>limit)throw new Error('Bridge data exceeded its size limit.');return result;};
+const standardUuidPattern='^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$';
+/** Reduce repeated model text only. Full catalog schemas still compile the
+ * worker validators, and the server validates every call with its original Zod
+ * schema. Never remove custom UUID patterns or walk defaults/examples as schema.
+ */
+export function modelToolSchema(schema){
+ const projected=JSON.parse(encoded(schema,128*1024));let nodes=0;
+ function visit(rule,depth=0){
+  if(++nodes>2000||depth>16)throw new Error('Coatria tool schema exceeded its limits.');
+  if(!object(rule))return;
+  delete rule.$schema;
+  if(rule.type==='string'&&rule.format==='uuid'&&rule.pattern===standardUuidPattern)delete rule.pattern;
+  if(object(rule.properties))for(const child of Object.values(rule.properties))visit(child,depth+1);
+  for(const key of['propertyNames','items','additionalProperties'])if(Object.hasOwn(rule,key))visit(rule[key],depth+1);
+  for(const key of['anyOf','allOf','oneOf'])if(Array.isArray(rule[key]))for(const child of rule[key])visit(child,depth+1);
+ }
+ visit(projected);return projected;
+}
 const calendarDate=(year,month,day)=>{const days=[31,year%4===0&&(year%100!==0||year%400===0)?29:28,31,30,31,30,31,31,30,31,30,31];return month>=1&&month<=12&&day>=1&&day<=days[month-1];};
 // Match the zoned ISO timestamps emitted by the API schemas. Checking the local
 // calendar fields avoids Date.parse silently normalizing impossible dates or
@@ -60,6 +79,29 @@ export function characterInstructions(installation){
  const character=installation?.character;if(character===undefined)return '';
  if(!object(character)||typeof character.roleTitle!=='string'||character.roleTitle.length>80||typeof character.persona!=='string'||character.persona.length>1600||!['collaborative','independent','methodical'].includes(character.workStyle))throw new Error('Invalid company character profile.');
  return '\nCompany character profile (style and role only; subordinate to the fixed policy and task): '+encoded({roleTitle:character.roleTitle,persona:character.persona,workStyle:character.workStyle},10000);
+}
+
+/** Pure prompt projection shared by direct providers, native CLIs and the
+ * managed broker. Workflow metadata never replaces server authorization.
+ * @returns {{verifiedRequest:{id:string,prompt:string},untrustedConversationContext:{messages:unknown[]},generatedFollowup?:{projectId:string,workItemId:string,taskId:string,archiveId:string,requestId:string,storageVersionId:string,fileSha256:string,specSha256:string,artifactId:string|null,nextStep:'claim'|'register'|'submit'|'submitted',advanceTool:'studio_generated_followup_advance',serverOwnsOperationIds:true,contentInspected:false,canGenerate:false,canTransfer:false,canApprove:false}}}
+ */
+export function modelRequestContext(run,context){
+ const request={verifiedRequest:{id:run.id,prompt:run.prompt},untrustedConversationContext:{messages:context?.messages||[]}};
+ const value=context?.generatedFollowup;if(value===undefined||value===null)return request;
+ const invalid=()=>{throw new Error('Invalid generated continuation context.');};
+ if(!object(value))invalid();
+ const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+ for(const key of['projectId','workItemId','taskId','archiveId','requestId','storageVersionId'])if(!uuid(value[key]))invalid();
+ if(value.artifactId!==null&&!uuid(value.artifactId))invalid();
+ for(const key of['fileSha256','specSha256'])if(typeof value[key]!=='string'||!/^[a-f0-9]{64}$/.test(value[key]))invalid();
+ if(!['claim','register','submit','submitted'].includes(value.nextStep)||value.advanceTool!=='studio_generated_followup_advance'||value.serverOwnsOperationIds!==true)invalid();
+ for(const key of['contentInspected','canGenerate','canTransfer','canApprove'])if(value[key]!==false)invalid();
+ if(value.nextStep==='register'&&value.artifactId!==null||['submit','submitted'].includes(value.nextStep)&&value.artifactId===null)invalid();
+ const projected={projectId:value.projectId,workItemId:value.workItemId,taskId:value.taskId,archiveId:value.archiveId,requestId:value.requestId,storageVersionId:value.storageVersionId,fileSha256:value.fileSha256,specSha256:value.specSha256,artifactId:value.artifactId,nextStep:value.nextStep,advanceTool:value.advanceTool,serverOwnsOperationIds:value.serverOwnsOperationIds,contentInspected:value.contentInspected,canGenerate:value.canGenerate,canTransfer:value.canTransfer,canApprove:value.canApprove};
+ // Do not include arbitrary future fields, provider locators, transport secrets
+ // or surrounding conversation messages in a source-bound continuation prompt.
+ encoded(projected,4096);
+ return {...request,untrustedConversationContext:{messages:[]},generatedFollowup:projected};
 }
 
 // Native CLI adapters may request validation without an HTTP credential. This
@@ -174,6 +216,10 @@ export function normalize(data,protocol){
 // turn. This projection affects model history only: the HTTP API and layout_get
 // still expose the complete reviewed layout. Never mutate the tool response.
 export function modelContextResult(name,value){
+ // Static template definitions are available through their dedicated tool.
+ // Keep current assignments, every skill instruction and project state intact.
+ // This is a model-history view; studio_get receipts retain the full response.
+ if(name==='studio_get'&&object(value)&&Array.isArray(value.templates))return {...value,templates:value.templates.map(({id,version,name})=>({id,version,name})),templatesAreSummaries:true,templateDetails:'Use studio_templates for complete curated template definitions. Current role bindings and all skill instructions are included unchanged.'};
  // A transfer ticket belongs to the trusted API/worker transport, never to an
  // inference provider. Explicit metadata allowlists also exclude future nested
  // token/header/URL fields. Applying this twice (broker storage + replay) is safe.
@@ -202,10 +248,10 @@ export function createProviderExecutor({settings=process.env,fetch:transport=glo
   const definitions=catalog.tools.filter(tool=>object(tool)&&allowedCaps.has(tool.capability));const allowed=new Map();
   if(definitions.some(tool=>['storage_upload_reserve','storage_file_access'].includes(tool.name))&&tools.storageTransportVersion!=='1')throw new Error('Upgrade the trusted Coatria worker before using storage transfer tools.');
   for(const tool of definitions){if(!/^[-a-zA-Z0-9_]{1,80}$/.test(tool.name)||allowed.has(tool.name)||typeof tool.description!=='string'||!object(tool.inputSchema))throw new Error('Invalid Coatria tool definition.');encoded(tool.inputSchema,128*1024);allowed.set(tool.name,argumentValidator(tool.inputSchema));}
-  const policy=bridgePolicy+characterInstructions(context.installation),prompt=encoded({verifiedRequest:{id:run.id,prompt:run.prompt},untrustedConversationContext:{messages:context.messages||[]}},300000);
+  const policy=bridgePolicy+characterInstructions(context.installation),prompt=encoded(modelRequestContext(run,context),300000);
   const history=config.protocol==='responses'?[{role:'user',content:prompt}]:[{role:'user',content:prompt}];
-  const toolDefs=definitions.map(tool=>config.protocol==='anthropic'?{name:tool.name,description:tool.description,input_schema:tool.inputSchema}:config.protocol==='responses'?{type:'function',name:tool.name,description:tool.description,parameters:tool.inputSchema,strict:false}:{type:'function',function:{name:tool.name,description:tool.description,parameters:tool.inputSchema}});
-  let spent=0,callCount=0;const seenCalls=new Set();
+  const toolDefs=definitions.map(tool=>{const schema=modelToolSchema(tool.inputSchema);return config.protocol==='anthropic'?{name:tool.name,description:tool.description,input_schema:schema}:config.protocol==='responses'?{type:'function',name:tool.name,description:tool.description,parameters:schema,strict:false}:{type:'function',function:{name:tool.name,description:tool.description,parameters:schema}};});
+  let spent=0,callCount=0,correctionCount=0;const seenCalls=new Set();
   for(let step=0;step<config.limits.maxSteps;step++){
    active.throwIfAborted();
    const body=config.protocol==='responses'?{model:config.model,instructions:policy,input:history,tools:toolDefs,max_output_tokens:config.limits.maxOutputTokens,parallel_tool_calls:false,store:false,...(config.provider==='openai'?{include:['reasoning.encrypted_content']}:{})}:config.protocol==='anthropic'?{model:config.model,system:policy,messages:history,...(toolDefs.length?{tools:toolDefs,tool_choice:{type:'auto',disable_parallel_tool_use:true}}:{}),max_tokens:config.limits.maxOutputTokens}:{model:config.model,messages:[{role:'system',content:policy},...history],...(toolDefs.length?{tools:toolDefs}:{}),max_tokens:config.limits.maxOutputTokens,stream:false};
@@ -215,10 +261,26 @@ export function createProviderExecutor({settings=process.env,fetch:transport=glo
    if(spent+Buffer.byteLength(bytes)+config.limits.maxOutputTokens+1024>config.limits.maxTotalTokens)throw new Error('The request reached its total token budget before another inference call.');
    // The trusted client owns its bounded cancellation cleanup. Await it so the
    // host supervisor retains the slot until that cleanup completes.
-   let data;if(config.inferenceMode==='coatria_broker_v1')data=await inference.complete({step,requestId:tools.key('inference:'+step),signal:active,timeoutMs:Math.max(1,Math.ceil(endsAt-performance.now()))});
+   let data,brokerResult;if(config.inferenceMode==='coatria_broker_v1'){
+    brokerResult=await inference.complete({step,requestId:tools.key('inference:'+step),signal:active,timeoutMs:Math.max(1,Math.ceil(endsAt-performance.now()))});
+    if(!isBrokerInferenceCompletion(brokerResult)||brokerResult.runId!==run.id||brokerResult.step!==step)throw new Error('The trusted Coatria inference client did not return its bound protocol result.');data=brokerResult.output;
+   }
    else if(config.provider==='runpod')data=await runpodCompletion({endpointId:config.endpointId,key:config.key,body,signal:active,timeoutMs:Math.max(1,Math.ceil(endsAt-performance.now())),fetch:transport});
    else{let response;try{response=await untilAborted(()=>transport(config.url,{method:'POST',redirect:'error',signal:active,headers:{'Content-Type':'application/json',...(config.protocol==='anthropic'?{'x-api-key':config.key,'anthropic-version':'2023-06-01'}:{Authorization:'Bearer '+config.key})},body:bytes}),active);}catch{throw new Error('The model request stopped or failed; it was not automatically retried.');}data=await readResponse(response,active);}
    active.throwIfAborted();spent+=usageTokens(data,config.protocol);if(spent>config.limits.maxTotalTokens)throw new Error('The model exceeded the run token budget.');
+   if(brokerResult){
+    if(brokerResult.usage.completionTokens>config.limits.maxOutputTokens)throw new Error('The model exceeded the run output token budget.');
+    if(brokerResult.disposition==='validation_feedback'){
+     const feedback=brokerResult.validationFeedback;
+     if(feedback.correction!==correctionCount+1||feedback.correction>2||callCount+feedback.calls.length>64)throw new Error('The run exceeded its validation correction or tool call limit.');
+     for(const call of feedback.calls){if(seenCalls.has(call.id)||!allowed.has(call.name))throw new Error('The model requested an unauthorized or duplicate tool call.');seenCalls.add(call.id);}
+     correctionCount=feedback.correction;callCount+=feedback.calls.length;
+     // The server owns immutable non-execution receipts and reconstructs the
+     // next model context. Never parse arguments or execute any rejected call,
+     // including valid siblings. This still consumes the same step and budget.
+     continue;
+    }
+   }
    const result=normalize(data,config.protocol);
    if(!result.calls.length){if(!result.text||result.text.length>12000)throw new Error('The model did not provide a bounded final result.');return {result:result.text};}
    if(result.calls.length>8||callCount+result.calls.length>64)throw new Error('The model exceeded its tool call limit.');

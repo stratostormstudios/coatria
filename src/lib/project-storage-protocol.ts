@@ -12,6 +12,7 @@ export const projectStorageName=z.string().trim().min(1).max(160).regex(/^[^\\/\
 export const projectStoragePath=z.string().min(1).max(2048).refine(value=>value.split('/').length<=12&&value.split('/').every(part=>projectStorageName.safeParse(part).success&&part===part.trim()),'Use a relative path with at most 12 normalized named folders.');
 export const projectStorageConnectionInput=z.object({clientId,name:projectStorageName,region:z.enum(RUNPOD_STORAGE_REGIONS),volumeId:z.string().min(4).max(64).regex(/^[a-z0-9-]+$/),accessKeyId:z.string().regex(/^user_[a-zA-Z0-9_-]{4,160}$/),secretAccessKey:z.string().regex(/^rps_[a-zA-Z0-9_-]{8,256}$/)}).strict();
 export const projectStorageConnectionRevokeInput=z.object({clientId,revision:z.number().int().min(1),status:z.literal('revoked')}).strict();
+export const projectStorageConnectionReauthorizeInput=z.object({clientId,revision:z.number().int().min(1),accessKeyId:projectStorageConnectionInput.shape.accessKeyId,secretAccessKey:projectStorageConnectionInput.shape.secretAccessKey}).strict();
 export const projectStorageBindingInput=z.object({clientId,revision,connectionId:uuid}).strict();
 export const projectStorageListInput=z.object({parentId:uuid.nullable().optional(),after:uuid.optional(),limit:z.number().int().min(1).max(100).default(50)}).strict();
 export const projectStoragePlanListInput=z.object({after:uuid.optional(),limit:z.number().int().min(1).max(50).default(20)}).strict();

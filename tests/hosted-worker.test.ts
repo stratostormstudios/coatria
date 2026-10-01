@@ -55,6 +55,13 @@ test('authentication failure exits without an infinite retry loop or raw diagnos
  try{const result=await runHostedWorker({directory:folder,companyId,agentId,deadlineMs:Date.now()+5000,client:client({autonomyTick:async()=>{tries++;throw new RuntimeError(401,'AGENT_REVOKED');}}),execute:async()=>({}),log:event=>events.push(event)});assert.equal(result.reason,'access_ended');assert.equal(result.exitCode,1);assert.equal(tries,1);assert(events.every(item=>Object.keys(item).every(key=>['at','event'].includes(key))));}finally{await remove(folder);}
 });
 
+test('legacy hosted worker preserves fixed failure codes and run identity without private diagnostics',async()=>{
+ const folder=await directory(),control=new AbortController(),item=run(),events:any[]=[];let failures=0;
+ try{await runHostedWorker({directory:folder,companyId,agentId,deadlineMs:Date.now()+5000,signal:control.signal,client:client({claim:async()=>({run:item,leaseToken:fixtureSecret,leaseExpiresAt:new Date(Date.now()+60000).toISOString()}),context:async()=>context(item),fail:async(_id:string,payload:any)=>{assert.equal(payload.retryable,false);failures++;control.abort();return{run:{status:'failed'}};}}),execute:async()=>{const error=new RuntimeError(409,'INFERENCE_OUTPUT_INVALID');error.message=fixtureSecret;throw error;},log:entry=>events.push(entry)});
+  assert.equal(failures,1);const failure=events.find(row=>row.event==='adapter-failed');assert.equal(failure.runId,item.id);assert.equal(failure.code,'INFERENCE_OUTPUT_INVALID');assert(!JSON.stringify(events).includes(fixtureSecret));
+ }finally{await remove(folder);}
+});
+
 test('SIGTERM follows the cooperative path and removes its process handlers',async()=>{
  const folder=await directory();let started!:()=>void;const ready=new Promise<void>(resolve=>started=resolve),before=process.listenerCount('SIGTERM');
  try{const pending=runHostedWorker({directory:folder,companyId,agentId,deadlineMs:Date.now()+5000,client:client({claim:async()=>{started();return{run:null};}}),execute:async()=>({})});await ready;process.emit('SIGTERM');const result=await pending;assert.equal(result.reason,'signal');assert.equal(result.exitCode,0);assert.equal(process.listenerCount('SIGTERM'),before);}finally{await remove(folder);}

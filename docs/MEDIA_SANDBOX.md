@@ -66,9 +66,9 @@ does not weaken runtime trust or change shared host-directory permissions.
   Exact compiler/libc package versions and every resulting file hash are saved.
 
 There is no runtime download. Root CI setup downloads only the exact official
-Noble `apparmor-profiles=4.0.1really4.0.1-0ubuntu0.24.04.7` package from signed APT
+Noble `apparmor-profiles=4.0.1really4.0.1-0ubuntu0.24.04.8` package from signed APT
 indexes and checks its SHA-256
-`bdac5b74d884643653565c52ed7483c9582e646ff72cce8d95d0eb8467a3139c`.
+`4e7d728322f899a7a06e71bedd4f4bd1f20c21f0b3361120f34cf5c0feec849e`.
 It extracts only the reviewed ABI4 `bwrap-userns-restrict` profile (1,936 bytes,
 SHA-256 `11d39094f044f0cda0febb3ad517b830301da6b2ce929664af09ee9e4dd264f9`).
 Other package profiles are not installed. This follows Ubuntu's
@@ -135,6 +135,17 @@ allowlisted setup-error categories. Raw stderr and arbitrary paths/tokens are
 discarded. Host user-namespace/AppArmor policy is observed without changing it.
 This diagnostic always records `qualified:false`; it cannot substitute for or
 turn a failed qualification into success.
+
+Boundary failures also retain `qualification.json.boundaryDiagnostic`: a fixed
+sub-check ID, closed execution-error category, boolean network/isolation facts,
+namespace-format/difference booleans, observed-group count and control-match
+booleans. The sub-check is recorded before process launch, cgroup observation,
+drainage and each boundary assertion, so an observation failure is distinguishable
+from a failed process or isolation check. Raw process output, exception text,
+paths and PIDs are excluded from this diagnostic. A nonzero process still loses
+its stdout at the production boundary; its individual boolean facts remain
+unavailable. The nested diagnostic always says `qualified:false` and changes no
+assertion, enforcement, timeout or acceptance condition.
 
 ## Deployment boundary
 

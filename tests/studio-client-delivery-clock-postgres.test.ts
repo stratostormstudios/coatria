@@ -127,7 +127,7 @@ test('client delivery deadlines use PostgreSQL after row and idempotency lock wa
   });
   await t.test('creation expiry is revalidated after waiting on its project row lock',async()=>{
    const payload=await shareData(await dbAt("clock_timestamp()+interval '2 seconds'")),blocker=await owner!.connect();let pending:Promise<Response>|undefined;
-   try{await blocker.query('BEGIN');await blocker.query('SELECT id FROM studio_projects WHERE id=$1 FOR UPDATE',[projectId]);pending=request(adminPath(projectId),'POST',payload,'owner');await lockWait('%SELECT revision,status,created_by FROM studio_projects%');await owner!.query('SELECT pg_sleep(GREATEST(0,EXTRACT(EPOCH FROM $1::timestamptz-clock_timestamp()))::float8+0.03)',[payload.expiresAt]);await blocker.query('ROLLBACK');const result=await pending;assert.equal(result.status,400);assert.equal((await result.json()).code,'CLIENT_EXPIRY_INVALID');}
+   try{await blocker.query('BEGIN');await blocker.query('SELECT id FROM studio_projects WHERE id=$1 FOR UPDATE',[projectId]);pending=request(adminPath(projectId),'POST',payload,'owner');await lockWait('%FROM studio_projects%FOR UPDATE%');await owner!.query('SELECT pg_sleep(GREATEST(0,EXTRACT(EPOCH FROM $1::timestamptz-clock_timestamp()))::float8+0.03)',[payload.expiresAt]);await blocker.query('ROLLBACK');const result=await pending;assert.equal(result.status,400);assert.equal((await result.json()).code,'CLIENT_EXPIRY_INVALID');}
    finally{await blocker.query('ROLLBACK');blocker.release();await pending?.catch(()=>{});}
   });
   await t.test('signing that crosses the share-capped file deadline returns no URL or receipt',async()=>{

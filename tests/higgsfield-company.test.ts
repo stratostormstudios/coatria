@@ -1,3 +1,4 @@
+import {currentTaskPatchForFixture} from './task-fixture-revision';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,randomBytes} from 'node:crypto';
@@ -21,11 +22,12 @@ test('company OAuth, exact spending intent, revocation and uncertain generation 
  if(emulate){const {PGlite}=await import('@electric-sql/pglite'),{PGLiteSocketServer}=await import('@electric-sql/pglite-socket'),db=await PGlite.create();for(const file of(await readdir('database')).filter(f=>/^\d.*\.sql$/.test(f)).sort())await db.exec(await readFile('database/'+file,'utf8'));const server=new PGLiteSocketServer({db,host:'127.0.0.1',port:0,maxConnections:1});await server.start();process.env.DATABASE_URL='postgresql://postgres:postgres@'+server.getServerConn()+'/postgres';stop=async()=>{await server.stop();await db.close();};}
  const company=randomUUID(),foreign=randomUUID(),owner=randomUUID(),member=randomUUID(),other=randomUUID(),project=randomUUID(),creativeAgent=randomUUID(),creativeToken='ca_'+randomUUID();const sessions={owner:randomUUID(),member:randomUUID(),other:randomUUID()};
  const prefix=`companies/${company}/higgsfield`,origin='https://coatria.com',access='fixture_'+randomUUID(),refresh='fixture_'+randomUUID();
- let paid=0,estimates=0,exchanges=0,refreshes=0,mode:'ok'|'uncertain'|'tool_error'='ok';
+ let paid=0,estimates=0,exchanges=0,refreshes=0,providerCalls=0,mode:'ok'|'uncertain'|'tool_error'='ok';
  const issuer='https://clerk.higgsfield.ai',endpoint='https://mcp.higgsfield.ai/mcp',callback=origin+'/api/higgsfield/callback';
  const toolSchema={type:'object',properties:{prompt:{type:'string'}},required:['prompt'],additionalProperties:false};
- const tools:{name:string;description:string;inputSchema:Record<string,unknown>}[]=['generate_image','generate_video','generate_audio','balance','models_list','jobs_wait','list_workspaces','workspace_select'].map(name=>({name,description:'Fixture '+name,inputSchema:toolSchema}));
+ const tools:{name:string;description:string;inputSchema:Record<string,unknown>}[]=['generate_image','generate_video','generate_audio','estimate_image_cost','estimate_video_cost','balance','models_list','jobs_wait','list_workspaces','workspace_select'].map(name=>({name,description:'Fixture '+name,inputSchema:toolSchema}));
  globalThis.fetch=async(input,init)=>{
+  providerCalls++;
   const url=String(input);assert.equal(init?.redirect,'error');
   if(url==='https://mcp.higgsfield.ai/.well-known/oauth-protected-resource/mcp')return Response.json({resource:endpoint,authorization_servers:[issuer],scopes_supported:['openid','email','offline_access']});
   if(url===issuer+'/.well-known/oauth-authorization-server')return Response.json({issuer,authorization_endpoint:issuer+'/oauth/authorize',token_endpoint:issuer+'/oauth/token',registration_endpoint:issuer+'/oauth/register',code_challenge_methods_supported:['S256'],grant_types_supported:['authorization_code','refresh_token'],token_endpoint_auth_methods_supported:['none']});
@@ -39,7 +41,8 @@ test('company OAuth, exact spending intent, revocation and uncertain generation 
   else if(command.method==='tools/call'){if(command.params.name.startsWith('generate_')){if(command.params.arguments.params?.get_cost===true){estimates++;assert.deepEqual(Object.keys(command.params.arguments),['params']);result={content:[],structuredContent:{cost:2,estimate:true}};}else{paid++;if(mode==='uncertain')throw Error('Synthetic connection loss after submit');result={content:[{type:'text',text:'Fixture provider accepted job'}],...(mode==='tool_error'?{isError:true}:{structuredContent:{job_ids:[randomUUID()],status:'queued'}})};}}else result={content:[{type:'text',text:'Fixture read response'}]};}
   else throw Error('Unexpected RPC');return Response.json({jsonrpc:'2.0',id:command.id,result});
  };
- async function call(path:string,method='GET',payload?:unknown,actor:keyof typeof sessions|'none'|'agent'='owner',expected=200){const headers:Record<string,string>={Origin:origin};if(actor==='agent')headers.Authorization='Bearer '+creativeToken;else if(actor!=='none')headers.Cookie='coatria_session='+sessions[actor];if(payload!==undefined)headers['Content-Type']='application/json';const response=await handleApi(new Request(origin+'/api/'+path,{method,headers,...payload===undefined?{}:{body:JSON.stringify(payload)}}),path.split('?')[0].split('/'));const value=response.status===303?{}:await response.json();assert.equal(response.status,expected,`${method} ${path} returned ${JSON.stringify(value)}`);assert(!JSON.stringify(value).includes(access));assert(!JSON.stringify(value).includes(refresh));return {response,value};}
+ async function call(path:string,method='GET',payload?:unknown,actor:keyof typeof sessions|'none'|'agent'='owner',expected=200){payload=await currentTaskPatchForFixture(path,method,payload);
+    const headers:Record<string,string>={Origin:origin};if(actor==='agent')headers.Authorization='Bearer '+creativeToken;else if(actor!=='none')headers.Cookie='coatria_session='+sessions[actor];if(payload!==undefined)headers['Content-Type']='application/json';const response=await handleApi(new Request(origin+'/api/'+path,{method,headers,...payload===undefined?{}:{body:JSON.stringify(payload)}}),path.split('?')[0].split('/'));const value=response.status===303?{}:await response.json();assert.equal(response.status,expected,`${method} ${path} returned ${JSON.stringify(value)}`);assert(!JSON.stringify(value).includes(access));assert(!JSON.stringify(value).includes(refresh));return {response,value};}
  let proposal:any;
  try{
   for(const[id,name]of [[owner,'owner'],[member,'member'],[other,'other']])await query('INSERT INTO users(id,name,email,password_hash) VALUES($1,$2,$3,$4)',[id,name,id+'@example.invalid','fixture']);
@@ -152,7 +155,7 @@ test('company OAuth, exact spending intent, revocation and uncertain generation 
      await editor.query('UPDATE tasks SET revision=revision+1 WHERE id=$1',[work.taskId]);
      approval=call(`${prefix}/requests/${pendingRequest.id}/execute`,'POST',{requestHash:pendingRequest.requestHash,creditConsent:true},'owner',409);
      let waiting=false;for(let attempt=0;attempt<80;attempt++){
-      const blocked=(await query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT id,revision,ai_policy,gates,status,production_path FROM studio_projects%' LIMIT 1")).rowCount;
+      const blocked=(await query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT id,revision,ai_policy,gates,status,production_path,contract_version,spec FROM studio_projects%' LIMIT 1")).rowCount;
       if(blocked){waiting=true;break;}await new Promise(resolve=>setTimeout(resolve,25));
      }
      assert(waiting,'The approval must actually wait for the concurrent project edit.');
@@ -160,6 +163,40 @@ test('company OAuth, exact spending intent, revocation and uncertain generation 
      assert.equal((await query('SELECT status FROM higgsfield_requests WHERE id=$1',[pendingRequest.id])).rows[0].status,'proposed');
     }finally{await editor.query('ROLLBACK').catch(()=>{});editor.release();await approval?.catch(()=>{});}
    });
+  });
+  await t.test('v2 media kind fences proposals and existing mismatched requests before any provider call; v1 stays compatible',async()=>{
+   mode='ok';
+   for(const kind of ['image','video','audio'] as const){
+    const spec=kind==='image'?{kind,format:'png',width:64,height:64,color:{mode:'not_required'}}:kind==='video'?{kind,format:'mp4',codec:'h264',width:64,height:64,color:{mode:'not_required'},frameRate:{mode:'constant',numerator:24,denominator:1},audio:{mode:'none'}}:{kind,format:'wav',codec:'pcm_s16le',sampleRateHz:48000,channels:2};
+    const p=(await call(`companies/${company}/studio/projects`,'POST',{clientId:randomUUID(),contractVersion:2,productionPath:'higgsfield',name:`Typed ${kind}`,clientName:'Synthetic client',brief:'Only the approved media kind may be generated.',aiPolicy:'allowed',spec,shots:[{kind,code:'MEDIA010',description:'Synthetic kind check',...kind==='image'?{}:{durationMs:{min:900,max:1100}}}]},'owner',201)).value.project;
+    const detail=(await call(`companies/${company}/studio/projects/${p.id}?contractVersion=2`)).value,work=detail.workItems.find((w:any)=>w.stage==='generation');
+    await query('UPDATE studio_projects SET gates=$2 WHERE id=$1',[p.id,JSON.stringify(Object.fromEntries(['brief','estimate','production'].map(k=>[k,{decision:'approved'}])))]);
+    await query("UPDATE tasks SET status='done' WHERE id IN (SELECT task_id FROM studio_work_items WHERE company_id=$1 AND project_id=$2 AND stage IN ('estimate','breakdown','references'))",[company,p.id]);
+    const input={clientId:randomUUID(),projectId:p.id,projectRevision:p.revision,workItemId:work.id,tool:`generate_${kind}`,arguments:{prompt:`Synthetic ${kind}`},note:'Exact media-kind fixture'};
+    const matching=(await call(prefix+'/requests','POST',input,'owner',201)).value.request;
+    for(const wrong of ['image','video','audio'].filter(value=>value!==kind)){
+     const before=providerCalls,beforePaid=paid,bad={...input,clientId:randomUUID(),tool:`generate_${wrong}`};
+     await query("UPDATE higgsfield_connections SET expires_at=now()-interval '1 minute' WHERE company_id=$1",[company]);
+     assert.equal((await call(prefix+'/requests','POST',bad,'owner',409)).value.code,'HIGGSFIELD_MEDIA_KIND_MISMATCH');
+     assert.equal((await query('SELECT id FROM higgsfield_requests WHERE company_id=$1 AND client_id=$2',[company,bad.clientId])).rowCount,0);
+     // Seed the exact request shape accepted before this guard existed.
+     const requestId=randomUUID(),requestHash=hashToken(requestId);
+     await query(`INSERT INTO higgsfield_requests(id,company_id,project_id,requested_by,agent_id,run_id,client_id,project_revision,connection_revision,tool,arguments,note,request_hash,work_item_id,task_revision,role_agent_id,role_human_id,connection_id)
+      SELECT $2,company_id,project_id,requested_by,agent_id,run_id,$3,project_revision,connection_revision,$4,arguments,note,$5,work_item_id,task_revision,role_agent_id,role_human_id,connection_id FROM higgsfield_requests WHERE id=$1`,[matching.id,requestId,randomUUID(),bad.tool,requestHash]);
+     assert.equal((await call(`${prefix}/requests/${requestId}/execute`,'POST',{requestHash,creditConsent:true},'owner',409)).value.code,'HIGGSFIELD_MEDIA_KIND_MISMATCH');
+     assert.equal((await call(`${prefix}/requests/${requestId}/estimate`,'POST',{requestHash},'owner',409)).value.code,'HIGGSFIELD_MEDIA_KIND_MISMATCH');
+     const saved=(await query('SELECT status,approved_by,dispatched_at FROM higgsfield_requests WHERE id=$1',[requestId])).rows[0];assert.equal(saved.status,'proposed');assert.equal(saved.approved_by,null);assert.equal(saved.dispatched_at,null);
+     assert.equal(providerCalls,before);assert.equal(paid,beforePaid);
+     await query("UPDATE higgsfield_connections SET expires_at=now()+interval '1 hour' WHERE company_id=$1",[company]);
+    }
+    const before=paid;await call(`${prefix}/requests/${matching.id}/execute`,'POST',{requestHash:matching.requestHash,creditConsent:true});assert.equal(paid,before+1);
+   }
+   const before=providerCalls;
+   for(const tool of ['generate_image','generate_video','generate_audio'])assert.equal((await call(prefix+'/requests','POST',{clientId:randomUUID(),projectId:project,projectRevision:1,tool,arguments:{prompt:'Legacy choices remain available'},note:'Legacy compatibility'},'owner',201)).value.request.tool,tool);
+   assert.equal(providerCalls,before);
+   await call(prefix+'/read','POST',{tool:'balance',arguments:{}});
+   // Give the separate cost-argument cases their own synthetic rate-limit window.
+   await query('DELETE FROM rate_limits WHERE key=$1',[hashToken(`higgsfield-estimate:${company}`)]);
   });
   await t.test('authenticated catalog changes are explicit and invalidate unsent proposals without spending',async()=>{
    const before=paid;
@@ -176,7 +213,7 @@ test('company OAuth, exact spending intent, revocation and uncertain generation 
    assert.equal((await call(prefix+'/catalog','POST',{})).value.revision,2);assert.equal(paid,before);
   });
   await t.test('exact cost preflight forces the advertised read-only flag and never authorizes generation',async()=>{
-   const before=paid,input={clientId:randomUUID(),projectId:project,projectRevision:1,tool:'generate_image',arguments:{params:{model:'fixture-image',prompt:'An original product concept',get_cost:false},get_cost:false},note:'Cost fixture'};
+   const before=paid,input={clientId:randomUUID(),projectId:project,projectRevision:1,tool:'generate_image',arguments:{params:{model:'fixture-image',prompt:'An original product concept',get_cost:false}},note:'Cost fixture'};
    const request=(await call(prefix+'/requests','POST',input,'owner',201)).value.request;
    await call(`${prefix}/requests/${request.id}/estimate`,'POST',{requestHash:request.requestHash},'member',403);
    await call(`${prefix}/requests/${request.id}/estimate`,'POST',{requestHash:'b'.repeat(64)},'owner',409);
@@ -184,10 +221,30 @@ test('company OAuth, exact spending intent, revocation and uncertain generation 
    const quote=(await call(`${prefix}/requests/${request.id}/estimate`,'POST',{requestHash:request.requestHash})).value;
    assert.equal(quote.estimateOnly,true);assert.equal(quote.spendingAuthorized,false);assert.equal(quote.priceGuaranteed,false);assert.equal(quote.result.structuredContent.cost,2);assert.equal(estimates,1);assert.equal(paid,before);
    const stored=(await query('SELECT arguments,status FROM higgsfield_requests WHERE id=$1',[request.id])).rows[0];assert.deepEqual(stored.arguments,input.arguments);assert.equal(stored.status,'proposed');
+   const outer=(await call(prefix+'/requests','POST',{...input,clientId:randomUUID(),arguments:{...input.arguments,get_cost:false}},'owner',201)).value.request;
+   assert.equal((await call(`${prefix}/requests/${outer.id}/estimate`,'POST',{requestHash:outer.requestHash},'owner',409)).value.code,'HIGGSFIELD_ESTIMATE_ARGUMENTS_UNSUPPORTED');
    const serialized=(await call(prefix+'/requests','POST',{...input,clientId:randomUUID(),arguments:{params:JSON.stringify(input.arguments.params)}},'owner',201)).value.request;
    await call(`${prefix}/requests/${serialized.id}/estimate`,'POST',{requestHash:serialized.requestHash},'owner',409);
    const unsupported=(await call(prefix+'/requests','POST',{...input,clientId:randomUUID(),tool:'generate_audio'},'owner',201)).value.request;
    await call(`${prefix}/requests/${unsupported.id}/estimate`,'POST',{requestHash:unsupported.requestHash},'owner',409);assert.equal(estimates,1);assert.equal(paid,before);
+  });
+  await t.test('cost routes reject URL reference imports before any provider call and retain UUID-only estimates',async()=>{
+   const url='https://reference.example.invalid/private.png',before=providerCalls,beforePaid=paid;
+   await query("UPDATE higgsfield_connections SET expires_at=now()-interval '1 minute' WHERE company_id=$1",[company]);
+   for(const tool of ['estimate_image_cost','estimate_video_cost']){
+    const rejected=await call(prefix+'/read','POST',{tool,arguments:{params:{model:'fixture-model',medias:[{role:'image',value:url}]}}},'owner',409);
+    assert.equal(rejected.value.code,'HIGGSFIELD_ESTIMATE_REFERENCE_UNSAFE');assert(!JSON.stringify(rejected.value).includes(url));
+   }
+   const input={clientId:randomUUID(),projectId:project,projectRevision:1,tool:'generate_image',arguments:{params:{model:'fixture-image',medias:[{role:'image',value:url}]}},note:'Approved generation remains separate from no-upload estimates'};
+   const request=(await call(prefix+'/requests','POST',input,'owner',201)).value.request;
+   assert.equal((await call(`${prefix}/requests/${request.id}/estimate`,'POST',{requestHash:request.requestHash},'owner',409)).value.code,'HIGGSFIELD_ESTIMATE_REFERENCE_UNSAFE');
+   assert.equal(providerCalls,before);assert.equal(paid,beforePaid);
+   assert.deepEqual((await query('SELECT arguments FROM higgsfield_requests WHERE id=$1',[request.id])).rows[0].arguments,input.arguments);
+   await query("UPDATE higgsfield_connections SET expires_at=now()+interval '1 hour' WHERE company_id=$1",[company]);
+   const safe={params:{model:'fixture-image',medias:[{role:'image',value:randomUUID()}]}};
+   for(const tool of ['estimate_image_cost','estimate_video_cost'])await call(prefix+'/read','POST',{tool,arguments:safe});
+   const safeRequest=(await call(prefix+'/requests','POST',{...input,clientId:randomUUID(),arguments:safe},'owner',201)).value.request;
+   await call(`${prefix}/requests/${safeRequest.id}/estimate`,'POST',{requestHash:safeRequest.requestHash});assert.equal(paid,beforePaid);
   });
   await t.test('disconnect destroys stored credential and invalidates proposals; exact revision required',async()=>{
    await call(prefix+'/disconnect','POST',{revision:1},'owner',409);await call(prefix+'/disconnect','POST',{revision:2});

@@ -12,6 +12,7 @@ const expires=()=>new Date(Date.now()+3600000).toISOString();
 test('coordination schemas expose explicit finite approvals, never privilege or provider overrides',()=>{
  const input={clientId:randomUUID(),revision:0,coordinatorAgentId:randomUUID(),allowedRoleKeys:['producer'],status:'paused',maxRuns:2,maxConcurrentRuns:1,expiresAt:expires()};
  assert(studioCoordinationInput.safeParse(input).success);
+ assert(!Object.hasOwn(studioCoordinationInput.parse(input),'coordinatorGeneration'),'Legacy inputs keep their exact hash fields and acquire no new opt-in');
  for(const patch of [{maxRuns:0},{maxRuns:101},{maxConcurrentRuns:4},{allowedRoleKeys:['producer','producer']},{allowedRoleKeys:['invented']},{status:'autonomous'},{grant:['*']},{runsStarted:0},{approvedBy:randomUUID()}])assert(!studioCoordinationInput.safeParse({...input,...patch}).success);
  assert(!studioWorkDispatchInput.safeParse({projectId:randomUUID(),workItemId:randomUUID(),policyRevision:1,projectRevision:1,agentId:randomUUID()}).success);
  assert.equal(AGENT_TOOLS.studio_work_dispatch.capability,'studio.write');assert.equal(AGENT_TOOLS.studio_coordination_get.capability,'studio.read');
@@ -44,6 +45,8 @@ test('coordinator handoffs enforce real leases, exact human approval, lifetime b
    const body={clientId:randomUUID(),revision:0,coordinatorAgentId:agents.coordinator.id,allowedRoleKeys:['producer'],status:'active',maxRuns:1,maxConcurrentRuns:1,expiresAt:expires()};
    await call(policyPath(d.project.id),'PUT',body,'coordinator',401);await call(policyPath(d.project.id),'PUT',body,'member',403);await call(policyPath(d.project.id),'PUT',{...body,expiresAt:new Date(Date.now()+90000000).toISOString()},'owner',400);
    const saved=await call(policyPath(d.project.id),'PUT',body);assert.equal(saved.policy.effectiveStatus,'active');assert.equal(saved.startsWorkers,false);assert.equal(saved.budgetUnit,'specialist_runs');assert.equal((await call(policyPath(d.project.id),'PUT',body)).replayed,true);
+   assert(!Object.hasOwn(saved.policy,'coordinatorGeneration'));assert.equal((await query('SELECT coordinator_generation FROM studio_coordination_policies WHERE company_id=$1 AND project_id=$2',[company,d.project.id])).rows[0].coordinator_generation,false);
+   await call(policyPath(d.project.id),'PUT',{...body,clientId:randomUUID(),revision:saved.policy.revision,coordinatorGeneration:true},'owner',409);
    await call(policyPath(d.project.id),'PUT',{...body,clientId:randomUUID()},'owner',409);assert.equal((await call(policyPath(d.project.id))).policy.runsStarted,0);
   });
   await t.test('gates, exact revisions and live parent lease reject before creating a child',async()=>{

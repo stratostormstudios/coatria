@@ -5,7 +5,7 @@ const user={id:'10000000-0000-4000-8000-000000000011',name:'Morgan Review',email
 const peer={...user,id:'10000000-0000-4000-8000-000000000012',name:'Sam Contributor',email:'sam-ui@example.invalid'};
 const company={id:'20000000-0000-4000-8000-000000000011',name:'Work UX Studio',slug:'work-ux',template:'blank',role:'owner'};
 const date='2026-09-08T10:00:00.000Z';
-const task=(suffix:string,title:string,extra:Partial<Task>={}):Task=>({id:'30000000-0000-4000-8000-'+suffix.padStart(12,'0'),title,description:'A clear outcome for the launch.',status:'todo',assigneeId:user.id,createdBy:peer.id,submissionUrl:null,reviewNote:null,createdAt:date,updatedAt:date,authorIds:[],...extra});
+const task=(suffix:string,title:string,extra:Partial<Task>={}):Task=>({id:'30000000-0000-4000-8000-'+suffix.padStart(12,'0'),title,description:'A clear outcome for the launch.',status:'todo',revision:1,assigneeId:user.id,createdBy:peer.id,submissionUrl:null,reviewNote:null,createdAt:date,updatedAt:date,authorIds:[],...extra});
 const skill=(suffix:string,title:string,content:string):Skill=>({id:'40000000-0000-4000-8000-'+suffix.padStart(12,'0'),title,description:'A reusable personal method.',content,version:1,updatedAt:date});
 const fulfill=(route:Route,data:unknown,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)});
 
@@ -17,7 +17,8 @@ async function fixture(page:Page,role='owner'){
   if(path===`/api/companies/${company.id}/workspace`)return fulfill(route,{company:{...company,role},members:[{...user,userId:user.id,role},{...peer,userId:peer.id,role:'member'}],rooms:[],agents:[],tasks:state.tasks,messages:[],presence:[],activity:[],drives:[],openings:[],applications:[],layout:[]});
   if(path.includes('/tasks/')&&method==='PATCH'){
    const id=path.split('/').at(-1)!,body=route.request().postDataJSON();state.patches.push({id,body});
-   state.tasks=state.tasks.map(item=>item.id===id?{...item,...body,updatedAt:new Date(Date.parse(item.updatedAt)+1000).toISOString(),...(body.status==='review'?{submittedBy:user.id,authorIds:[user.id]}:{})}:item);
+   const current=state.tasks.find(item=>item.id===id)!;if(body.expectedRevision!==current.revision)return fulfill(route,{error:'This task changed. Reload it and review the current contribution before trying again.',code:'TASK_REVISION_CONFLICT'},409);
+   state.tasks=state.tasks.map(item=>item.id===id?{...item,...body,revision:item.revision+1,updatedAt:new Date(Date.parse(item.updatedAt)+1000).toISOString(),...(body.status==='review'?{submittedBy:user.id,authorIds:[user.id]}:{})}:item);
    return fulfill(route,{task:state.tasks.find(item=>item.id===id)});
   }
   if(path==='/api/vault'&&method==='GET')return fulfill(route,{skills:state.skills});
@@ -55,25 +56,43 @@ test('an assignee submits only changed fields and submitted outcomes become read
  await expect(page.getByRole('heading',{name:'Review feedback',exact:true})).toBeVisible();await expect(page.getByText('Please verify the final heading before resubmitting.',{exact:true})).toBeVisible();
  await page.getByRole('combobox',{name:'Status',exact:true}).selectOption('review');await page.getByLabel('Contribution link',{exact:true}).fill('https://example.com/launch-reviewed');
  await page.getByRole('button',{name:'Save task updates',exact:true}).click();await expect(page.getByRole('heading',{name:'Independent review',exact:true})).toBeVisible();
- expect(state.patches[0].body).toEqual({status:'review',submissionUrl:'https://example.com/launch-reviewed'});
+ expect(state.patches[0].body).toEqual({expectedRevision:1,status:'review',submissionUrl:'https://example.com/launch-reviewed'});
  await expect(page.getByLabel('Task title',{exact:true})).toHaveCount(0);await expect(page.getByRole('button',{name:'Review and accept',exact:true})).toHaveCount(0);
  await expect(page.getByRole('link',{name:'Open contribution link',exact:true})).toHaveAttribute('href','https://example.com/launch-reviewed');
- await page.getByRole('button',{name:'Continue working',exact:true}).click();await expect(page.getByLabel('Task title',{exact:true})).toBeVisible();expect(state.patches[1].body).toEqual({status:'doing'});
+ await page.getByRole('button',{name:'Continue working',exact:true}).click();await expect(page.getByLabel('Task title',{exact:true})).toBeVisible();expect(state.patches[1].body).toEqual({expectedRevision:2,status:'doing'});
 });
 
 test('independent reviewers can request changes without rewriting the submitted work',async({page})=>{
  const state=await fixture(page);await page.goto('/#tasks');await page.getByRole('button',{name:'Open task: Check the final captions',exact:true}).click();
  await expect(page.getByLabel('Task title',{exact:true})).toHaveCount(0);await page.getByRole('button',{name:'Request changes',exact:true}).click();await page.getByLabel('Review decision',{exact:true}).fill('Please verify the final name spelling.');
  await page.getByRole('button',{name:'Return to in progress',exact:true}).click();await expect(page.getByLabel('Task title',{exact:true})).toHaveValue('Check the final captions');
- expect(state.patches[0].body).toEqual({status:'doing',reviewNote:'Please verify the final name spelling.'});
+ expect(state.patches[0].body).toEqual({expectedRevision:1,status:'doing',reviewNote:'Please verify the final name spelling.'});
 });
 
 test('a polled task update preserves a local draft until the person loads the latest version',async({page})=>{
  const state=await fixture(page);await page.goto('/#tasks');await page.getByRole('button',{name:'Open task: Review the launch page',exact:true}).click();await page.getByLabel('Task title',{exact:true}).fill('My unfinished local title');
- state.tasks=state.tasks.map(item=>item.id===state.tasks[0].id?{...item,title:'A teammate updated this title',updatedAt:'2026-09-08T10:01:00.000Z'}:item);
+ state.tasks=state.tasks.map(item=>item.id===state.tasks[0].id?{...item,title:'A teammate updated this title',revision:item.revision+1,updatedAt:'2026-09-08T10:01:00.000Z'}:item);
  await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
  await expect(page.getByText('This task changed while you were editing.',{exact:true})).toBeVisible();await expect(page.getByLabel('Task title',{exact:true})).toHaveValue('My unfinished local title');await expect(page.getByRole('button',{name:'Save task updates',exact:true})).toBeDisabled();
  await page.getByRole('button',{name:'Discard edits and load latest',exact:true}).click();await expect(page.getByLabel('Task title',{exact:true})).toHaveValue('A teammate updated this title');expect(state.patches).toHaveLength(0);
+});
+
+test('a review stays pinned to the inspected revision when polling sees a new submission',async({page})=>{
+ const state=await fixture(page);await page.goto('/#tasks');await page.getByRole('button',{name:'Open task: Check the final captions',exact:true}).click();
+ await page.getByRole('button',{name:'Review and accept',exact:true}).click();await page.getByLabel('Review decision',{exact:true}).fill('I checked the original captions.');
+ state.tasks=state.tasks.map(item=>item.id===state.tasks[1].id?{...item,revision:item.revision+3,submissionUrl:'https://example.com/replacement',updatedAt:'2026-09-08T10:02:00.000Z'}:item);
+ await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+ await expect(page.getByText('This contribution changed while you were reviewing.',{exact:true})).toBeVisible();await expect(page.getByRole('button',{name:'Accept contribution',exact:true})).toBeDisabled();await expect(page.getByLabel('Review decision',{exact:true})).toHaveValue('I checked the original captions.');expect(state.patches).toHaveLength(0);
+ page.once('dialog',dialog=>dialog.accept());await page.getByRole('button',{name:'Cancel review',exact:true}).click();await page.getByRole('button',{name:'Review and accept',exact:true}).click();await page.getByLabel('Review decision',{exact:true}).fill('I inspected the replacement captions.');await page.getByRole('button',{name:'Accept contribution',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'Accepted by an independent reviewer',exact:true})).toBeVisible();expect(state.patches[0].body).toEqual({expectedRevision:4,status:'done',reviewNote:'I inspected the replacement captions.'});
+});
+
+test('an unpolled stale acceptance is rejected without retry and keeps the review note',async({page})=>{
+ const state=await fixture(page);await page.goto('/#tasks');await page.getByRole('button',{name:'Open task: Check the final captions',exact:true}).click();
+ await page.getByRole('button',{name:'Review and accept',exact:true}).click();await page.getByLabel('Review decision',{exact:true}).fill('Original review note.');
+ // No workspace event: the server changes between the user's read and POST.
+ state.tasks=state.tasks.map(item=>item.id===state.tasks[1].id?{...item,revision:item.revision+1,updatedAt:'2026-09-08T10:03:00.000Z'}:item);
+ await page.getByRole('button',{name:'Accept contribution',exact:true}).click();await expect(page.getByRole('dialog').getByRole('alert')).toContainText('This task changed.');await expect(page.getByRole('button',{name:'Accept contribution',exact:true})).toBeDisabled();await expect(page.getByLabel('Review decision',{exact:true})).toHaveValue('Original review note.');expect(state.patches).toHaveLength(1);expect(state.patches[0].body.expectedRevision).toBe(1);expect(state.tasks[1].status).toBe('review');
 });
 
 test('private skill search includes instructions and failed version saves retain the draft',async({page})=>{

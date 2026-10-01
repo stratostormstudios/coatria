@@ -24,7 +24,7 @@ export const PLUGIN_CATALOG:PluginCatalogEntry[]=[
   summary:'A coding teammate with a persistent company role.',description:'Connect an operator-hosted Codex CLI worker to Coatria tasks, conversations and permissioned workspace tools.',
   providers:[{id:'openai',models:[model('gpt-5.6-sol','Sol','balanced'),...openaiModels],allowCustomModel:false}],
   docsUrl:'https://developers.openai.com/codex/cli/',credentialEnv:'CODEX_API_KEY',
-  setupFiles:['/downloads/agent-worker.mjs','/downloads/codex-adapter.mjs','/downloads/agent-mcp.mjs','/downloads/AGENT_RUNTIME.md'],
+  setupFiles:['/downloads/agent-worker.mjs','/downloads/codex-adapter.mjs','/downloads/agent-mcp.mjs','/downloads/provider-adapter.mjs','/downloads/AGENT_RUNTIME.md'],
   limitations:['Requires your own running worker and an authenticated Codex CLI.','CLI usage is controlled by your Codex account; API token and step budgets do not apply to this bridge.','Repository execution requires an explicitly provisioned isolated worker.']},
  {...common,id:'claude-code',name:'Claude Code',vendor:'Anthropic',category:'coding',harness:'claude-code',runtime:'claude-code-cli',
   summary:'Claude Code, connected to your team’s work.',description:'Connect a restricted, operator-hosted Claude Code worker using Coatria MCP tools and a durable company identity.',

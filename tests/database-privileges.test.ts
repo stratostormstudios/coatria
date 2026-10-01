@@ -73,6 +73,10 @@ test('runtime role supports accounts and durable conversations without verificat
     // Exercise the production role, including immutable planning, compute-cost,
     // and client receipts. Empty statements still require real SQL privileges.
     const immutableStudioTables=['studio_planning_reviews','studio_planning_review_reads','studio_planning_review_decisions','studio_host_compute_reservations','studio_host_provision_requests','studio_client_delivery_files','studio_client_delivery_receipts','studio_client_delivery_requests','studio_inference_reservations','studio_inference_tool_receipts','studio_coordination_followups'];
+    immutableStudioTables.push('studio_generated_artifact_sources','studio_generated_review_evidence');
+    immutableStudioTables.push('trusted_service_reservations','trusted_service_requests');
+    immutableStudioTables.push('higgsfield_reference_receipts','higgsfield_reference_requests','higgsfield_reference_transports','higgsfield_reference_confirmations');
+    immutableStudioTables.push('studio_reference_preparation_dispatches');
     for(const table of immutableStudioTables){
       assert.deepEqual((await client.query("SELECT has_table_privilege(current_user,$1,'SELECT') AS read,has_table_privilege(current_user,$1,'INSERT') AS append,has_any_column_privilege(current_user,$1,'UPDATE') AS edit,has_table_privilege(current_user,$1,'DELETE') AS remove",[table])).rows[0],{read:true,append:true,edit:false,remove:false},table);
       await client.query(`SELECT company_id FROM ${table} WHERE false`);
@@ -82,10 +86,28 @@ test('runtime role supports accounts and durable conversations without verificat
       await client.query(`UPDATE ${table} SET revision=revision+1 WHERE false`);
       assert.equal((await client.query("SELECT has_table_privilege(current_user,$1,'DELETE') AS allowed",[table])).rows[0].allowed,false);
     }
+    assert.deepEqual((await client.query("SELECT has_table_privilege(current_user,'higgsfield_reference_inspections','SELECT') AS read,has_table_privilege(current_user,'higgsfield_reference_inspections','INSERT') AS append,has_any_column_privilege(current_user,'higgsfield_reference_inspections','UPDATE') AS edit,has_table_privilege(current_user,'higgsfield_reference_inspections','DELETE') AS remove")).rows[0],{read:true,append:false,edit:false,remove:false});
+    await client.query('SELECT id FROM higgsfield_references WHERE false FOR UPDATE');
+    for(const column of ['project_id','project_revision','project_snapshot','project_sha256','work_item_id','work_snapshot','proxy_version_id','source_version_id','proxy_snapshot','source_snapshot','request_hash','provider_connection_id','storage_connection_id','catalog_sha256','inspection_authority','inspection_authority_sha256','inspect_expires_at','inspection_attempts'])assert.equal((await client.query("SELECT has_column_privilege(current_user,'higgsfield_references',$1,'UPDATE') AS allowed",[column])).rows[0].allowed,false,column);
+    assert.equal((await client.query("SELECT has_column_privilege(current_user,'higgsfield_requests','model_snapshot','UPDATE') AS allowed")).rows[0].allowed,false);
+    // Model observations are refreshable, while the company/model identity and
+    // the generation's approved snapshot remain immutable to the runtime role.
+    assert.deepEqual((await client.query("SELECT has_table_privilege(current_user,'higgsfield_model_contracts','SELECT') AS read,has_table_privilege(current_user,'higgsfield_model_contracts','INSERT') AS append,has_table_privilege(current_user,'higgsfield_model_contracts','UPDATE') AS unrestricted_edit,has_table_privilege(current_user,'higgsfield_model_contracts','DELETE') AS remove")).rows[0],{read:true,append:true,unrestricted_edit:false,remove:false});
+    const modelCacheColumns=['connection_id','connection_revision','catalog_sha256','descriptor','descriptor_sha256','observed_at','expires_at'];
+    for(const column of ['company_id','model_id',...modelCacheColumns])assert.equal((await client.query("SELECT has_column_privilege(current_user,'higgsfield_model_contracts',$1,'UPDATE') AS allowed",[column])).rows[0].allowed,modelCacheColumns.includes(column),column);
+    await client.query("INSERT INTO higgsfield_model_contracts(company_id,model_id,connection_id,connection_revision,catalog_sha256) VALUES($1,'fixture-model',$2,1,$3)",[company.id,randomUUID(),'0'.repeat(64)]);
+    await client.query('SELECT model_id FROM higgsfield_model_contracts WHERE company_id=$1 FOR SHARE',[company.id]);
+    const refreshedConnectionId=randomUUID();
+    const refreshed=(await client.query("UPDATE higgsfield_model_contracts SET connection_id=$2,connection_revision=2,catalog_sha256=$3,descriptor=$4,descriptor_sha256=$5,observed_at=statement_timestamp(),expires_at=statement_timestamp()+interval '10 minutes' WHERE company_id=$1 AND model_id='fixture-model' RETURNING connection_id,connection_revision,catalog_sha256,descriptor,descriptor_sha256,expires_at>observed_at AS finite",[company.id,refreshedConnectionId,'1'.repeat(64),JSON.stringify({version:1,modelId:'fixture-model'}),'2'.repeat(64)])).rows[0];
+    assert.deepEqual(refreshed,{connection_id:refreshedConnectionId,connection_revision:2,catalog_sha256:'1'.repeat(64),descriptor:{version:1,modelId:'fixture-model'},descriptor_sha256:'2'.repeat(64),finite:true});
+    assert.equal((await client.query("UPDATE higgsfield_model_contracts SET descriptor=NULL,descriptor_sha256=NULL WHERE company_id=$1 AND model_id='fixture-model' RETURNING descriptor",[company.id])).rows[0].descriptor,null);
     await client.query('SELECT company_id FROM studio_client_deliveries WHERE false FOR SHARE');
     await client.query('UPDATE studio_client_deliveries SET status=status,revision=revision,revoked_at=revoked_at WHERE false');
     for(const column of ['recipient_user_id','package_hash','package_snapshot','expires_at'])assert.equal((await client.query("SELECT has_column_privilege(current_user,'studio_client_deliveries',$1,'UPDATE') AS allowed",[column])).rows[0].allowed,false,column);
     await client.query('SELECT id FROM studio_inference_jobs WHERE false FOR UPDATE');
+    await client.query('SELECT id FROM trusted_service_provisions WHERE false FOR UPDATE');
+    await client.query('UPDATE trusted_service_provisions SET phase=phase,revision=revision,pod_id=pod_id,expected_environment_hashes=expected_environment_hashes,submitted_at=submitted_at,stop_requested_at=stop_requested_at,lease_id=lease_id,lease_expires_at=lease_expires_at,provider_status=provider_status,error_code=error_code,last_reconciled_at=last_reconciled_at,updated_at=updated_at WHERE false');
+    for(const column of ['company_id','service','created_by','client_id','request_hash','preset','plan','plan_hash','pod_name','expires_at','created_at'])assert.equal((await client.query("SELECT has_column_privilege(current_user,'trusted_service_provisions',$1,'UPDATE') AS allowed",[column])).rows[0].allowed,false,column);
     await client.query('UPDATE studio_inference_jobs SET status=status,provider_job_id=provider_job_id,submitted_at=submitted_at,cancel_requested_at=cancel_requested_at,cancel_request_id=cancel_request_id,output=output,model_calls=model_calls,used_tokens=used_tokens,error_code=error_code,poll_lease_id=poll_lease_id,poll_lease_expires_at=poll_lease_expires_at,last_reconciled_at=last_reconciled_at,updated_at=updated_at WHERE false');
     for(const column of ['company_id','agent_id','run_id','host_id','provision_id','request_id','step','request_hash','agent_sponsor_id','agent_token_hash','lease_token_hash','installation_id','installation_revision','preset_hash','endpoint_id','model_id','limits','request_body','reserved_tokens','deadline_at','created_at'])assert.equal((await client.query("SELECT has_column_privilege(current_user,'studio_inference_jobs',$1,'UPDATE') AS allowed",[column])).rows[0].allowed,false,column);
     const options=(await client.query('SELECT rolcreaterole,rolcreatedb,rolbypassrls FROM pg_roles WHERE rolname=current_user')).rows[0];
@@ -93,6 +115,11 @@ test('runtime role supports accounts and durable conversations without verificat
     for(const [sql,values] of [
       ['UPDATE users SET email_verified_at=now() WHERE id=$1',[user.id]],
       ...immutableStudioTables.flatMap(table=>[[`UPDATE ${table} SET company_id=company_id WHERE false`,[]],[`DELETE FROM ${table} WHERE false`,[]]]),
+      ['UPDATE higgsfield_requests SET model_snapshot=model_snapshot WHERE false',[]],
+      ...['inspection_authority','inspection_authority_sha256','inspect_expires_at','inspection_attempts'].map(column=>[`UPDATE higgsfield_references SET ${column}=${column} WHERE false`,[]]),
+      ['UPDATE higgsfield_model_contracts SET company_id=company_id WHERE company_id=$1',[company.id]],
+      ['UPDATE higgsfield_model_contracts SET model_id=model_id WHERE company_id=$1',[company.id]],
+      ['DELETE FROM higgsfield_model_contracts WHERE company_id=$1',[company.id]],
       ['UPDATE studio_client_deliveries SET recipient_user_id=recipient_user_id WHERE false',[]],
       ['UPDATE studio_client_deliveries SET package_snapshot=package_snapshot WHERE false',[]],
       ['DELETE FROM studio_client_deliveries WHERE false',[]],
@@ -100,6 +127,9 @@ test('runtime role supports accounts and durable conversations without verificat
       ['UPDATE studio_inference_jobs SET request_body=request_body WHERE false',[]],
       ['UPDATE studio_inference_jobs SET deadline_at=deadline_at WHERE false',[]],
       ['DELETE FROM studio_inference_jobs WHERE false',[]],
+      ['UPDATE trusted_service_provisions SET expires_at=expires_at WHERE false',[]],
+      ['UPDATE trusted_service_provisions SET plan=plan WHERE false',[]],
+      ['DELETE FROM trusted_service_provisions WHERE false',[]],
       ["INSERT INTO users(name,email,password_hash,email_verified_at) VALUES('Forbidden','forbidden@example.invalid','test',now())",[]],
       ['CREATE TABLE public.unauthorized_test(id int)',[]],
       ['TRUNCATE users CASCADE',[]],

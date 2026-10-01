@@ -19,14 +19,27 @@ GRANT SELECT,INSERT,UPDATE,DELETE ON
  studio_staffing_proposals,studio_managed_hosts,studio_host_credentials,studio_host_requests
  TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON studio_artifacts,studio_reviews,studio_gate_events,studio_requests TO coatria_runtime_v1;
+-- Generated-media evidence is append-only. Storage workers receive no studio
+-- publication or independent-review authority from these web runtime grants.
+GRANT SELECT,INSERT ON studio_generated_artifact_sources,studio_generated_review_evidence TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON studio_generated_revision_plans,studio_generated_revision_rounds,studio_generated_revision_items,studio_generated_revision_work,studio_generated_delivery_rounds TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON studio_execution_inputs,studio_execution_job_inputs,studio_execution_manifests,studio_staffing_applications TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON studio_media_files,studio_media_verifications,studio_media_promotions,studio_media_requests TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON studio_deliveries TO coatria_runtime_v1;
 GRANT SELECT,INSERT,UPDATE ON studio_coordination_policies TO coatria_runtime_v1;
-GRANT SELECT,INSERT ON studio_coordination_dispatches,studio_coordination_followups TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON studio_coordination_dispatches,studio_coordination_followups,studio_generated_followups,studio_generated_followup_steps TO coatria_runtime_v1;
 GRANT SELECT,INSERT,UPDATE ON studio_review_policies,studio_host_provisions TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON studio_planning_reviews,studio_planning_review_reads,studio_planning_review_decisions,studio_host_compute_reservations,studio_host_provision_requests TO coatria_runtime_v1;
-GRANT SELECT,INSERT ON studio_client_deliveries,studio_client_delivery_files,studio_client_delivery_receipts,studio_client_delivery_requests TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON trusted_service_provisions TO coatria_runtime_v1;
+GRANT UPDATE(phase,revision,pod_id,expected_environment_hashes,submitted_at,stop_requested_at,lease_id,lease_expires_at,provider_status,error_code,last_reconciled_at,updated_at) ON trusted_service_provisions TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON trusted_service_reservations,trusted_service_requests TO coatria_runtime_v1;
+GRANT SELECT ON platform_operator_grants TO coatria_runtime_v1;
+GRANT EXECUTE ON FUNCTION coatria_lock_platform_runtime_operator(uuid) TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON company_runtime_configurations,company_runtime_selections,company_runtime_requests,company_runtime_executor_credentials,project_gateway_bindings TO coatria_runtime_v1;
+GRANT UPDATE(configuration_id,revision,state,selected_by,updated_at) ON company_runtime_selections TO coatria_runtime_v1;
+GRANT UPDATE(revoked_at,revoked_by) ON company_runtime_executor_credentials TO coatria_runtime_v1;
+GRANT UPDATE(revoked_at) ON project_gateway_bindings TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON studio_client_deliveries,studio_client_delivery_files,studio_client_delivery_receipts,studio_client_delivery_requests,studio_client_storage_grants TO coatria_runtime_v1;
 GRANT UPDATE(status,revision,revoked_at) ON studio_client_deliveries TO coatria_runtime_v1;
 GRANT UPDATE(status) ON studio_deliveries TO coatria_runtime_v1;
 GRANT SELECT,INSERT ON studio_inference_jobs,studio_inference_reservations,studio_inference_tool_receipts TO coatria_runtime_v1;
@@ -49,6 +62,21 @@ GRANT UPDATE(status,diagnostic_code,poll_attempts,next_poll_at,poll_lease_id,pol
 GRANT SELECT,INSERT ON higgsfield_output_archives,higgsfield_archive_receipts,higgsfield_archive_requests TO coatria_runtime_v1;
 GRANT SELECT ON higgsfield_archive_fetches TO coatria_runtime_v1;
 GRANT UPDATE(status,revision,approved_by,approved_at,expires_at,approved_project_revision,approved_binding_revision,revoked_by,revoked_at,lease_id,lease_expires_at,diagnostic_code,updated_at) ON higgsfield_output_archives TO coatria_runtime_v1;
+-- Reference metadata and the OAuth broker stay in the control plane. The
+-- runtime can record broker allocations/confirmations, but cannot invent image
+-- inspection evidence. No existing archive-worker role gains reference access.
+GRANT SELECT,INSERT ON higgsfield_references,higgsfield_reference_receipts,higgsfield_reference_requests,higgsfield_reference_transports,higgsfield_reference_confirmations TO coatria_runtime_v1;
+GRANT SELECT ON higgsfield_reference_inspections TO coatria_runtime_v1;
+-- Operator-enrolled service qualification is immutable to application users.
+-- An administrator can stop an existing service, never enroll or extend it.
+GRANT SELECT ON higgsfield_reference_services,higgsfield_reference_service_projects TO coatria_runtime_v1;
+GRANT SELECT(service_id,company_id,request_id,request_hash,identity) ON higgsfield_reference_service_enrollments TO coatria_runtime_v1;
+GRANT UPDATE(revoked_at,revoked_by,revision,updated_at) ON higgsfield_reference_services TO coatria_runtime_v1;
+-- Exact explicit dispatch and inspection authority are immutable once saved.
+GRANT SELECT,INSERT ON studio_reference_preparation_dispatches TO coatria_runtime_v1;
+GRANT SELECT,INSERT ON higgsfield_model_contracts TO coatria_runtime_v1;
+GRANT UPDATE(connection_id,connection_revision,catalog_sha256,descriptor,descriptor_sha256,observed_at,expires_at) ON higgsfield_model_contracts TO coatria_runtime_v1;
+GRANT UPDATE(status,revision,approved_by,approved_at,expires_at,approval_hash,qualification_sha256,revoked_by,revoked_at,lease_id,lease_expires_at,action_id,action_operation,diagnostic_code,updated_at) ON higgsfield_references TO coatria_runtime_v1;
 GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO coatria_runtime_v1;
 ALTER ROLE coatria_runtime_v1 SET statement_timeout='15s';
 ALTER ROLE coatria_runtime_v1 SET idle_in_transaction_session_timeout='20s';

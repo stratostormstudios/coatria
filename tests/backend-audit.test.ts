@@ -7,6 +7,7 @@ import {resolve} from 'node:path';
 import {handleApi} from '../src/lib/api';
 import {database,query} from '../src/lib/db';
 import {hashToken,passwordMatches,passwordNeedsUpgrade,secret} from '../src/lib/security';
+import {currentTaskPatchForFixture} from './task-fixture-revision';
 
 const emulator=process.env.COATRIA_TEST_EMULATOR==='1',testDatabase=process.env.COATRIA_INTEGRATION_DATABASE_URL;
 test('security regressions for unverified invites, offboarding and independent task attribution',{skip:!emulator&&!testDatabase,timeout:90000},async t=>{
@@ -14,7 +15,7 @@ test('security regressions for unverified invites, offboarding and independent t
   if(emulator){const {PGlite}=await import('@electric-sql/pglite');const {PGLiteSocketServer}=await import('@electric-sql/pglite-socket');const db=await PGlite.create();for(const file of(await readdir(resolve('database'))).filter(x=>/^\d.*\.sql$/.test(x)).sort())await db.exec(await readFile(resolve('database',file),'utf8'));const server=new PGLiteSocketServer({db,host:'127.0.0.1',port:0,maxConnections:1});await server.start();process.env.DATABASE_URL=`postgresql://postgres:postgres@${server.getServerConn()}/postgres`;stop=async()=>{await server.stop();await db.close();};}else process.env.DATABASE_URL=testDatabase!;
   const company=randomUUID(),people=Array.from({length:5},(_,n)=>({id:randomUUID(),session:secret(),email:`audit-${randomUUID()}@example.test`,name:`Audit ${n}`}));
   const base=`companies/${company}`,origin='http://localhost:4180';
-  async function call(person:number,path:string,method='GET',data?:unknown,headers:Record<string,string>={}){const response=await handleApi(new Request(`${origin}/api/${path}`,{method,headers:{Origin:origin,'Content-Type':'application/json','x-forwarded-for':`audit-${people[person].id}`,Cookie:`coatria_session=${people[person].session}`,...headers},...(data===undefined?{}:{body:JSON.stringify(data)})}),path.split('/'));return {status:response.status,data:await response.json()};}
+  async function call(person:number,path:string,method='GET',data?:unknown,headers:Record<string,string>={}){data=await currentTaskPatchForFixture(path,method,data);const response=await handleApi(new Request(`${origin}/api/${path}`,{method,headers:{Origin:origin,'Content-Type':'application/json','x-forwarded-for':`audit-${people[person].id}`,Cookie:`coatria_session=${people[person].session}`,...headers},...(data===undefined?{}:{body:JSON.stringify(data)})}),path.split('/'));return {status:response.status,data:await response.json()};}
   try{
     await query("INSERT INTO companies(id,name,slug,template) VALUES($1,'Audit company',$2,'blank')",[company,`audit-${company}`]);
     for(const [n,p]of people.entries()){await query('INSERT INTO users(id,name,email,password_hash) VALUES($1,$2,$3,$4)',[p.id,p.name,p.email,'test-fixture-only']);await query("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval '1 hour')",[hashToken(p.session),p.id]);if(n<3)await query('INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,$3)',[company,p.id,n===0?'owner':n===1?'admin':'member']);}
@@ -28,8 +29,20 @@ test('security regressions for unverified invites, offboarding and independent t
       assert.equal((await call(3,'profile','PATCH',{name:'Fake verified',roleTitle:'',avatarColor:'#ffffff',emailVerified:true})).status,400);
     });
     await t.test('a pre-removal administrator invitation cannot restore offboarded access',async()=>{
+      const pending=(await call(0,`${base}/tasks`,'POST',{title:'Offboarding pending work',assigneeId:people[2].id})).data.task;
+      const inReview=(await call(0,`${base}/tasks`,'POST',{title:'Offboarding reviewed work',assigneeId:people[2].id})).data.task;
+      const reviewed=(await call(2,`${base}/tasks/${inReview.id}`,'PATCH',{status:'review'})).data.task;
+      const done=(await call(0,`${base}/tasks`,'POST',{title:'Offboarding accepted history',assigneeId:people[2].id})).data.task;
+      await call(2,`${base}/tasks/${done.id}`,'PATCH',{status:'review'});
+      const accepted=(await call(1,`${base}/tasks/${done.id}`,'PATCH',{status:'done'})).data.task;
       const invitation=await call(0,`${base}/invitations`,'POST',{role:'admin'});assert.equal(invitation.status,201);
       assert.equal((await call(0,`${base}/members/${people[2].id}`,'PATCH',{role:'removed'})).status,200);
+      for(const original of [pending,reviewed]){
+        const current=(await call(0,`${base}/tasks/${original.id}`)).data.task;
+        assert.equal(current.assigneeId,null);assert.equal(current.revision,original.revision+1);assert.equal(current.status,original.status);
+      }
+      const stale=await call(1,`${base}/tasks/${reviewed.id}`,'PATCH',{expectedRevision:reviewed.revision,status:'done'});assert.equal(stale.status,409);assert.equal(stale.data.code,'TASK_REVISION_CONFLICT');
+      assert.deepEqual((await call(0,`${base}/tasks/${done.id}`)).data.task,accepted,'Offboarding must retain accepted authorship and revision unchanged.');
       const joined=await call(2,'invitations/join','POST',{token:invitation.data.token});assert.equal(joined.status,403,JSON.stringify(joined));
       assert.equal((await call(2,`${base}/workspace`)).status,404);
       const fresh=await call(0,`${base}/invitations`,'POST',{role:'member'});assert.equal(fresh.status,201);assert.equal((await call(2,'invitations/join','POST',{token:fresh.data.token})).status,200);

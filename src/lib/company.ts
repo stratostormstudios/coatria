@@ -244,7 +244,7 @@ export async function companyRoute(request: Request, parts: string[], method: st
         await client.query('DELETE FROM presence WHERE company_id=$1 AND user_id=$2',[companyId,targetId]);
         await client.query("UPDATE agents SET status='revoked' WHERE company_id=$1 AND created_by=$2",[companyId,targetId]);
         await client.query("UPDATE drives SET status='revoked' WHERE company_id=$1 AND created_by=$2",[companyId,targetId]);
-        await client.query('UPDATE tasks SET assignee_id=NULL,updated_at=now() WHERE company_id=$1 AND assignee_id=$2 AND status<>\'done\'',[companyId,targetId]);
+        await client.query('UPDATE tasks SET assignee_id=NULL,revision=revision+1,updated_at=now() WHERE company_id=$1 AND assignee_id=$2 AND status<>\'done\'',[companyId,targetId]);
       }
       await recordActivity(client,member,data.role==='removed'?'member.removed':'member.role_changed',`${member.user.name} ${leaving?'left the company':`changed a member’s role to ${data.role}`}.`);
     });return json({ok:true});

@@ -15,6 +15,14 @@ const columns=`id,company_id AS "companyId",revision,status,plan,plan_hash AS "p
 const parse=<T>(schema:z.ZodType<T>,input:unknown):T=>{const result=schema.safeParse(input);if(!result.success)fail(400,result.error.issues.map(issue=>issue.message).slice(0,3).join(' '),'VALIDATION_ERROR');return result.data;};
 function canonical(value:unknown):string{if(value instanceof Date)return JSON.stringify(value.toISOString());return Array.isArray(value)?'['+value.map(canonical).join(',')+']':value&&typeof value==='object'?'{'+Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([key,item])=>JSON.stringify(key)+':'+canonical(item)).join(',')+'}':JSON.stringify(value);}
 const digest=(value:unknown)=>hashToken(canonical(value));
+function reviewedStaffingCapabilities(plan:StudioStaffingPlan,specialist:StudioStaffingSpecialist){
+ const current=studioStaffingCapabilities(plan.templateId,specialist.roleKeys);
+ // Historical standalone generation plans omitted storage.read. The saved
+ // hash remains the administrator's authority: do not upgrade those grants or
+ // require their existing identities to gain a capability absent from review.
+ const historicalGeneration=plan.templateId==='ai-production'&&specialist.roleKeys.includes('comp')&&!specialist.roleKeys.some(key=>['coordinator','ingest','delivery'].includes(key))&&!specialist.capabilities.includes('storage.read');
+ return historicalGeneration?current.filter(capability=>capability!=='storage.read'):current;
+}
 function stableId(value:string){const bytes=createHash('sha256').update(value).digest().subarray(0,16);bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;const hex=bytes.toString('hex');return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;}
 function validateInstallation(input:unknown){
  const data=parse(pluginInstallInput,input),entry=PLUGIN_CATALOG.find(plugin=>plugin.id===data.pluginId&&plugin.version===data.manifestVersion);
@@ -89,7 +97,7 @@ export async function proposeStudioStaffing(client:PoolClient,actor:StudioActor,
  }
  const warnings=['New identities start paused and unconnected. No worker, inference, DCC job, media access or client delivery is started.','Shared curated role skills are installed; private employee skill vaults are never read or copied.','This complete role plan replaces the current role assignments when applied. Unselected disciplines remain unassigned.'];
   if(!reviewer)warnings.push('Independent QC is unassigned. Invite another administrator before reviewing produced media or approving its delivery; setup and draft work can proceed.');
- if(data.templateId==='ai-production')warnings.push('AI creative roles receive explicit creative.read and creative.write grants for proposals and unverified observations. Reference planning receives creative.read and infrastructure.read for metadata only. Human approval is still required for each paid Higgsfield request; no provider connection, media upload, generation or storage access is activated by this plan.');
+ if(data.templateId==='ai-production')warnings.push('AI creative roles receive explicit creative.read and creative.write grants for proposals and unverified observations, plus storage.read for authorized project-file evidence and exact verified-output registration. This adds no file-upload or folder-organization authority to a standalone generation specialist. Reference planning receives creative.read and infrastructure.read for metadata only. Human approval is still required for each paid Higgsfield request; no provider connection, media upload, generation or storage access is activated by this plan.');
  const actualAgentCount=specialists.length+(planningReviewer?1:0);
  if(actualAgentCount<data.teamSize)warnings.push(`The requested ${data.teamSize} agents exceed the ${actualAgentCount} useful role groups in this scope; only ${actualAgentCount} identities are proposed.`);
  if(planningReviewer)warnings.push('The separate planning reviewer has planning-only authority and no production or human QC role. Its versioned role instructions are saved in its installation persona. Configure and approve a finite project review policy separately; no policy is created here. New agents share the applying administrator as sponsor, so shared-sponsor machine review requires its own explicit policy approval. This is not independent human review.');
@@ -124,12 +132,13 @@ export async function applyStudioStaffing(client:PoolClient,member:Membership,pr
  const plan=proposal.plan,template=getStudioTemplate(plan.templateId);if(!template||template.version!==plan.templateVersion)fail(409,'The reviewed studio template is unavailable. Prepare a new plan.','STAFFING_TEMPLATE_UNAVAILABLE');if(plan.reviewer)await requireAdministrator(client,member.companyId,plan.reviewer.humanId);
  if(plan.newAgentCount&&plan.reviewer?.humanId===member.userId)fail(409,'Choose an independent administrator to review media; the installing sponsor cannot be its quality reviewer.','STAFFING_REVIEWER_CONFLICT');
  for(const specialist of plan.specialists){
+  const reviewedCapabilities=reviewedStaffingCapabilities(plan,specialist);
   if(specialist.mode==='bind'){
    if(!specialist.existing)fail(409,'The staffing proposal is incomplete.');
-   const current=await existingSnapshot(client,member.companyId,specialist.existing.agentId,studioStaffingCapabilities(plan.templateId,specialist.roleKeys));
+   const current=await existingSnapshot(client,member.companyId,specialist.existing.agentId,reviewedCapabilities);
    if(digest(current)!==digest(specialist.existing))fail(409,'An existing agent changed after the proposal. Review a new staffing plan.','STAFFING_AGENT_CHANGED');
    if(current.sponsorId===plan.reviewer?.humanId)fail(409,'The independent reviewer cannot sponsor a producing specialist.','STAFFING_REVIEWER_CONFLICT');
-  }else if(canonical(specialist.capabilities)!==canonical(studioStaffingCapabilities(plan.templateId,specialist.roleKeys))||specialist.invocationAccess!=='admins'||specialist.conversationAccess!=='none')fail(409,'The proposed new identity exceeds its reviewed template role grants.','STAFFING_GRANT_INVALID');
+  }else if(canonical(specialist.capabilities)!==canonical(reviewedCapabilities)||specialist.invocationAccess!=='admins'||specialist.conversationAccess!=='none')fail(409,'The proposed new identity exceeds its reviewed template role grants.','STAFFING_GRANT_INVALID');
  }
  if(plan.planningReviewer){const reviewer=plan.planningReviewer;if(reviewer.key!=='planning-reviewer'||reviewer.mode!=='create'||reviewer.existing!==null||reviewer.roleKeys.length!==0||canonical(reviewer.capabilities)!==canonical([...STUDIO_PLANNING_REVIEW_CAPABILITIES])||reviewer.invocationAccess!=='admins'||reviewer.conversationAccess!=='none')fail(409,'The planning reviewer must be a distinct new identity with planning-only grants.','STAFFING_GRANT_INVALID');}
  await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${member.companyId}:agent-quota`]);

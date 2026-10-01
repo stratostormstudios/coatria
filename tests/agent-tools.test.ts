@@ -1,3 +1,4 @@
+import {currentTaskPatchForFixture} from './task-fixture-revision';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -13,7 +14,8 @@ test('leased tools enforce authority, durable effects, review boundaries and iso
  process.env.DATABASE_URL=url;process.env.DATABASE_POOL_MAX='1';let stop:(()=>Promise<void>)|undefined;
  if(emulate){const {PGlite}=await import('@electric-sql/pglite');const {PGLiteSocketServer}=await import('@electric-sql/pglite-socket');const db=await PGlite.create();for(const f of(await readdir('database')).filter(x=>/^\d.*\.sql$/.test(x)).sort())await db.exec(await readFile('database/'+f,'utf8'));const server=new PGLiteSocketServer({db,host:'127.0.0.1',port:0,maxConnections:1});await server.start();process.env.DATABASE_URL=`postgresql://postgres:postgres@${server.getServerConn()}/postgres`;stop=async()=>{await server.stop();await db.close();};}
  const company=randomUUID(),foreign=randomUUID(),owner=randomUUID(),member=randomUUID(),reviewer=randomUUID(),outsider=randomUUID(),agent=randomUUID(),token='ca_'+randomUUID(),sessions={owner:randomUUID(),member:randomUUID(),reviewer:randomUUID(),outsider:randomUUID()},origin='http://localhost:4180';let runId='',leaseToken='';
- async function call(path:string,method='GET',payload?:unknown,actor:'owner'|'member'|'reviewer'|'outsider'|'agent'='agent',expected=200,extraHeaders:Record<string,string>={}){const headers:Record<string,string>={...extraHeaders};if(actor==='agent')headers.Authorization='Bearer '+token;else{headers.Cookie='coatria_session='+sessions[actor];headers.Origin=origin;}if(payload!==undefined)headers['Content-Type']='application/json';const response=await handleApi(new Request(origin+'/api/'+path,{method,headers,body:payload===undefined?undefined:JSON.stringify(payload)}),path.split('?')[0].split('/'));const data=await response.json();assert.equal(response.status,expected,`${method} ${path}: ${JSON.stringify(data)}`);return data;}
+ async function call(path:string,method='GET',payload?:unknown,actor:'owner'|'member'|'reviewer'|'outsider'|'agent'='agent',expected=200,extraHeaders:Record<string,string>={}){payload=await currentTaskPatchForFixture(path,method,payload);
+    const headers:Record<string,string>={...extraHeaders};if(actor==='agent')headers.Authorization='Bearer '+token;else{headers.Cookie='coatria_session='+sessions[actor];headers.Origin=origin;}if(payload!==undefined)headers['Content-Type']='application/json';const response=await handleApi(new Request(origin+'/api/'+path,{method,headers,body:payload===undefined?undefined:JSON.stringify(payload)}),path.split('?')[0].split('/'));const data=await response.json();assert.equal(response.status,expected,`${method} ${path}: ${JSON.stringify(data)}`);return data;}
  const tool=(name:string,args:unknown,expected=200,requestId=randomUUID())=>call('agent/tools/'+name,'POST',{runId,leaseToken,requestId,arguments:args},'agent',expected);
  try{
   for(const [userId,name]of[[owner,'Owner'],[member,'Requester'],[reviewer,'Independent reviewer'],[outsider,'Outsider']])await query('INSERT INTO users(id,name,email,password_hash) VALUES($1,$2,$3,$4)',[userId,name,userId+'@example.invalid','fixture']);
@@ -72,6 +74,16 @@ test('leased tools enforce authority, durable effects, review boundaries and iso
   await t.test('presence controls only the agent, validates floor bounds and room ownership',async()=>{
    const pos=(await tool('office_presence',{roomId:null,x:0,z:0,status:'focus'})).result;assert.equal(pos.agentId,agent);assert.equal((await query('SELECT count(*)::int AS count FROM presence WHERE company_id=$1',[company])).rows[0].count,0);
    await tool('office_presence',{roomId:null,x:20,z:20,status:'focus'},400);await tool('office_presence',{roomId:randomUUID(),x:0,z:0,status:'focus'},404);
+  });
+  await t.test('pending proposals cannot be approved after requester access is revoked with its role retained',async()=>{
+   const proposal=(await tool('rooms_propose',{name:'Revoked requester proposal',kind:'focus',capacity:2})).result;
+   await query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[company,member]);
+   try{
+    const denied=await call(`companies/${company}/agent-proposals/${proposal.id}/approve`,'POST',{},'reviewer',409);
+    assert.equal(denied.code,'PROPOSAL_AUTHORITY_ENDED');
+    assert.equal((await query('SELECT status FROM agent_proposals WHERE id=$1',[proposal.id])).rows[0].status,'pending');
+    assert.equal((await query("SELECT count(*)::int AS count FROM rooms WHERE company_id=$1 AND name='Revoked requester proposal'",[company])).rows[0].count,0);
+   }finally{await query('UPDATE memberships SET access_revoked_at=NULL WHERE company_id=$1 AND user_id=$2',[company,member]);}
   });
   await t.test('proposals do not mutate until an administrator reviews the exact change',async()=>{
    const result=(await tool('rooms_propose',{name:'Review room',kind:'meeting',capacity:12})).result;assert.equal((await query('SELECT count(*)::int AS count FROM rooms WHERE company_id=$1',[company])).rows[0].count,0);

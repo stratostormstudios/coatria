@@ -1,0 +1,4488 @@
+{
+  "version": 1,
+  "kind": "coatria-trusted-service-bundle",
+  "service": "archive",
+  "sourceCommit": "b205252cdd64dd96c225e253532371079b68249a",
+  "sourceTree": "cd21c950ca674005479348eaa62b479d6dfa7677",
+  "image": "node@sha256:e5a8dee7bc1e6a215d224a7ef8206f7e77271bc3cabd5febf2beafac0674f174",
+  "nodeVersion": "v24.19.0",
+  "compiler": {
+    "name": "esbuild",
+    "version": "0.28.2",
+    "packageIntegrity": "sha512-HKVLS8dvII+xoKW9kmqxbRKrnWEXfJJr/FZhhJmiqIB0e053QNYFqOBouTMO/k5sID4MvCiUCvv8b9M4h32wIA=="
+  },
+  "packageLockSha256": "141829fa75a677d4d4486c7a922fccb4a019c4712e6f8828b7d17381db9ef978",
+  "inputs": [
+    {
+      "path": "forbidden:pg-native",
+      "bytes": 38,
+      "sha256": "d53eea59f904cb64ca005fc9048e3d2fc47e497f2d5fe346d5ea097648984c0f",
+      "kind": "reviewed-stub"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/crc/crc32c/Crc32cJs.js",
+      "bytes": 793,
+      "sha256": "8dfd2be95af3ec2ba2c0a4095c3e67b9fce9720ee245a0af983d18e0174a80b0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/crc/crc32c/Crc32cNode.js",
+      "bytes": 75,
+      "sha256": "3be817132afe863ac3a65776b5923a39935e0755fe8ed8555b8a877a8756fef9",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/crc/crc64-nvme/Crc64Nvme.js",
+      "bytes": 455,
+      "sha256": "42d5bd1c9b006dbf4f8237cc2d2cebf887088cb71c0ff428513de9be10ba506f",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/crc/crc64-nvme/Crc64NvmeJs.js",
+      "bytes": 2999,
+      "sha256": "4c62fa52b2cd69b9f75afb2e070f3172fb7ccb55f761cabd5da74d30bc57aecf",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/crc/crc64-nvme/crc64-nvme-crt-container.js",
+      "bytes": 66,
+      "sha256": "d8117ee55b5256375f514a4e89146b5f6fa2eb15a2654502f9425062ea68c461",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/crc/index.js",
+      "bytes": 372,
+      "sha256": "3ccab79c732b8ed926c98f1b70c0276417b198192b31d015ae23c62e42ec3476",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/NODE_REQUEST_CHECKSUM_CALCULATION_CONFIG_OPTIONS.js",
+      "bytes": 759,
+      "sha256": "cf257634e3e1edefc6ae13c152a83b8b7760fce071bfce07bbb2c042dbf8f949",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/NODE_RESPONSE_CHECKSUM_VALIDATION_CONFIG_OPTIONS.js",
+      "bytes": 759,
+      "sha256": "0d373b84b6b1f5efd5f4902445afd3545e86e153d62463f01455de6d28364d77",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/constants.js",
+      "bytes": 1067,
+      "sha256": "77e5834edbfe96c00e0701566b0e8a0496425a2df323ef7ebb515bb3d1cc9e8b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/flexibleChecksumsInputMiddleware.js",
+      "bytes": 1705,
+      "sha256": "406453792a930fb28328619c4d948faba2883033935f576a2773dcc9dbf47e11",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/flexibleChecksumsMiddleware.js",
+      "bytes": 5473,
+      "sha256": "a943c4872588bb1da701e707cfa300242a9b955be7305fbe2f7d07a56a1a90b6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/flexibleChecksumsResponseMiddleware.js",
+      "bytes": 2282,
+      "sha256": "0a5871b13d4e0db26d86541cfda70b0d9d2900550a23f7e36ba568439b7c45a6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/getChecksum.js",
+      "bytes": 192,
+      "sha256": "ec87b7285dd9416781d5ae4e9c7edffcffaeb351ad0c1edeff517039e79124a2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/getChecksumAlgorithmForRequest.js",
+      "bytes": 616,
+      "sha256": "0ec3026b8c44e32cd34018a32b92c1b8018b36ea2c036a68c6c8b1b12b681da6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/getChecksumAlgorithmListForResponse.js",
+      "bytes": 582,
+      "sha256": "74ac3c47299ce8191ef60ed671ecc49d37a853b64cb2d572b56f0d077abb40e8",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/getChecksumLocationName.js",
+      "bytes": 202,
+      "sha256": "30722ff239b9681c1e3f518745946f639cc5db7abcf7e35dd9f29755784dc8e8",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/getFlexibleChecksumsPlugin.js",
+      "bytes": 897,
+      "sha256": "a7da313f59e149da21ccefd2f9e0442ce81049243bf8de5ef204a0fcaa04100e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/hasHeader.js",
+      "bytes": 267,
+      "sha256": "cd9e2cbaa50271356e45593c66b56cf12e969ca4ae30731d18b78cfd20a40b43",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/hasHeaderWithPrefix.js",
+      "bytes": 309,
+      "sha256": "888407eefe6e403391ef196f2a779647127accc10f69ce1a4d6da143bc8939ec",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/index.js",
+      "bytes": 881,
+      "sha256": "2f79d9887eb6d707e4da5c3cedce51fd909c03643a448d1ca83d506964596fce",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/isChecksumWithPartNumber.js",
+      "bytes": 453,
+      "sha256": "92e265662b17eb62186b29e48b422f54f81bce7a35ae3784fcf571d9c1686bae",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/isStreaming.js",
+      "bytes": 190,
+      "sha256": "b302a997f4fddfe4d21cbcbde66fe9c56b55e05979c528314f10d94c8cdfa2f0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/resolveFlexibleChecksumsConfig.js",
+      "bytes": 747,
+      "sha256": "219e41e5e26ce2bff75d9e3a36039e1db780254ac62df0c2a080383e5c5d45b7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/selectChecksumAlgorithmFunction.js",
+      "bytes": 1352,
+      "sha256": "3c03f585358235ce145955fccfeb9ec5bea17f9ca10c25397917d2157e9a8549",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/stringHasher.js",
+      "bytes": 228,
+      "sha256": "2054da9c7f491560a50fe0099e4cd3f784704ad4458a360de88057d7a64d0a6c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/stringUnionSelector.js",
+      "bytes": 531,
+      "sha256": "3f50969e5597849f4dac6f227856416b2e10891d85291d2266743b205bef2798",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/types.js",
+      "bytes": 443,
+      "sha256": "dba237d1fef10c3b5c96f466eca86571d4a8414fb926b5b8d230ebb218c7f1ae",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/flexible-checksums/validateChecksumFromResponse.js",
+      "bytes": 2234,
+      "sha256": "0f356195e07dd75f5e5302fc674fdb860d7906dca5fdaf60285a351f1e7f2354",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/sha/index.js",
+      "bytes": 226,
+      "sha256": "aadb6bdb2a7de6594baf4e9f78cd643fac7ce18cb387f6e1e66c27c821a9daff",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/sha/sha1/Sha1Js.js",
+      "bytes": 6140,
+      "sha256": "263a990646d5664ff2a862a28996c141859f2d2224d46d4de1c05aa1044326e7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/sha/sha1/Sha1Node.js",
+      "bytes": 1637,
+      "sha256": "f6b5da0e78974237ac2514194349d6211f684ab3a583ec57b6a09112ce8d82eb",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/checksums/dist-es/submodules/sha/sha1/Sha1WebCrypto.js",
+      "bytes": 2294,
+      "sha256": "f2f2eaf5885babaf5ba4f161624399ea710c4624f265ffc82285184d565bf7ca",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/client-s3/dist-cjs/index.js",
+      "bytes": 266675,
+      "sha256": "31b09cb7d8491ac2a71a7afc837fa16da4d816335de04ccc5b27fc5b36250cd5",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/emitWarningIfUnsupportedVersion.js",
+      "bytes": 903,
+      "sha256": "f99efb83b24696c96afe0c5b9a8fd93cc0d8a41a68ccf5f710f68d9db0a893fe",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/index.js",
+      "bytes": 2705,
+      "sha256": "123bf7ec8087b3d6833040caa769b28cf5b9989828191b38d41c2696913d1bc7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/longPollMiddleware.js",
+      "bytes": 453,
+      "sha256": "88c448b88b064dbbc2c1f62196291803c25e723d0b7e997418eea64a36b08429",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/middleware-host-header/hostHeaderMiddleware.js",
+      "bytes": 1177,
+      "sha256": "9f31c758a7b8c9bbeac6581d487e43f7db0491fbf804fbc464fb750f90a3d6a3",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/middleware-logger/loggerMiddleware.js",
+      "bytes": 1753,
+      "sha256": "0448f287de1664540e6331241b3ea10d4abf55624400139d57cd5a2e00cb57c5",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/middleware-recursion-detection/configuration.js",
+      "bytes": 222,
+      "sha256": "cc3a63dc2ff0a142e6f0decd0a9d04e21b4a6db6a93246315bda14ba537d5b44",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/middleware-recursion-detection/getRecursionDetectionPlugin.js",
+      "bytes": 351,
+      "sha256": "245a5a67431b66683779e6ce4b09340af248643184d252f0a743c2afb6e0bb8a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/middleware-recursion-detection/recursionDetectionMiddleware.js",
+      "bytes": 2483,
+      "sha256": "cec26b92be1b2ab3723495a8d414acc6e4a5e9f49aa860cab58daf0e8930f80c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/middleware-user-agent/check-features.js",
+      "bytes": 1990,
+      "sha256": "4bb9d81d0f0698c84b3a046cc3f192e9e72fbbc972a9d718f6d6e02eb517af21",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/middleware-user-agent/configurations.js",
+      "bytes": 1229,
+      "sha256": "8ef3d005929c55fea8ab61dc21f79b115687904b493146ba2a7781ce71e1e85a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/middleware-user-agent/constants.js",
+      "bytes": 315,
+      "sha256": "e80bc9ca1c77569076817569a981e5a09e982af132b772a68af953a41113681b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/middleware-user-agent/encode-features.js",
+      "bytes": 440,
+      "sha256": "51bfb4199dccef94e6dfd780abd942f5f2bf364cb9622273bedfc983ef655bcb",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/middleware-user-agent/user-agent-middleware.js",
+      "bytes": 3281,
+      "sha256": "251a98992a5bf3eb7b9182a5c352f45db690acc37e62aacd32e4328551442ad4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/region-config-resolver/awsRegionConfig.js",
+      "bytes": 193,
+      "sha256": "327e6b8372978a39ccc7cb5e43101c16ac78b4a20777e541ab7272acb4689cd4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/region-config-resolver/extensions.js",
+      "bytes": 421,
+      "sha256": "5d0173957d69e1be91cb7f8a210f141948f866c90ea18ec1bfb7491b396829d6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/region-config-resolver/stsRegionDefaultResolver.js",
+      "bytes": 630,
+      "sha256": "1043d09002b6549dcf0ec855519ee797b4b78f7ac97cd32bcce3cbea69be8807",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/setCredentialFeature.js",
+      "bytes": 208,
+      "sha256": "f6cb193ddfcbf62eb6b160eb4c55facad570d78958af3bce4a79678b909fed0a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/setFeature.js",
+      "bytes": 476,
+      "sha256": "410bf8254abd86edfdc0a227589081cf67ba89b87519333444704c02d552147b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/setTokenFeature.js",
+      "bytes": 173,
+      "sha256": "3b25169114b08f6e55d821109d2882e8d04b6f70d72a8c31207efe291646aacb",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/util-endpoints/aws.js",
+      "bytes": 444,
+      "sha256": "e9427ca885f06c6f64adbd77797cc91a87c5a3a8fd820cb0c31a13a9351f20f7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/util-endpoints/lib/aws/isVirtualHostableS3Bucket.js",
+      "bytes": 681,
+      "sha256": "f5c986aac689323c14b1be9f386552ff50bb8e0a65a850960a6654718caf8265",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/util-endpoints/lib/aws/parseArn.js",
+      "bytes": 616,
+      "sha256": "1231f0252db9d34befa15884283a8ca81fc3afd52e88a7c477c4e6158479d6e5",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/util-endpoints/lib/aws/partition.js",
+      "bytes": 1447,
+      "sha256": "d20fb415a0643b3680fcc0f84597b68c6b3e05e3417adcefd983c8bf252e7521",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/util-endpoints/lib/aws/partitions.js",
+      "bytes": 9639,
+      "sha256": "a48a74a926d208b0158ee9ee64fff6cae7905925609d598f3a3bd5909dbd8dcd",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/util-endpoints/lib/isIpAddress.js",
+      "bytes": 54,
+      "sha256": "e778484929125e97d196b9ff73201fd609e81e2fba2e7c8a59d3dc8afcfbd4b3",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/util-endpoints/resolveDefaultAwsRegionalEndpointsConfig.js",
+      "bytes": 1056,
+      "sha256": "5205937367e4146adbde62d9df29d3e1dfbeac7433a9694ee0ba4bac33f5161d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/util-endpoints/resolveEndpoint.js",
+      "bytes": 58,
+      "sha256": "20b86895feeae4bbdac7d591a3a6bd0a9514857efb34424e47fe50c8876cfe93",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/util-endpoints/types/EndpointError.js",
+      "bytes": 56,
+      "sha256": "03750d97874c868d7a1b43c03fb4d58c02721797a8a3bf819054397a3c1cdac4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/util-user-agent-browser/createUserAgentStringParsingProvider.js",
+      "bytes": 873,
+      "sha256": "3ba8e1ef7c60f22fb9e24116cc629f98d808b0211bd4d8aa842cbbdc2b8b8ebc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/util-user-agent-browser/defaultUserAgent.js",
+      "bytes": 1910,
+      "sha256": "94250276c4359dc4b0b9e7404cc312c4e7a6e86817d5e9af0776540c899b181d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/util-user-agent-node/crt-availability.js",
+      "bytes": 63,
+      "sha256": "4c991af0b502296884707b9009c95146c6370a132b2a8448e457ab8951d98359",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/util-user-agent-node/defaultUserAgent.js",
+      "bytes": 1235,
+      "sha256": "d5065fccf755c80c434c6afee4118b4582f7f6e2216b6487e69fde78400cb072",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/util-user-agent-node/getRuntimeUserAgentPair.js",
+      "bytes": 336,
+      "sha256": "5a41f7a5956815fa03d0b4cae3c598015bf23b233a0f97e49c770346fa031011",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/util-user-agent-node/is-crt-available.js",
+      "bytes": 193,
+      "sha256": "b8d0cd589059a5690e05e4b5e5600394d9a4102a653841eeb54ee266a87651e4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/client/util-user-agent-node/nodeAppIdConfigOptions.js",
+      "bytes": 492,
+      "sha256": "f254a709374f8d94ab04a6868789c6aa445a0de6575ebd76780f29581ad26be8",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/httpAuthSchemes/aws_sdk/AwsSdkSigV4ASigner.js",
+      "bytes": 1480,
+      "sha256": "bc9ef4fd66809df954ef192250b7bde17786742898d5e15664105902c207d790",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/httpAuthSchemes/aws_sdk/AwsSdkSigV4Signer.js",
+      "bytes": 4723,
+      "sha256": "257aba8190ffa0487409926fec1698e9cc733b4c42c8bb9ae1dac13d7e9464a9",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/httpAuthSchemes/aws_sdk/NODE_AUTH_SCHEME_PREFERENCE_OPTIONS.js",
+      "bytes": 1066,
+      "sha256": "c62b4eb9663fa90c8af3599af4f879587318b4979984e3ae0eff9ac765a2f4c9",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/httpAuthSchemes/aws_sdk/clock-skew-defaults.js",
+      "bytes": 260,
+      "sha256": "498d38eab5b4a75cd04223a35fdd967244f90b35ca9c80cddadcaabb3f33961c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/httpAuthSchemes/aws_sdk/clock-skew-node-config.js",
+      "bytes": 569,
+      "sha256": "ec71a2eb37077c7ff64ad704c16fe2c24e5c7281977f83b67ced25e824291093",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/httpAuthSchemes/aws_sdk/index.js",
+      "bytes": 431,
+      "sha256": "5fcc9277ab5cf6607a6d14a59b950c153c5555377e0452837d510dbf2ca8a66d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/httpAuthSchemes/aws_sdk/resolveAwsSdkSigV4AConfig.js",
+      "bytes": 974,
+      "sha256": "50a1fce6f6150a04f35d3b357ca67d62188a2600151633650c7eb9e058c92155",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/httpAuthSchemes/aws_sdk/resolveAwsSdkSigV4Config.js",
+      "bytes": 6083,
+      "sha256": "c5c9e653a8875a18bdc23c3c05c2bef3c5e16e86519d1c712c8ccdb2e19dd6fc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/httpAuthSchemes/index.js",
+      "bytes": 595,
+      "sha256": "5c16ee0b05ca55a127b74db3bee75ae6c361cef45536bfb446026a3b997bb8ce",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/httpAuthSchemes/utils/getArrayForCommaSeparatedString.js",
+      "bytes": 148,
+      "sha256": "d68fac394b0122eb98b1e73153504a038f2ca2cc6dfd15390d6f502b0be9e23a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/httpAuthSchemes/utils/getBearerTokenEnvKey.js",
+      "bytes": 125,
+      "sha256": "f16aaa15b9e4c2fc3b1ec4c19ac9769648a96c60da7f1f144b97485306afe4ca",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/httpAuthSchemes/utils/getDateHeader.js",
+      "bytes": 338,
+      "sha256": "10f5fbb20bb20f79cef0ef0a8507e57871e55bb681143ace73b282f6b27ac49b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/httpAuthSchemes/utils/getSkewCorrectedDate.js",
+      "bytes": 101,
+      "sha256": "bd9bf12cf3d0f624c932d347df3a8ef98f6db1a874f39e244d3db68ba77a39f2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/httpAuthSchemes/utils/getUpdatedSystemClockOffset.js",
+      "bytes": 625,
+      "sha256": "855d978b88e690cfc9057dec02ec574c1b93a71c3681caa1fbf3069af74ef22c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/httpAuthSchemes/utils/index.js",
+      "bytes": 252,
+      "sha256": "4420801134aaf41391bce0f1423430cc39cb22e98ce62e8cc953cf90ff060949",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/httpAuthSchemes/utils/isClockSkewed.js",
+      "bytes": 209,
+      "sha256": "ca3fc1477b57b7a13f6be26c88498bfa8b1d27e050483b4d1be71b471dac426c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/ConfigurableSerdeContext.js",
+      "bytes": 138,
+      "sha256": "e35e37c863fee753f36c943c7ba9d2cd6ef31bcc26634acf1fa885d7a96e4c15",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/ProtocolLib.js",
+      "bytes": 5850,
+      "sha256": "f4183a1076f0dbfee3a61fafbb528d7a967e8f152f4a04a162720eb781d44804",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/UnionSerde.js",
+      "bytes": 625,
+      "sha256": "9bef04bc32ed77b2f62ecb6151d5751805daba19cd05cbeac16a2ba009a1956b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/cbor/AwsSmithyRpcV2CborProtocol.js",
+      "bytes": 2555,
+      "sha256": "a92e71aee1f13c7ffa269169d4b3adeb72631781485f353db6cd88a8dc22d45c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/coercing-serializers.js",
+      "bytes": 1592,
+      "sha256": "69b90d08dd03a2195aa23a575aa8988e5500b8e1cfdc4c637677c5da0684b6e8",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/common.js",
+      "bytes": 246,
+      "sha256": "415e24f7ecc8f8f80554835dd85db9cef609a5c0f258f6c40fb2cd3e26708e49",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/index.js",
+      "bytes": 1528,
+      "sha256": "6b7d2f09ab1d9cf8c89c56f2fab3405935eb9d5849bf102cd3965c6ad7943854",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsJson1_0Protocol.js",
+      "bytes": 612,
+      "sha256": "e524d61046a91c04b7917bea3a17d2973c290fc30792de01eff52fc60d7c91fd",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsJson1_1Protocol.js",
+      "bytes": 612,
+      "sha256": "78df6a4645b1138c6a9b528c66807fa4d5f71299633512e3487e95f82757f470",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsJsonRpcProtocol.js",
+      "bytes": 3506,
+      "sha256": "756872bb4e3c7536ca9e69e642b654901b41aa5c8f5e4fddd58052790a01769f",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/AwsRestJsonProtocol.js",
+      "bytes": 3943,
+      "sha256": "eb6f95b0a9db3b7ea511a9c01775cc517bcb8541d0fa1b9d753645d9fb404924",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/awsExpectUnion.js",
+      "bytes": 277,
+      "sha256": "07e89a25ef68ac0290500eaf256bfbc10866221df072b28b50a4bcf8fb3c84df",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v1/JsonCodec.js",
+      "bytes": 718,
+      "sha256": "cb9ae8fed1c3186e39a23c1bcfabc9e08f1f65829f4ca75cf6fb987ad7207666",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v1/JsonShapeDeserializer.js",
+      "bytes": 6271,
+      "sha256": "9f1a18f206fbf320545d3e63f224bec9b9b1242ed4067c5614353419eaa973e5",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v1/JsonShapeSerializer.js",
+      "bytes": 7643,
+      "sha256": "1a7aa73807795ccf319683979ab33905ff535959cf957112ff7e6250ad7221b9",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonBytesStringAdapter.js",
+      "bytes": 3212,
+      "sha256": "a2ec07809f31b2c276a46688416f1e6fd73b621bb992df5f359dcadd05f16556",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonCodec2.js",
+      "bytes": 725,
+      "sha256": "39aa636ad3896d36bd1ee5af4426de78410333260aa70b0d941df72ca6e7b708",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonShapeDeserializer2.js",
+      "bytes": 7460,
+      "sha256": "10da8e599c36ab00181a4e3c0fae7e4c2b68c4b0871c52d91ca3f5379bdc1861",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/codec-v2/JsonShapeSerializer2.js",
+      "bytes": 18031,
+      "sha256": "94955598d93530a63b1a0084d92e498c0aff30f8ae11d31d777c03e6092667d3",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/detectBufferParsing.js",
+      "bytes": 506,
+      "sha256": "b4ca3f6b734f9bed1db26d642d6014bd951ebf6b98c8cdbfd3859513d0d16640",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/jsonReplacer.js",
+      "bytes": 1569,
+      "sha256": "b0e4f46f45e5d390ae1d2c038e60eaa809bf6a24060b24ef6b35cbd48e7e1011",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/jsonReviver.js",
+      "bytes": 3994,
+      "sha256": "ff676cc50ed28e942f6d08b5909a622a7de15ca6778366ff713d9732b2063c03",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/needsReviver.js",
+      "bytes": 1163,
+      "sha256": "ce84fe8e0d7a635fb4bb673d46deaefc5157eb3f4c6d7bde5d5b764a163aac15",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/json/parseJsonBody.js",
+      "bytes": 3311,
+      "sha256": "649779085944a8f39e18b985e16b0656a8174abfda715a095745e635fc18a04c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/query/AwsEc2QueryProtocol.js",
+      "bytes": 569,
+      "sha256": "12a29319fec510ec05da279251f85d7d26a902eb520667aac2b7bf5b3219825f",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/query/AwsQueryProtocol.js",
+      "bytes": 5799,
+      "sha256": "48fa3f94c7d90e1c26f387474820cda58f042b4c24c64b9edcd0fcb1b0e0bca4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/query/QueryShapeSerializer.js",
+      "bytes": 7640,
+      "sha256": "bff10774a545ff83050b4ff2013ef4c9bc513a20badd940cdf63b5345e8fc2bc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/writeKey.js",
+      "bytes": 155,
+      "sha256": "33b24e0615b11c9745f8a21ffa6c86775a44c7f16b6627a0ca7a552effa9b49c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/xml/AwsRestXmlProtocol.js",
+      "bytes": 4553,
+      "sha256": "7c46a6c52afab6f6891c4a2f3e27f48e2a9e3c566e8c845fd99f32d784f1d24b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/xml/XmlCodec.js",
+      "bytes": 708,
+      "sha256": "2df570eb61f07b137d421b95180f3cbe838099f1b9953ec5af471f0e904de1ee",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/xml/XmlShapeDeserializer.js",
+      "bytes": 6300,
+      "sha256": "ada9587eacc163869f93297839480d6bf0ca8713d1623587ae529e02c8c8c872",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/xml/XmlShapeSerializer.js",
+      "bytes": 12982,
+      "sha256": "04c3ca79a6545aabcba782be86d75eead38e9d4413f8d70ddb5bb8ecc94deec4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/protocols/xml/parseXmlBody.js",
+      "bytes": 1534,
+      "sha256": "f8eb5bdad0a0eefb4a0b6ebdc6b4e1628f48921fcbd0a8e8129c34eeac2511cd",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/util/hasOwn.js",
+      "bytes": 108,
+      "sha256": "acc748f68df0148cf9c00254866dbdaf397aa05384505b2044f85c0ab8cdb924",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/util/index.js",
+      "bytes": 157,
+      "sha256": "522a92bf491c70abf54377b5cd0fb7eee09e538c318f6048d0e845301959b321",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/util/util-arn-parser/arn.js",
+      "bytes": 851,
+      "sha256": "bf0e0e385ebedb2a4f4a17b697783e4b7bd0fb1ebf96758f2a79572eefc277ad",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/core/dist-es/submodules/util/util-format-url/format-url.js",
+      "bytes": 957,
+      "sha256": "c015e02fb68d0bd4fb983d85f06a443a066f284561963ff9e1b70d28a622abcf",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/credential-provider-env/dist-cjs/index.js",
+      "bytes": 1663,
+      "sha256": "d23e2c99a7f9bff60ecc65b297decd4c49736d2faffd33910fe67ba6799e98a6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/credential-provider-http/dist-cjs/index.js",
+      "bytes": 7337,
+      "sha256": "ae4626cb8c8948c8c3f4deef29c4db037d2464adcfb88d63ed2eab39f21e9a29",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/credential-provider-ini/dist-cjs/index.js",
+      "bytes": 11576,
+      "sha256": "2d975f8114b17e1e96eea2735c7271f735f08bab35dc922384cd15735bbdd085",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/credential-provider-login/dist-cjs/index.js",
+      "bytes": 12859,
+      "sha256": "3ada1d4c0fbc6d888cee050b741348fc66ba455b5624203816e408ab5470e910",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/credential-provider-node/dist-cjs/index.js",
+      "bytes": 7182,
+      "sha256": "afd158eca6193ed8d8a469013790b9ffa3bdcdea7f6116efda93705f67c6335c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/credential-provider-process/dist-cjs/index.js",
+      "bytes": 3257,
+      "sha256": "459dccd69ac50b0cf33d00398dd6b18dec18521d8ed6bc359121e1a96115ea4d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/credential-provider-sso/dist-cjs/index.js",
+      "bytes": 8232,
+      "sha256": "cc75ada3cbe32e31cca407a81ee5f2c2e81a36134d4f8fec50c898110a60f772",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/credential-provider-sso/dist-cjs/loadSso-BGYXHf8s.js",
+      "bytes": 183,
+      "sha256": "eaf5712dd8b7f2c9c19a5380ab15ada26f393a8ac6f5803fe7051763aeae0c3e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/credential-provider-web-identity/dist-cjs/index.js",
+      "bytes": 2636,
+      "sha256": "664792ccf95de183d35f270b09a5b4e1deb924c5d665e40d7a92dfd90c7c0af6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/NodeDisableMultiregionAccessPointConfigOptions.js",
+      "bytes": 632,
+      "sha256": "f7ba889a0789a76e96e5613cd47b4860c046aa61f4f17500004922ab5b75d15d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/NodeUseArnRegionConfigOptions.js",
+      "bytes": 508,
+      "sha256": "88497b6c64c05fecc6017f32209d8ebbc7814518f924141e2f52a15b1c2f0e45",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/index.js",
+      "bytes": 3511,
+      "sha256": "a02b23e9109beeaf654da60360ed4057a0f5a25cd57f566bee5f1aed2fa1c89c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-bucket-endpoint/bucketEndpointMiddleware.js",
+      "bytes": 3796,
+      "sha256": "86597ec2687ffe0c6d69be65673a468f971be6647eb38f4f778aae3014bec85a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-bucket-endpoint/bucketHostname.js",
+      "bytes": 6156,
+      "sha256": "76baf29ee867d467e5260e560b718252bbec4c6e509c5ac8e09ddf4f54bff5d0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-bucket-endpoint/bucketHostnameUtils.js",
+      "bytes": 5014,
+      "sha256": "e7e858f6ff32c054d11f649e127e96d759e9bc33a0e7fd3c534381bc484dce87",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-bucket-endpoint/configurations.js",
+      "bytes": 650,
+      "sha256": "e0457ddf3beb10aec004ca29a7f2c808f128a152194f45d2d4b92a661e258e09",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-check-content-length-header/check-content-length-header.js",
+      "bytes": 1421,
+      "sha256": "3f9f5d2c32810ef29c40a115ed2b44f95db244f4e8588e02cfa67a642a9e35bc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-expect-continue/middleware-expect-continue.js",
+      "bytes": 1518,
+      "sha256": "1923ed871137ac3b8a9d8e900df7b8e96b193a2ca541c07deb842e2194f6dce7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-location-constraint/configuration.js",
+      "bytes": 77,
+      "sha256": "27fef8f74182340334c3f0135af1f4ed67d83447e7453be502eb8195e5ec4d49",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-location-constraint/middleware-location-constraint.js",
+      "bytes": 999,
+      "sha256": "e5c917097716af4e59660e89260e71773b699962b8e1bbf6fc309a64f3019c6c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-region-redirect/bucket-endpoint-middleware.js",
+      "bytes": 1362,
+      "sha256": "24b83f7cee21a6761c6ee11b6e8d4eaf872f1157f194e5555b022a3157bf6836",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-region-redirect/region-redirect-endpoint-middleware.js",
+      "bytes": 1379,
+      "sha256": "934ff4926e98efa5847015ad86a1e7b62888c075e5cd4e7beeafb1a553b0bfa9",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-region-redirect/region-redirect-middleware.js",
+      "bytes": 1930,
+      "sha256": "e882a8653c6b6d77d28162550f971f3cfadd3a29e4cecd1b9d0f03626d64e5cb",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-s3-configuration/s3Configuration.js",
+      "bytes": 1060,
+      "sha256": "422c07802d4c2cfcd0150775f5f774870dc37310a7862ce89e67097e633ffd39",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-s3-expires/s3-expires-middleware.js",
+      "bytes": 1281,
+      "sha256": "5391c763d6fec9603d71cbc926a7a57a3f72e467186fb0ad6014a8a1ae0e586a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-s3-express/classes/S3ExpressIdentityCache.js",
+      "bytes": 1066,
+      "sha256": "c6c7ac18275f412a7a7d034c715183c1fbf7d0adbfef2ae192b70b0d482a59b2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-s3-express/classes/S3ExpressIdentityCacheEntry.js",
+      "bytes": 378,
+      "sha256": "f5281591f51ae1eb975238fc9c2853dd23a66d965863091e067b216914a9d217",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-s3-express/classes/S3ExpressIdentityProviderImpl.js",
+      "bytes": 2358,
+      "sha256": "597efa23cd2f6adf499aa74e68705a4c3522a8ef684292fa21f4b8165d3bc5e6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-s3-express/classes/SignatureV4S3Express.js",
+      "bytes": 162,
+      "sha256": "0c6400ff7e910f2d4287abe6d5cf078c061a64d05ea90a60d3230b91c895f85a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-s3-express/constants.js",
+      "bytes": 908,
+      "sha256": "a953fef9fafd7a05aed32d787e5a0567e7223eb3d7ff09565aeaa30931d0b4f4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-s3-express/functions/s3ExpressHttpSigningMiddleware.js",
+      "bytes": 1689,
+      "sha256": "a44d75bde8f934f974218ea85efd6e32e64120952b6b48b87f6a98796941ae03",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-s3-express/functions/s3ExpressMiddleware.js",
+      "bytes": 1885,
+      "sha256": "dfcc2a357f448d4011dc7b1563c8d37b8b3117cb8c5fc11ce4f7391e4278b0d4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-s3-express/functions/signS3Express.js",
+      "bytes": 448,
+      "sha256": "7b42b357e1c9c86e2704662c6c0742121f25c80dda753ea4e0b500421aba8dc0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-ssec/middleware-ssec.js",
+      "bytes": 2253,
+      "sha256": "3980565d6253ce87ee1c658f9d26f01b268dbf9725cedd917dc1916f972f5782",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-throw-200-exceptions/throw-200-exceptions.js",
+      "bytes": 1868,
+      "sha256": "1a1cfe997df91bd752b706a573ac76d65cb5244f3c94b1d17a930e81c14d390c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/middleware-validate-bucket-name/validate-bucket-name.js",
+      "bytes": 1164,
+      "sha256": "1d2a5864c9c954f48aed6188cebf127d97bb0aa1faf3ebe60864ff7f0d14e437",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/protocol/S3RestXmlProtocol.js",
+      "bytes": 1121,
+      "sha256": "907f3d3f7b023f720c46a40422dda59aeb365e4323daeba643675981e2551fac",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/middleware-sdk-s3/dist-es/submodules/s3/to-stream/toStream.js",
+      "bytes": 122,
+      "sha256": "a54ea4938f2f2fc8d5d000c9924dee705882541002a70be0eee9144ccb62acaf",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/Signin.js",
+      "bytes": 461,
+      "sha256": "a91790070f946f0db5f41fa54d9b470cd7dde4c6228375ec1346ca5b500d2b86",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/SigninClient.js",
+      "bytes": 2799,
+      "sha256": "84048cd8c083393d1fd68fc45ea937396d12c7e87683d2347963c925261a85ba",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/auth/httpAuthExtensionConfiguration.js",
+      "bytes": 1338,
+      "sha256": "331902cc5df5060ac9644261de8711ff641d6b91e60b5fcf77d2facc441c8cf6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/auth/httpAuthSchemeProvider.js",
+      "bytes": 1709,
+      "sha256": "72a23904f67e19c05564ebf29969e23bad0c3dbbb88fe8c647fc44c7ce028ae9",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/commandBuilder.js",
+      "bytes": 504,
+      "sha256": "843efa0c461084ad839fd8a05fddb0abf4329cdf7a8950a27ee42ac6e01bb9c3",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/commands/CreateOAuth2TokenCommand.js",
+      "bytes": 227,
+      "sha256": "84d78d30c38ee35c8e019373cdfc10fa525e1c425385921c8ad532afe74401d4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/commands/CreateOAuth2TokenWithIAMCommand.js",
+      "bytes": 255,
+      "sha256": "d2fc4408a35e77d51db9ad6c90fe0a02bdde41aeff6a0c703bdc1f80f8b8be81",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/commands/index.js",
+      "bytes": 95,
+      "sha256": "9eb302610d3ddee034a452430399d7196122dba091de204c7a4b909d4b31c91e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/endpoint/EndpointParameters.js",
+      "bytes": 562,
+      "sha256": "9fe684a00b59b2721c19294cf472bae13ff3fb76bfd7e6056e5eaf152aec4d82",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/endpoint/bdd.js",
+      "bytes": 3841,
+      "sha256": "201c38f1444d58c87d6ecff1f0241af8ead291ae2f9c1bb702c7adeb939e5d70",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/endpoint/endpointResolver.js",
+      "bytes": 615,
+      "sha256": "40edea4968dff2e2e4df234748c4d4f3c590924f45405cabcf7a0869b0eef8a4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/index.js",
+      "bytes": 356,
+      "sha256": "90dc285df127980c78218855f61d20186b71cd5b1c360b1fcb083ea335741ce8",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/models/SigninServiceException.js",
+      "bytes": 305,
+      "sha256": "a40fd14467a7f26277150fc3774879484dcfca2fa88f66bbc3aae2c740c46101",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/models/enums.js",
+      "bytes": 430,
+      "sha256": "f5771fafecbe39f210eafc7f630cfb34714125f16bc53932a19c7a118357bc36",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/models/errors.js",
+      "bytes": 1634,
+      "sha256": "ef8270f87938b071c0b68ababbda4c33c44de3e1cb4e87e50d488160ee9dc585",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/models/models_0.js",
+      "bytes": 11,
+      "sha256": "8e609bb71c20b858c77f0e9f90bb1319db8477b13f9f965f1a1e18524bf50881",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/runtimeConfig.js",
+      "bytes": 2967,
+      "sha256": "ce5b27ec896201b2ea782b7c26c81b0640a0ccdb88217a604575201345a02fdc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/runtimeConfig.shared.js",
+      "bytes": 2217,
+      "sha256": "5afba145d20cedf4a69fad0f5e255b394554660db2f08b49b5eb55019dd103a9",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/runtimeExtensions.js",
+      "bytes": 1131,
+      "sha256": "91acbc1e819f62b25b16ae8d717eab8eb748fedc63a656ffcf6ae353cd0b5dbc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/signin/schemas/schemas_0.js",
+      "bytes": 4347,
+      "sha256": "570777cb670086707845e6deae880598c8951952a989536f39c2d20f1f42e9b6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/SSOOIDC.js",
+      "bytes": 316,
+      "sha256": "4d054213691231d719fc7bea4dbc45263073d084ef69fdc9ddca4a19bd498e51",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/SSOOIDCClient.js",
+      "bytes": 2802,
+      "sha256": "e4e97c4249e3acd0d50ed3cfc751ab301b076a75b8d39cfd91d2aaf1af7f968f",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/auth/httpAuthExtensionConfiguration.js",
+      "bytes": 1338,
+      "sha256": "331902cc5df5060ac9644261de8711ff641d6b91e60b5fcf77d2facc441c8cf6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/auth/httpAuthSchemeProvider.js",
+      "bytes": 1708,
+      "sha256": "a5fc1da9e93d8823192dfb3f8c11e8eb9f110b66bdcb09b8971ad2ff3e83d055",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/commandBuilder.js",
+      "bytes": 356,
+      "sha256": "7ddee4baf314d8365481e14719922e711fd0c53395833bd297cb119c94afde76",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/commands/CreateTokenCommand.js",
+      "bytes": 203,
+      "sha256": "7cf7c3787d51ea4a4e5ca1e48b9e3f22ddb7c3cd8ad648158fdb7e604f262c76",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/commands/index.js",
+      "bytes": 38,
+      "sha256": "68408a182f77a5a894f246dfe7ac82745e12c95d9914e042a7150ecb537f82c2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/endpoint/EndpointParameters.js",
+      "bytes": 565,
+      "sha256": "9735f242587f7326aa3cf5878298463c96f4695ea66c7a1d73f5e0da676ccdba",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/endpoint/bdd.js",
+      "bytes": 1915,
+      "sha256": "4d400978e8d55b3950f72d895a9e68331e9cb4805c29f8ba52c33b00c52ccdaf",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/endpoint/endpointResolver.js",
+      "bytes": 578,
+      "sha256": "b348b10ade00971a6c9e3de1b9ecedb5388d5f28a411321727f4ad2f84394487",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/index.js",
+      "bytes": 360,
+      "sha256": "0a0f8055a59afbbc2f12dafb03f88181cce0a91f9cf35ed7cf8afc214af3c3e5",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/models/SSOOIDCServiceException.js",
+      "bytes": 307,
+      "sha256": "e13c483fa9c545d54b3bc56d97eb67dead77000ece8be0d1c307f2962ae31a38",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/models/enums.js",
+      "bytes": 356,
+      "sha256": "1f110fe96c668e8ed79aaabe7700d8b909db93bef1d90a4865587c8af7266327",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/models/errors.js",
+      "bytes": 5422,
+      "sha256": "a777e0d01869da54bfa62d17af78257841fd2c0d140ccf6e794ef22aa56223a4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/models/models_0.js",
+      "bytes": 11,
+      "sha256": "8e609bb71c20b858c77f0e9f90bb1319db8477b13f9f965f1a1e18524bf50881",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/runtimeConfig.js",
+      "bytes": 2967,
+      "sha256": "ce5b27ec896201b2ea782b7c26c81b0640a0ccdb88217a604575201345a02fdc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/runtimeConfig.shared.js",
+      "bytes": 2233,
+      "sha256": "dc4abf5823f3d04c6405b9c6d75b87f94e1630b36d7498a127da5daf122ff498",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/runtimeExtensions.js",
+      "bytes": 1131,
+      "sha256": "91acbc1e819f62b25b16ae8d717eab8eb748fedc63a656ffcf6ae353cd0b5dbc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso-oidc/schemas/schemas_0.js",
+      "bytes": 4862,
+      "sha256": "7c4cac3842251c2ab9666c390b6b08caa1d17ff704b0ebbcca96632643d7d6fc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso/SSO.js",
+      "bytes": 317,
+      "sha256": "71ac2820cb65b89bd60d3eba30e493dc332d4ea3e1862d2c43fe142c0baada62",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso/SSOClient.js",
+      "bytes": 2790,
+      "sha256": "db44c6ab924f0ca8cb68aaf426bc13ea9d29acb168e3360aa5e32e140f5bcf17",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso/auth/httpAuthExtensionConfiguration.js",
+      "bytes": 1338,
+      "sha256": "331902cc5df5060ac9644261de8711ff641d6b91e60b5fcf77d2facc441c8cf6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso/auth/httpAuthSchemeProvider.js",
+      "bytes": 1710,
+      "sha256": "f1b3e1f2c7e7b86ee8d58e2f5c1ac8ba6cbac09c274103ca6fd58701a6465df4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso/commandBuilder.js",
+      "bytes": 351,
+      "sha256": "208005656527a40ef0dd02e3609c75e9854d70e9171feb3ecfbc3cc5d16e50c7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso/commands/GetRoleCredentialsCommand.js",
+      "bytes": 231,
+      "sha256": "659c4baafcb7ff3763723e87bf40ead5d22de14ff6c2b8062a89741624556c07",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso/commands/index.js",
+      "bytes": 45,
+      "sha256": "c58d3b5cf10a9a4221371dea0a700d4666ecd1fb8f91fe697a5b7d7b71619b86",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso/endpoint/EndpointParameters.js",
+      "bytes": 568,
+      "sha256": "2e8ddced4e19f40bc3866ca3f4e567efd88acc505ccdd3531f04d91d138b13a4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso/endpoint/bdd.js",
+      "bytes": 1945,
+      "sha256": "858273a44c99057edf92a424427bfdca9457d97059233f70942dabd4a7a64b7b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso/endpoint/endpointResolver.js",
+      "bytes": 578,
+      "sha256": "b348b10ade00971a6c9e3de1b9ecedb5388d5f28a411321727f4ad2f84394487",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso/index.js",
+      "bytes": 312,
+      "sha256": "5a0828b2f69d2a093d544376552cf9d22617f97876cc80d5946a6f1b9fdf21df",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso/models/SSOServiceException.js",
+      "bytes": 299,
+      "sha256": "7ca2f3771f1c706b7de5474eda091e4964cd606fa468a703411b5357fa45094b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso/models/errors.js",
+      "bytes": 1492,
+      "sha256": "bfe45537dc91a45fabf8f5156b80d0bd1d0083fd8e3291c2b4019ad2d9d8c0e7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso/models/models_0.js",
+      "bytes": 11,
+      "sha256": "8e609bb71c20b858c77f0e9f90bb1319db8477b13f9f965f1a1e18524bf50881",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso/runtimeConfig.js",
+      "bytes": 2967,
+      "sha256": "ce5b27ec896201b2ea782b7c26c81b0640a0ccdb88217a604575201345a02fdc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso/runtimeConfig.shared.js",
+      "bytes": 2215,
+      "sha256": "876bb4d0854b6b75557a019857637df7b68a5b1f31fed49e0344e2decf9bc1ac",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso/runtimeExtensions.js",
+      "bytes": 1131,
+      "sha256": "91acbc1e819f62b25b16ae8d717eab8eb748fedc63a656ffcf6ae353cd0b5dbc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sso/schemas/schemas_0.js",
+      "bytes": 3026,
+      "sha256": "49b2e9d386d22b473214c2b81ebaf9b526d4269c161c08b01504608154e858a0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/STS.js",
+      "bytes": 428,
+      "sha256": "1f82f0f47af3bb22b6efe2d69064494716dcf941de4324e203b1e33e7cd67977",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/STSClient.js",
+      "bytes": 2845,
+      "sha256": "6f0a1dcb689b809a1daf4ece20d0bcfbb9937493ea1bcc4fd727a141fe49b34a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/auth/httpAuthExtensionConfiguration.js",
+      "bytes": 1338,
+      "sha256": "331902cc5df5060ac9644261de8711ff641d6b91e60b5fcf77d2facc441c8cf6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/auth/httpAuthSchemeProvider.js",
+      "bytes": 5919,
+      "sha256": "f8433a6c9124068f5a421ed873505c7ea77902e7c2259af1390e23164c5da626",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/commandBuilder.js",
+      "bytes": 367,
+      "sha256": "4bf23cba9db93e3d77b3c6970114266e787c82bb9f3fa931f53cb09b13fc457f",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/commands/AssumeRoleCommand.js",
+      "bytes": 199,
+      "sha256": "6f8506634b0dc2e60791431e5bffdbe22dc724cf6235aadd3a53e40eccf87fbe",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/commands/AssumeRoleWithWebIdentityCommand.js",
+      "bytes": 259,
+      "sha256": "5ad1bcbdbe14e0a08cf84359361a450ea9209fa74c8f5bdae45050e18185306b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/commands/index.js",
+      "bytes": 89,
+      "sha256": "1fa52becf7bd2ca0086f6c724a8c591a6a4f45cb8ae65d98924c34d45ffcb619",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/defaultRoleAssumers.js",
+      "bytes": 1220,
+      "sha256": "3080341a3560a1ecc7c6dc45b18deac11db55cfb8db75457855bcb68081321e3",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/defaultStsRoleAssumers.js",
+      "bytes": 5551,
+      "sha256": "461c1ff0b375f55406bb413537cf1f64e6f541f99a9061ae7a084bb6a784744f",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/endpoint/EndpointParameters.js",
+      "bytes": 699,
+      "sha256": "f8ad1ff4e80734123ee4b414042e32dcd2165beffcda8816a3d15bfd07bfc701",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/endpoint/bdd.js",
+      "bytes": 3046,
+      "sha256": "ffd40553d0b97c3683f530e0e695a8dfa18bb0f90b8ec0e3f98e5541976b0eac",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/endpoint/endpointResolver.js",
+      "bytes": 599,
+      "sha256": "85d0f4cfcaab244f8a0e3020a61057327cfbe800e69103c17d64b94b42d0dcb8",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/index.js",
+      "bytes": 351,
+      "sha256": "28e42e0e4fe4aca6e765d5440aa5f7bdc016d1d2657f3b0166e5fb9501205a13",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/models/STSServiceException.js",
+      "bytes": 299,
+      "sha256": "3bf07f0767c077ef4b715bdd77c23a313953b1a59690d9d0d9c11a799ee038f1",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/models/errors.js",
+      "bytes": 2677,
+      "sha256": "e981f8ac63d03f2f9afb673f321abeb13e73d388e8a082567cfc69ebed63fca0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/models/models_0.js",
+      "bytes": 11,
+      "sha256": "8e609bb71c20b858c77f0e9f90bb1319db8477b13f9f965f1a1e18524bf50881",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/runtimeConfig.js",
+      "bytes": 4009,
+      "sha256": "50d13c142c54b107866c8067d9458eb7057d0ba951891da1681333757f7a553a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/runtimeConfig.shared.js",
+      "bytes": 2684,
+      "sha256": "8d6d45d9c7cde0774d047618ab00e3058598d2de7f64c5a2c6e65841ddaba656",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/runtimeExtensions.js",
+      "bytes": 1131,
+      "sha256": "91acbc1e819f62b25b16ae8d717eab8eb748fedc63a656ffcf6ae353cd0b5dbc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/dist-es/submodules/sts/schemas/schemas_0.js",
+      "bytes": 5997,
+      "sha256": "863f13905f59d47251c0b1f6b08f851c7d1a07fee93a0782230a7e1d578c7809",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/nested-clients/package.json",
+      "bytes": 4419,
+      "sha256": "032d9e44c92d97643efc9ec1df81a76b535fe804d956ac70632edf27f5a95d2c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/signature-v4-multi-region/dist-cjs/index.js",
+      "bytes": 8084,
+      "sha256": "13e4f99866310f2bb966554b9cd52598b4701ded5e4f5056dfa65fb6eb71b5f1",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/token-providers/dist-cjs/index.js",
+      "bytes": 7039,
+      "sha256": "d45a861be3abd682fec912c954858283da2ac251bc227946a6445a84e35e4a75",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws-sdk/xml-builder/dist-cjs/index.js",
+      "bytes": 10663,
+      "sha256": "ebaa02fe69fb4bf244f2ed10cdbb3ef9c725ab5b39be4b36532a68308804ff81",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@aws/lambda-invoke-store/dist-es/invoke-store.js",
+      "bytes": 4191,
+      "sha256": "526b850ed7866fa67d824b21b81d9e4b9cc2784d3be8903b0fafd91902fee87a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/index.js",
+      "bytes": 954,
+      "sha256": "04a0618d336963025211e57271eb0c71c77553eca1d8a73ee3765e255aa0edbc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/legacy-root-exports/middleware-http-auth-scheme/getHttpAuthSchemeEndpointRuleSetPlugin.js",
+      "bytes": 725,
+      "sha256": "5efb92f63c5e5227e43c6cffc1bcb35eca43e916b34a79f051d1fb230729914c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/legacy-root-exports/middleware-http-auth-scheme/getHttpAuthSchemePlugin.js",
+      "bytes": 680,
+      "sha256": "b0857909091775595857574611d5c70b1054c6f390dc8682e2fff9560d166ac1",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/legacy-root-exports/middleware-http-auth-scheme/httpAuthSchemeMiddleware.js",
+      "bytes": 2132,
+      "sha256": "fa279e03dd04d557d4d7487a82cd18a31911b41c401378250f8b469a7c235ef2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/legacy-root-exports/middleware-http-auth-scheme/index.js",
+      "bytes": 321,
+      "sha256": "81c8e949e93617be4f3f95e5d9e97e3cdb2f169661e291b6d0c1bd7864ce50f0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/legacy-root-exports/middleware-http-auth-scheme/resolveAuthOptions.js",
+      "bytes": 888,
+      "sha256": "f0262f541cde5dfa93a26906c4760462a14ecc1dd89f9dc66a93607f2c7d02e5",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/legacy-root-exports/middleware-http-signing/getHttpSigningMiddleware.js",
+      "bytes": 556,
+      "sha256": "faf80fd09eb4ef9897aef2a3c4713b7ef1ec6ef0be09dcaf7d5b581b2450de82",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/legacy-root-exports/middleware-http-signing/httpSigningMiddleware.js",
+      "bytes": 1060,
+      "sha256": "3b7e0f86966053000e218d2031cbbb9c8530bde3cd9cc4f169f2716f2f544ec3",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/legacy-root-exports/middleware-http-signing/index.js",
+      "bytes": 162,
+      "sha256": "b9dae05d568913b25e3346a1fc51337c0def3a9534765bdf56af59fa4387aa6e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/legacy-root-exports/pagination/createPaginator.js",
+      "bytes": 1663,
+      "sha256": "077d55e46108b1b8bbdeee7534b26f0e1292562940bb284130ca288a35ae4ae2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/legacy-root-exports/util-identity-and-auth/DefaultIdentityProviderConfig.js",
+      "bytes": 498,
+      "sha256": "11a539c9128d0a8da65d42df7e4cafd76077406a0553781ee20bfde7ed0475d4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/legacy-root-exports/util-identity-and-auth/httpAuthSchemes/httpApiKeyAuth.js",
+      "bytes": 1610,
+      "sha256": "bfafa715c295758a0b7ba63547b803d18bc7774ca0f4d5abd67e81df3fb98039",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/legacy-root-exports/util-identity-and-auth/httpAuthSchemes/httpBearerAuth.js",
+      "bytes": 473,
+      "sha256": "f6d143492dee6d7ecf4b054af867032b509d47ce5dc8e56b0a3ca270d4a1c9ec",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/legacy-root-exports/util-identity-and-auth/httpAuthSchemes/index.js",
+      "bytes": 155,
+      "sha256": "f94f44826912961b5fd26c56ae20fee6a78c2c5a181280184dfc56480f3226b3",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/legacy-root-exports/util-identity-and-auth/httpAuthSchemes/noAuth.js",
+      "bytes": 123,
+      "sha256": "7c87b25d9347f430e74566bc052a9143217f8b9966cdfcfa4cb249935602b80a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/legacy-root-exports/util-identity-and-auth/index.js",
+      "bytes": 340,
+      "sha256": "86ccd7d964d46ffec14c1f38423accd4f50f942d4497ed0f5bcd73916f3fc701",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/legacy-root-exports/util-identity-and-auth/memoizeIdentityProvider.js",
+      "bytes": 1850,
+      "sha256": "593d8a63184db131ca28988901611c2120c07a47f87378bad3b0b713d3ade6a0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/normalizeProvider.js",
+      "bytes": 186,
+      "sha256": "e927e9b665c202b4703bfedb3ed09a8ec8b9c9ef22d18c4e496585b16483307d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/setFeature.js",
+      "bytes": 334,
+      "sha256": "17942102089d90bdb390ad51454520d90472ae93c43363f1efa7be5ba5d311a4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/cbor/CborCodec.js",
+      "bytes": 597,
+      "sha256": "76d0189266409108ed24ded56a037410ad2f115bdb63e5f166872812ca68a9e8",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/cbor/SmithyRpcV2CborProtocol.js",
+      "bytes": 4080,
+      "sha256": "fcd431d5cea2f4d6fc26979dae9775a5fec58708ac35de7272420767650a77de",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/cbor/cbor-decode.js",
+      "bytes": 16697,
+      "sha256": "50d80b35906a3aa6fc12655b9fc8c2cd6c6018b429be43bdd6557b9f4cfa5445",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/cbor/cbor-encode.js",
+      "bytes": 11941,
+      "sha256": "053c7ebbb4cc40dfcc1fd9008324bfd802dc695d7b89141d8616e3cefd053dbc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/cbor/cbor-types.js",
+      "bytes": 823,
+      "sha256": "69298926456a17b1ec626251c72303264f8347a2877fc6f7175691aeee9867b3",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/cbor/cbor.js",
+      "bytes": 609,
+      "sha256": "3940d176cec6c8fa305ba006cbf0a6ffba486a9d1e8c7cf9b8722d90c2a0fd3c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/cbor/codec-v1/CborShapeDeserializer.js",
+      "bytes": 4465,
+      "sha256": "d9efca2eacf84095cdcb938af2602cacd89c47a5adcd268bc6db11dfbe9d88da",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/cbor/codec-v1/CborShapeSerializer.js",
+      "bytes": 4351,
+      "sha256": "a8ea36daa4987597ae8483556a08aed89ee7b32c2bddd1c4ee59eb61655a3938",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/cbor/codec-v2/CborShapeDeserializer2.js",
+      "bytes": 20582,
+      "sha256": "b33617ec50d36aae374a20d625ebdd27b8d98b47af4b0f2e74c8acad3d91fab2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/cbor/codec-v2/CborShapeSerializer2.js",
+      "bytes": 18726,
+      "sha256": "a723f75b1220b3e763c9131a96fda50e39826c380b0dd1c7f1ea4577c0f5b9c2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/cbor/index.js",
+      "bytes": 631,
+      "sha256": "4c61fce184e7305205bd06bbc13fbe3dffab69a7824c771ac03b8c1840d5432f",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/cbor/parseCborBody.js",
+      "bytes": 3323,
+      "sha256": "0db10d2da90a12636d77a312a47737017801b80086dbce00ac382c9e62239cea",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/checksum/chunked-blob-reader/chunked-blob-reader.js",
+      "bytes": 367,
+      "sha256": "8ac3a5bab54af0ce2e04b154b70d2bb1b010593094cfb37a248771e9f82b4e5c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/checksum/crc32/Crc32Js.js",
+      "bytes": 799,
+      "sha256": "3edb3089f1774cafe7ceda7ce598ee0ea07b92f41f395c511963460cdfd46e36",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/checksum/crc32/Crc32Node.js",
+      "bytes": 743,
+      "sha256": "ede4151e2e19d7a2c54bede9530bac7476ab2d1d623952354d0fd718bf4c87f8",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/checksum/hash-blob-browser/blobHasher.js",
+      "bytes": 281,
+      "sha256": "0a3df70e39448424397e522a3a26a5fb3455f15d4de91a0c37492d635fad0cb1",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/checksum/hash-stream-node/HashCalculator.js",
+      "bytes": 446,
+      "sha256": "d5688cc0ffd5dcb8fa1d49e036896fd5836f5fa2cbabd82aaa2e54e61daa3b6c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/checksum/hash-stream-node/fileStreamHasher.js",
+      "bytes": 897,
+      "sha256": "fb70bae40768b5868748fd49d5b7e20a38850c9fba8d5f567aa7d43ca9d07e7e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/checksum/hash-stream-node/readableStreamHasher.js",
+      "bytes": 713,
+      "sha256": "8d5b5887eefe6e88820fb115eaa007e04555d8819f02f07473c3cbe8287dd156",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/checksum/index.js",
+      "bytes": 667,
+      "sha256": "f310e60b371cd8d16e5eb17499ec3ea478029b4a3f779024caf729f3d4174f8c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/checksum/md5/Md5Js.js",
+      "bytes": 2982,
+      "sha256": "b80b06322eea17132dfa625f2a160518b3cee719d77fe2a2b81b69e0d15028eb",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/checksum/md5/Md5Node.js",
+      "bytes": 784,
+      "sha256": "e918d4688f912a132c8d007d9c77d686de48a972f1a4d6ad15f77c8e0ebd8bc6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/checksum/sha256/Sha256Js.js",
+      "bytes": 6815,
+      "sha256": "54d26649ccb5c6f5d34f89bf22167db9f91eeab6c05af115f7b0dbf041081ec4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/checksum/sha256/Sha256Node.js",
+      "bytes": 1653,
+      "sha256": "0599f9253cbb8ca468a840d1eab931c5029fa0c97d4eb47e1017a3f32d45f33c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/checksum/sha256/Sha256WebCrypto.js",
+      "bytes": 2320,
+      "sha256": "66ba14eccbef4a63912dbfbbf885d62ff1c2bd5b530e9b41642c576c47aa9285",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/index.js",
+      "bytes": 2134,
+      "sha256": "fc2370d68db8dd9b708aedf724055cea16c73abd66f62c850137a83cd6cde807",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/invalid-dependency/invalidFunction.js",
+      "bytes": 85,
+      "sha256": "249e731ec4ad963b6b9dd7cfee1cb1625dadcf9dcbf07e93784b715c5820402c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/invalid-dependency/invalidProvider.js",
+      "bytes": 75,
+      "sha256": "b3b5899098cacda6f82f5897f6476272b09595707bcb7c4d952edec7ab962f3b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/middleware-stack/MiddlewareStack.js",
+      "bytes": 11543,
+      "sha256": "f42af4aef1b6582c76f7ebfc3ec350ac85db5f7f74ba04e5f0dd6f3530f47008",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/NoOpLogger.js",
+      "bytes": 106,
+      "sha256": "ff7a367cade6bc53cd94cd68437ddfa798683b1416f19c6a26fafb79695a79a7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/client-command-builder.js",
+      "bytes": 742,
+      "sha256": "0b35bfe414ae3124af3036f7912a6fa273d345e80350430dd159e9e1cb8ec6cd",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/client.js",
+      "bytes": 1821,
+      "sha256": "aba79a9f480b403e683f92b868c4b0a98cef0d0425b91c8b5fac93eca92bc55a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/command.js",
+      "bytes": 4644,
+      "sha256": "6691f12f5d44177df8d985a5c3aa766b29af82c741586ff24c76bb3d024d18d7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/constants.js",
+      "bytes": 62,
+      "sha256": "0bffe9d7b8beb2d44d82bbf98a0f2e0057a7ac2fab47ea07b4d4a2c7a5f4fba0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/create-aggregated-client.js",
+      "bytes": 2049,
+      "sha256": "37a599a0edf7536dcdff8ddff34b56a6db001e7238b03aa54f77bf199bbc36a7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/default-error-handler.js",
+      "bytes": 1058,
+      "sha256": "0ed06c24a6f3791ffad9a8576c32778a020595de0bd3fa7ef1aa87f49e7dcd7d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/defaults-mode.js",
+      "bytes": 690,
+      "sha256": "9b45c8f3f8d88787b47093e4b8cbff90a8f398b2e1b0601e5417a17a142c9ae9",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/emitWarningIfUnsupportedVersion.js",
+      "bytes": 229,
+      "sha256": "6d7ae8d753c32c1515a791d5ae327e6930c675310790db27a3b43f4d292f9ed9",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/exceptions.js",
+      "bytes": 1736,
+      "sha256": "898110e2c96bb28686d521cc63dd8f009cee0e37ae7689ca69d9e6be82d31e38",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/extensions/checksum.js",
+      "bytes": 1884,
+      "sha256": "1d1c58f7f5ea04f63d9563616ad507300becd946321c5f52c707d6c7fd7d1809",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/extensions/defaultExtensionConfiguration.js",
+      "bytes": 577,
+      "sha256": "860a566aebb9aed01d99b883527bd4c60b49ef505a03e5e35dab7956d9bad7a9",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/extensions/retry.js",
+      "bytes": 488,
+      "sha256": "dd290468245ba9c8b1878c9225d11bccad7da7b9cdd2d448eae0bd99109b9975",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/get-array-if-single-item.js",
+      "bytes": 107,
+      "sha256": "f88f6c3500813516da7f912d3e8cb1a70483d331a52def0a425bedd3019d77d6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/get-value-from-text-node.js",
+      "bytes": 481,
+      "sha256": "3bd5f48d7615b84df471d77c3894ebc66306a3be0f6eebf59e9722226db541ba",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/is-serializable-header-value.js",
+      "bytes": 83,
+      "sha256": "e3ab3d19b8faa9f60689c28e9fc23ee9694cfa90d247a9fdb46320c619547ebe",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/object-mapping.js",
+      "bytes": 3254,
+      "sha256": "46e6c8c3c71f557642b448cd71a570f200a8bf285f45c4e09224313a833230ce",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/schemaLogFilter.js",
+      "bytes": 1149,
+      "sha256": "7df786e7c7bd56bb8b9741a8941018bb797b3abcba92e44866bf841b8593ac41",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/ser-utils.js",
+      "bytes": 366,
+      "sha256": "6ec809cd94327f9ec91cf4f218a6ee5c9c772b144abf639194cd65f1d88d36e2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/smithy-client/serde-json.js",
+      "bytes": 554,
+      "sha256": "ede3e463b39331074dc45df56f7919011f32a854f9f0947b700cfbc38b51d44c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/util-waiter/circularReplacer.js",
+      "bytes": 320,
+      "sha256": "13ed2d5469c606c833ece080863d2a9f375f352abc032f50aff276594cb0ca0c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/util-waiter/createWaiter.js",
+      "bytes": 1630,
+      "sha256": "6cfdf3489d0298542a51270112c495cc8e46c7baae9b8ca6b15b0ccd7a11b9f5",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/util-waiter/poller.js",
+      "bytes": 3814,
+      "sha256": "464bd1b698b7c3282f31a8f964420dae8f0128bba553cbdf41e09083e6d4fd10",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/util-waiter/utils/sleep.js",
+      "bytes": 113,
+      "sha256": "8c7e23c07ca30b54056ffc02b4a8838dbe19b665f7e09f9fc08bf4e3303ef08d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/util-waiter/utils/validate.js",
+      "bytes": 888,
+      "sha256": "badb1e1db39cc9278f6ccef0c2d74112c6c6d43ca86fad8a11fe48e823019d91",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/client/util-waiter/waiter.js",
+      "bytes": 1200,
+      "sha256": "08e5b5ced4dbe2cbd23a8e85fa5652ae6292b917232088b41ba41047f595271e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/config-resolver/endpointsConfig/NodeUseDualstackEndpointConfigOptions.js",
+      "bytes": 945,
+      "sha256": "4fc54c57b99d96d91fb1b1d868491b574ca71612af1607b14044e2a7176b5247",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/config-resolver/endpointsConfig/NodeUseFipsEndpointConfigOptions.js",
+      "bytes": 890,
+      "sha256": "ce4134a1975a92f62d8b8ca5d28b3ccb2f52dc8af381edbd9401763d548bcfdd",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/config-resolver/endpointsConfig/resolveCustomEndpointsConfig.js",
+      "bytes": 467,
+      "sha256": "2df7e3e7eba9a1c7e73fc05a49be9ad9d03c3321a554ec2d82f6aee510d44294",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/config-resolver/endpointsConfig/resolveEndpointsConfig.js",
+      "bytes": 690,
+      "sha256": "d79d165de55dd282d5f3c70b6e851af09d4756cb8c672e6a3d0b162555d7c8c2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/config-resolver/endpointsConfig/utils/getEndpointFromRegion.js",
+      "bytes": 749,
+      "sha256": "0ef95d32bb47fdee278fc1f5c51d453abe1f5e5959b6db82f6a6f3d191ada3e9",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionConfig/checkRegion.js",
+      "bytes": 643,
+      "sha256": "a250248cde8752c419c677c051bc195f40ea18302e22d9b71ce6c7e0b1a65353",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionConfig/config.js",
+      "bytes": 616,
+      "sha256": "2831f2b499d882b9da1905360170465d24b08468c5f892b15631c45240d8088b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionConfig/getInstanceMetadataRegion.js",
+      "bytes": 3089,
+      "sha256": "da6d439b0eb4d93a17f5919d6e9d349b3931b2ac9e913b13b7abe3e4f61ee9fa",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionConfig/getRealRegion.js",
+      "bytes": 257,
+      "sha256": "7d6d48b6b1639e28a0f001e5773ee2cea112deddef1fafa60e7c5fe8e004b9e1",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionConfig/isFipsRegion.js",
+      "bytes": 128,
+      "sha256": "5b3f819f6c1eb87ce48bacc576c65525599f7989384122ed03508464dd739b79",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionConfig/resolveRegionConfig.js",
+      "bytes": 959,
+      "sha256": "c29343b0e4d0e0796093ff484a6248cfc9831f2521b4decb884ed2712dd14768",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionInfo/getHostnameFromVariants.js",
+      "bytes": 238,
+      "sha256": "805d251961c6ec88fd519a4e28f05ed5407d259c3be6afc0dbb35e666e764cda",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionInfo/getRegionInfo.js",
+      "bytes": 1629,
+      "sha256": "5bb5e5cef153efb30e0cd51e19465c08ddb30cdcdda9f2618cfb08ec342f9c0e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionInfo/getResolvedHostname.js",
+      "bytes": 239,
+      "sha256": "c345afdf07a0192df80b7e3f7fc7ff8a4794a71ea6fbe1a6bcda67c94804c472",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionInfo/getResolvedPartition.js",
+      "bytes": 169,
+      "sha256": "014e979ae17ddec1b6778d18ddcf6ce6bea7c9d3f206ce9dd7859dfd432c1f89",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/config-resolver/regionInfo/getResolvedSigningRegion.js",
+      "bytes": 492,
+      "sha256": "151cc46bc7eddeabfe97ec9115694af73b0683b2fcef7e1c8620d049138ccf9e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/defaults-mode/constants.js",
+      "bytes": 594,
+      "sha256": "2f5c758f38748f7b16bc72396ea6881d09958e533bcc86dc2eb65a85c79b276a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/defaults-mode/defaultsModeConfig.js",
+      "bytes": 368,
+      "sha256": "26ad37473bcbf504376134624bfe8524c195783bac7b9bfe5e191a258af6acb4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/defaults-mode/resolveDefaultsModeConfig.js",
+      "bytes": 2094,
+      "sha256": "9be007b29bf82fc421dd3389c8d28881b606e69788e9d25642abc9e22c2e3d76",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/index.js",
+      "bytes": 2652,
+      "sha256": "b3508217d0cd3a81e49bb1f4aa568428e2f8b058e5c718ffef08a0b51f86d1dd",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/node-config-provider/configLoader.js",
+      "bytes": 644,
+      "sha256": "52d078dae8acaf82da89c16c94bb6b0a7f6e60ddac4662289e9154fe581a03fa",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/node-config-provider/fromEnv.js",
+      "bytes": 564,
+      "sha256": "5f3a6ce8d3c5188471dc7a6c0783f668f14f632b16a336c4c672c55267f4053b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/node-config-provider/fromSharedConfigFiles.js",
+      "bytes": 1329,
+      "sha256": "2a225eb2b92529c0ffa3773bfd5dcbf41d8320d855bccf286dd2755b7bb68482",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/node-config-provider/fromStatic.js",
+      "bytes": 248,
+      "sha256": "483b8df11c559ac98282a547a771a8e6693cfe3963126cc28191979f1c1021fa",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/node-config-provider/getSelectorName.js",
+      "bytes": 383,
+      "sha256": "fa8415cbce82ace8cb6becf56f6a30a5ae438054da339cd2712bcc53fba2548b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/property-provider/CredentialsProviderError.js",
+      "bytes": 307,
+      "sha256": "617f7019b3f2b886e2f7ce1268f29a1b4c5397504da2b60ecd2cb8ad2258dd34",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/property-provider/ProviderError.js",
+      "bytes": 820,
+      "sha256": "909894f441e3dab7af577c86c45a16bcd17746d6ebc0c3fe15dd6e1d96beef32",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/property-provider/TokenProviderError.js",
+      "bytes": 289,
+      "sha256": "7c67104c9fd4159e0184c6a7664b0212793dc1dc9dd789af81670fe7d3b5e619",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/property-provider/chain.js",
+      "bytes": 579,
+      "sha256": "5b15c72a0bc6fe43e789b53f4f932b99ff495f8b5ef7b8b0861e1adb4434839a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/property-provider/fromValue.js",
+      "bytes": 78,
+      "sha256": "e5235e65c784464057858c1178a89960e36348a53f36a05698817fc799bd6ea1",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/property-provider/memoize.js",
+      "bytes": 1201,
+      "sha256": "31b31dcd1eb235d912cc5eefb36fc57305e55ea9975ff3f6c5ab0e3c2e8d349e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/constants.js",
+      "bytes": 44,
+      "sha256": "1e369aefe122f677b41844b862357bfeac3e723d892b6d1182350f21ffcc0c39",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/externalDataInterceptor.js",
+      "bytes": 445,
+      "sha256": "10746ed7025371a831cc95b1a022c49615d11e8b766584c3087faa9a3bdac6fe",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/getConfigData.js",
+      "bytes": 748,
+      "sha256": "35894afdd799e077acdee8c9e47b9f98169906be68361b01689ffffc76f19590",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/getConfigFilepath.js",
+      "bytes": 236,
+      "sha256": "97b4a9cc73f8bbed9c990c0960f70e30807a7f641f3215a92954c9981dac0ba7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/getCredentialsFilepath.js",
+      "bytes": 268,
+      "sha256": "eaa8f74562459dcb899e1ee85c3fdbff70a9df7074b42ef711d9f176cc28797e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/getHomeDir.js",
+      "bytes": 681,
+      "sha256": "1f07188d27fbdfa5c11d78950489a9c711a4f7aee0dbc96a2c4d89c2130851cd",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/getProfileName.js",
+      "bytes": 185,
+      "sha256": "8b6c9314a92f1cc72bbaa45caf0115497ae478f272d32e7b992d557919fdc449",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/getSSOTokenFilepath.js",
+      "bytes": 337,
+      "sha256": "6edf2b6103a6886cfb1da04c1a79efe90b08d534215a0c2c11cb1bba03f4f893",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/getSSOTokenFromFile.js",
+      "bytes": 423,
+      "sha256": "79c0274a2f7e6347bd5e254d485f915e34e76a38069cbcd5e536ff655e9c9a77",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/getSsoSessionData.js",
+      "bytes": 392,
+      "sha256": "265fd92734989ce2d561c4cb9e6d570eef33341d205fb0dbe577bc559a557753",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/loadSharedConfigFiles.js",
+      "bytes": 1489,
+      "sha256": "6254ceb3bfa2d608c8b279c0171e80bc10025994dfad05dc978e597aa3471876",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/loadSsoSessionData.js",
+      "bytes": 408,
+      "sha256": "0b1cb1f9b076c1006b4078d94036a1cf24942824867bb71fcad6217bdc9e1a4e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/mergeConfigFiles.js",
+      "bytes": 383,
+      "sha256": "2f9b10869902338fe3af11a714b5a5de9cff93493cedf23669e9db4a2d6c452a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/parseIni.js",
+      "bytes": 2262,
+      "sha256": "86c7fdb64c2c62078391c000676131e6e5a163dbad1dfbe93d71991ec657b7f1",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/parseKnownFiles.js",
+      "bytes": 313,
+      "sha256": "e6821544bc28886241deca133e8c9c799a8587dbff586ef23bf107c88a8f6900",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/shared-ini-file-loader/readFile.js",
+      "bytes": 406,
+      "sha256": "eee0d043d18804efe2e066dab0f51f7c631eb84490840ea8cab9d4cce0993482",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/util-config-provider/booleanSelector.js",
+      "bytes": 306,
+      "sha256": "051dd6f06872d6fe04427157824f7dae0499ec7a31790c64cf3a7e17effd5f25",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/util-config-provider/numberSelector.js",
+      "bytes": 317,
+      "sha256": "2e51669cd9049dc820a915d7a1eda7de30301ad41e5693ac22ea66253dd764ba",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/config/util-config-provider/types.js",
+      "bytes": 178,
+      "sha256": "296552af7079d0f6022148f7d6d44e611170ab0626ac71a3fee5e329083ef2e6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/index.js",
+      "bytes": 1804,
+      "sha256": "fbebe46ce4d4210e86b62c8461ecb434d347faf8f62a3f974090260365adb47d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/middleware-endpoint/adaptors/createConfigValueProvider.js",
+      "bytes": 2199,
+      "sha256": "33b30756ca8300b37e5365e41e0b6f5fcf7b43d52fcf98df76a5a36d052fde9d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/middleware-endpoint/adaptors/getEndpointFromConfig.js",
+      "bytes": 471,
+      "sha256": "32fbb2eefc219a4d0b24d0e7cc0cb7c72a3390fa88a8c58716d0eef5c8471161",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/middleware-endpoint/adaptors/getEndpointFromInstructions.js",
+      "bytes": 3238,
+      "sha256": "e081e7c361d398bb9868bf3e35cb56f244a8255e436169d436b91932c0117738",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/middleware-endpoint/adaptors/getEndpointUrlConfig.js",
+      "bytes": 1595,
+      "sha256": "f90b13b6c30d211f7b46d095e3bc800eaa3f86ba6a1f5feaa08fbe2cd2f383da",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/middleware-endpoint/adaptors/getIgnoreConfiguredEndpointUrls.js",
+      "bytes": 575,
+      "sha256": "175bbb2e3d22f5a299af0389a112c8ad39e3f00e98809767c225d35848c9c168",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/middleware-endpoint/adaptors/toEndpointV1.js",
+      "bytes": 55,
+      "sha256": "6ff032d516e82cdc104ede5ca8dff25dc6eb34064f8c6a82cfdcd674b8c46244",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/middleware-endpoint/endpointMiddleware.js",
+      "bytes": 2200,
+      "sha256": "e0d03d523e8b7f848b29fb19b1f43f2b9940cf5ab7184f0709d3fb61381819b0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/middleware-endpoint/getEndpointPlugin.js",
+      "bytes": 866,
+      "sha256": "fc8b400bc842e13c01382cae0c618b23144322a0813da9bfa1aa5f3bd940d207",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/middleware-endpoint/resolveEndpointConfig.js",
+      "bytes": 1272,
+      "sha256": "85bc51e0a2e0cdbd80e222c4f9f8b3271d1d04dad1d1ab100457802c798fff18",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/middleware-endpoint/resolveEndpointRequiredConfig.js",
+      "bytes": 342,
+      "sha256": "71aeb01ce4a273c37112cbab124972642c4e965f68c4517eebc9695a5fae1ee5",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/middleware-endpoint/service-customizations/index.js",
+      "bytes": 121,
+      "sha256": "31d56b8e7f69c0656cd411edea5ff9e0b1cba44f1321065a7d51629ea2cb2bc6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/middleware-endpoint/service-customizations/s3.js",
+      "bytes": 1773,
+      "sha256": "e2df99b94810a69b4d4385d4aaceda3d954ed662c48d66adfafa8296906d5f23",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/bdd/BinaryDecisionDiagram.js",
+      "bytes": 397,
+      "sha256": "6d10977ca06107dd40b14373c7a01045e95e0837fdfb4a14e0b9c3e45ac911f0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/cache/EndpointCache.js",
+      "bytes": 1382,
+      "sha256": "1edb810ed94e838b00cf03f8f0b2ecb5ae22fdd13bf9f3c8bd63c2686ffb7c29",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/debug/debugId.js",
+      "bytes": 36,
+      "sha256": "91402717ff1ecd523c4c52f8db79cea081aea59c3f1b4fa47b220dec5ad4ee69",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/debug/index.js",
+      "bytes": 86,
+      "sha256": "42d84feb8881334aca85051be702b70c7fe395530172850e71620d6729fda20f",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/debug/toDebugString.js",
+      "bytes": 359,
+      "sha256": "7ec02a90dd705ebf40f8cc231c56340fe975e1073990815a4c41effa31dc547e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/decideEndpoint.js",
+      "bytes": 1812,
+      "sha256": "9807567aa824091ce51e9f708123211fae0563e8e46224976fc7d9156cac16ef",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/lib/booleanEquals.js",
+      "bytes": 68,
+      "sha256": "a906a623414e9bb1a4c3dfc46b81d370601244e95f96643c40c0684c5c165333",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/lib/coalesce.js",
+      "bytes": 157,
+      "sha256": "2ea566ff4b9fdff84233a6240c729feac33178951ca0df7791523e16952735dd",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/lib/getAttr.js",
+      "bytes": 487,
+      "sha256": "463b732f796e58a6e3bde6f7b9ff4e7a6b55c7868204dff0be0055f286cf169a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/lib/getAttrPathList.js",
+      "bytes": 925,
+      "sha256": "10180876d59c78ba79072aa2202f4b66e428806212174f84f298cf9f0c020bc4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/lib/index.js",
+      "bytes": 476,
+      "sha256": "0ab5d82b0af61bba204ef66e5ae9aa2f90f88823a7f10a37947c3ea5713bc386",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/lib/isIpAddress.js",
+      "bytes": 245,
+      "sha256": "77b27456c55f875f4d781e67eb355c374cabd4b8733c01302091b04212e51638",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/lib/isSet.js",
+      "bytes": 47,
+      "sha256": "82f85e9144c60a90765b533c65aba7fc7d671b4d8b4d9853b30ddb62de402dab",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/lib/ite.js",
+      "bytes": 105,
+      "sha256": "58229a479bc1a6e5524cd690f08ccf41edaa90a0ab91c6c5a1977ec66249a33a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/lib/not.js",
+      "bytes": 38,
+      "sha256": "373a690186a90c7392dd3d7fe4264dd8481de64b713ec8b31b7d9f2a4aeb0b3c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/lib/parseURL.js",
+      "bytes": 1813,
+      "sha256": "e73b2c2a362fd8a8b339bd7de3151f248b2ad3d585cf9cdb2290af61e4cc338d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/lib/split.js",
+      "bytes": 325,
+      "sha256": "559eeb75771dcbc22e91579253045fccaa5c16dfcbe478a9d4d64a26008054e8",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/lib/stringEquals.js",
+      "bytes": 67,
+      "sha256": "c8db5a7db869d94581cc01b85a681e3d281f44c5512bbfc055b37ceb26d2165f",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/lib/substring.js",
+      "bytes": 331,
+      "sha256": "bc3c2f1cf638fa8bdc9f13e1807272a0127c8c5c77fa842469f3d2c91bada89d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/lib/uriEncode.js",
+      "bytes": 140,
+      "sha256": "026c4d54831fd8d5b92896c0fc77fae09ccd5730e595c077e3ebbd7656e1f9b1",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/resolveEndpoint.js",
+      "bytes": 1167,
+      "sha256": "5249fb2ea12393db89d71d8031ccefc8dac85e5b7c923ef628e58cee181ebfdd",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/types/EndpointError.js",
+      "bytes": 139,
+      "sha256": "8dc2506c3c710f4b377ac589439e7897e5f0d06f1e344dcc84cf4a272dff6f91",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/types/index.js",
+      "bytes": 49,
+      "sha256": "47f003b1272bc007a890f038ab7a74599476d89f127b9644c26d120345b2c521",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/utils/callFunction.js",
+      "bytes": 53,
+      "sha256": "c42317a90a033e8332c3f0521fe49f8f959f6b9acff992b5add7c765d33760e0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/utils/customEndpointFunctions.js",
+      "bytes": 43,
+      "sha256": "c9a84552df215bd2e54cad9b3e3b2f43c3141080e41e982dbb6a24f3ac4451d2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/utils/endpointFunctions.js",
+      "bytes": 356,
+      "sha256": "cf85a584aba82b49e1f588b74b7cd29a41a9d4aa68e39eb0008320de43fe7e70",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/utils/evaluateCondition.js",
+      "bytes": 720,
+      "sha256": "e0b0ea0796fac4ddb4a8ae2713fde1625ab353199f537db6fbd3087640da2757",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/utils/evaluateConditions.js",
+      "bytes": 1016,
+      "sha256": "d62784ee2e58641148d4f0dc91e0fefdbe4849caf8d064b5f4d20382c2b61a0e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/utils/evaluateEndpointRule.js",
+      "bytes": 1232,
+      "sha256": "331759ba283ad936cafec284af0f840303156ae8027474f9fa8ae8a5539309cd",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/utils/evaluateErrorRule.js",
+      "bytes": 663,
+      "sha256": "681bbb53d87b85980b2bacdaa5edd5b08eab468f9f135073ac858b299e3d6b4b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/utils/evaluateExpression.js",
+      "bytes": 1789,
+      "sha256": "299dd7840e06c2364ac1d325744b323a8da66e964f39c0e3c28591640223319b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/utils/evaluateRules.js",
+      "bytes": 1520,
+      "sha256": "af2f22d51f2b7d96dd22568f4df59c33c153744c67adebc63198a8f99d678d8c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/utils/evaluateTemplate.js",
+      "bytes": 1575,
+      "sha256": "4ca9f35f664b96ea1cf0a540205a147c72f66ab3737ea06aa564c5af3a41b1a4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/utils/getEndpointHeaders.js",
+      "bytes": 607,
+      "sha256": "9f181a24e39be340f9eaf1b5fa6b5f810ea15c9bbd704a9aba4ef798fabee2c3",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/utils/getEndpointProperties.js",
+      "bytes": 1110,
+      "sha256": "ad878ed5a3cf8b11d5bde3723afcb4151a85d93ce1478c1b753cd90a98fdc708",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/utils/getEndpointUrl.js",
+      "bytes": 582,
+      "sha256": "6027de93aa081b4adefc11e049e37c3748c78727f1604fafa82319e4f783e5ca",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/utils/getReferenceValue.js",
+      "bytes": 132,
+      "sha256": "2c905d0e5f71e5cf1250cd113ab15d0aa3dbadc96fee109f9d0c8527d5cb7e0b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/endpoints/util-endpoints/utils/index.js",
+      "bytes": 143,
+      "sha256": "caa2c9b94957382f91ddeafed896aed1355b768f689aee60734a21e438cca598",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/event-streams/EventStreamSerde.js",
+      "bytes": 12815,
+      "sha256": "afae7e2af7ea04955758b20426680a9e94c84acfc05292f8e23f31de0768e347",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/event-streams/eventstream-codec/EventStreamCodec.js",
+      "bytes": 2239,
+      "sha256": "fed30373aed345c27ac6069bb94211c65ffdba262d0b16c37cf8778faf80da18",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/event-streams/eventstream-codec/HeaderMarshaller.js",
+      "bytes": 7961,
+      "sha256": "e6fa1f2c18035d155675022a8253ed8c2828f2ae57768ecb3f2589bb98729647",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/event-streams/eventstream-codec/Int64.js",
+      "bytes": 1300,
+      "sha256": "c1ab822008abda7210f72d1823101dcf3021d08c902724831c1dbf3de7504ed6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/event-streams/eventstream-codec/MessageDecoderStream.js",
+      "bytes": 388,
+      "sha256": "0e8134433846f2ed5d201d846d7bf55005a8193ba184e7877adbf1ce53ead32e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/event-streams/eventstream-codec/MessageEncoderStream.js",
+      "bytes": 477,
+      "sha256": "d07d64d4ed3775a68d2c83ba29d0938ff4a4fbda3713e52c18d4cd69a639871a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/event-streams/eventstream-codec/SmithyMessageDecoderStream.js",
+      "bytes": 484,
+      "sha256": "369cf9ac6b781763701a91ec9260596cff80088ccba5424533714377873cf2ad",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/event-streams/eventstream-codec/SmithyMessageEncoderStream.js",
+      "bytes": 396,
+      "sha256": "2266dd0cca18961267c14c6328bffbd06b17d1d085a1a96469761ae3ed543b55",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/event-streams/eventstream-codec/splitMessage.js",
+      "bytes": 1939,
+      "sha256": "07313a84ae7ad47839a15fb36c273991e64f6defc31e9dd38a0425e0229b1b00",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/event-streams/eventstream-serde-config-resolver/EventStreamSerdeConfig.js",
+      "bytes": 149,
+      "sha256": "ff078459f501c1643b21dba4c89f882b8ed33f6228b85880ea3ef5e34491611a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/event-streams/eventstream-serde-universal/EventStreamMarshaller.js",
+      "bytes": 1493,
+      "sha256": "9114feba717b19135065ebf8ef547aed1e25459fe88813e5e7e5bc99e7cf8efd",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/event-streams/eventstream-serde-universal/getChunkedStream.js",
+      "bytes": 3069,
+      "sha256": "8312b00c50882caf7fe78e60c49b331db4e34e40ad44ee6bfe198e8540be3d62",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/event-streams/eventstream-serde-universal/getUnmarshalledStream.js",
+      "bytes": 1902,
+      "sha256": "e39853ccdf4a165b06cdf22328c076c8d72a04c4690be8740d1bc34037dc64a7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/event-streams/eventstream-serde/EventStreamMarshaller.js",
+      "bytes": 1594,
+      "sha256": "8da87da66d54240cd967d62de84fbd1cffaae534bd822f0e66f91b5f23db0e14",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/event-streams/eventstream-serde/utils.js",
+      "bytes": 832,
+      "sha256": "eab63cbeab5ae8a5cce0dd82470a92d33bb00d15efb482110c3d07d126520b83",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/event-streams/index.js",
+      "bytes": 1304,
+      "sha256": "261c2b96dec39e36f39a15e0ba77b854bece91ded16073c53f8a242998c3821c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/HttpBindingProtocol.js",
+      "bytes": 13200,
+      "sha256": "00b9a76afb7bbb905dbd629889c8ee69a0ed82bb1372a43410de4bd81695cfb8",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/HttpProtocol.js",
+      "bytes": 6463,
+      "sha256": "1a2d849dab1713bb7cb96912cfb16d4ad17d4e915397c9efcddd810c899bfabb",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/RpcProtocol.js",
+      "bytes": 3877,
+      "sha256": "8024f3931a1ae54d621604e1e13eccf85375304d4336477a844efd9aa66b490e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/SerdeContext.js",
+      "bytes": 132,
+      "sha256": "248b7a1278d4773815beb22fbd76bea8c83af6a9089380e46008f09b84888be7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/collect-stream-body.js",
+      "bytes": 462,
+      "sha256": "86b348bba3213d8987189e06de2a327f76ab3e9d5f0c62a201b6955d556ef4b0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/extended-encode-uri-component.js",
+      "bytes": 195,
+      "sha256": "460c66165d39fb54624c263e9fa0630af5fc3aa8065d52a4d2baa0e0466f00ee",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/index.js",
+      "bytes": 1735,
+      "sha256": "5026fd8c31d56dfa7f662e9e7e158058aba49373d49ec8cf943269cc0ffd5229",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/middleware-content-length/contentLengthMiddleware.js",
+      "bytes": 1413,
+      "sha256": "f9db2511b02d1bc9575c5c512e6ee60b31cb32e0bff9c5bc7f263146f517c029",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/protocol-http/Field.js",
+      "bytes": 630,
+      "sha256": "9e9196026f191dc584e72de877ce04d8409c09956ee9da6c055ddb1fd591a2e7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/protocol-http/Fields.js",
+      "bytes": 551,
+      "sha256": "c2a0fc054ef0079dbea900f2aff8eac2cb66b8d1f4464ebed490cb3c7e7aabbe",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/protocol-http/extensions/httpExtensionConfiguration.js",
+      "bytes": 912,
+      "sha256": "4ebe738c86bbaee6481699ffa2135d3a1dee4213a0dd0236312f420413b2fb3a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/querystring-builder/buildQueryString.js",
+      "bytes": 667,
+      "sha256": "e4633f6822bd5df78778336a47c77bfbe6c50e66f0a172dbaff08365a60689fa",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/requestBuilder.js",
+      "bytes": 1883,
+      "sha256": "2243528c9e772c6872a67352bc4a1a231981f56d8e52ad236bde9f48c5d4c802",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/resolve-path.js",
+      "bytes": 877,
+      "sha256": "01b5ecb8f62d558fa77d96f5f47d7fb071134e00f4935fd3a745d685d69f59e1",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/serde/FromStringShapeDeserializer.js",
+      "bytes": 2601,
+      "sha256": "3458f7f823256790515dc0f62b5462e5dc72199bbe2e9aab576bbde87809922d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/serde/HttpInterceptingShapeDeserializer.js",
+      "bytes": 1657,
+      "sha256": "00109ae11a410d438ff839090c84d1f6450bf81720bbbb4169fce62c9a94f40e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/serde/HttpInterceptingShapeSerializer.js",
+      "bytes": 1221,
+      "sha256": "39d8b228ae9ef358028e44af1d8d4cf07c29b20be594ffe46339ebb0f416fe86",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/serde/ToStringShapeSerializer.js",
+      "bytes": 3963,
+      "sha256": "3f2e098fcf70c963c8579269a7c47ace9cc5f12956316f9e7eba995a999aa9b8",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/serde/determineTimestampFormat.js",
+      "bytes": 722,
+      "sha256": "bb2b7625e69a7708ddc819942fc63929c16f640614b59da52367520397efbdaa",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/util-uri-escape/escape-uri-path.js",
+      "bytes": 121,
+      "sha256": "8d9c92abebc1c0bbab87bd8802e1dd791b36b51d0d87cc7be7a9caaf0bbecbbd",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/protocols/util-uri-escape/escape-uri.js",
+      "bytes": 165,
+      "sha256": "bdda98d0c1c01070575d5f48f8f52c67df770bd19196abc59e069dfa1756b414",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/index.js",
+      "bytes": 2262,
+      "sha256": "677e2afbdf1fd77df08eff76bcf7f8ff2b8e73e698a022765dec7a209bb6db9e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/middleware-retry/configurations.js",
+      "bytes": 2669,
+      "sha256": "82a221fd1dad6ac0f02472d5a1274f32ab81d76b2d8c886d18c48e3b4f6f82b6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/middleware-retry/isStreamingPayload/isStreamingPayload.js",
+      "bytes": 212,
+      "sha256": "1f2d9e568bb9f70b4ab16dbc2323a77fb4047e2c01062d1a924c8716cacf5602",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/middleware-retry/omitRetryHeadersMiddleware.js",
+      "bytes": 853,
+      "sha256": "31f309522911edf36c7670462a8e5779a471bc61d31fdedeec3ae489f58a51ca",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/middleware-retry/parseRetryAfterHeader.js",
+      "bytes": 2097,
+      "sha256": "7ecdc926ba631f43ceb5357e7f2e8faf7c7b10be259d344a2b05aff48a5bf3f2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/middleware-retry/retry-pre-sra-deprecated/AdaptiveRetryStrategy.js",
+      "bytes": 884,
+      "sha256": "ebf73c1b6416f4063d792950f52f4f2b8ea4576faeea37a1684f953c1afe08ec",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/middleware-retry/retry-pre-sra-deprecated/StandardRetryStrategy.js",
+      "bytes": 4277,
+      "sha256": "91c6c9f4dd1c82ee762d6520e4c2a3e3248a2b2c0a85d82348f2647bc2033c3d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/middleware-retry/retry-pre-sra-deprecated/defaultRetryQuota.js",
+      "bytes": 1282,
+      "sha256": "0bdbc160d1a0afa297d1bf7b4127b07711dabfe835ba9b824f3b5186c7e577e4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/middleware-retry/retry-pre-sra-deprecated/delayDecider.js",
+      "bytes": 212,
+      "sha256": "030b21ce6f986b6a153d0fc3308ec8cc201c19fea9b9f0ccb9565dbcd871b2df",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/middleware-retry/retry-pre-sra-deprecated/retryDecider.js",
+      "bytes": 375,
+      "sha256": "3a068983601f973486e3790b219abeb192e94c269c8a464afe838ac126baa62b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/middleware-retry/retryMiddleware.js",
+      "bytes": 4798,
+      "sha256": "8222c7835e9ad063cdcb3321abcc7e0760319e21651176933111c061a9811c24",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/middleware-retry/util.js",
+      "bytes": 307,
+      "sha256": "c5f4e3403296206c2d6445445733e228cf07cbeffd9fd1823cf19b7e00619982",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/service-error-classification/constants.js",
+      "bytes": 1043,
+      "sha256": "f9ad73eae8479da6a54c2593df61db21c376d21bcc94acb27b6f4752d81bee36",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/service-error-classification/service-error-classification.js",
+      "bytes": 2276,
+      "sha256": "27a651a3e8ad67e15951d6b8bde08d4350bc09c7b087fadd63fedc02a7147efc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/util-retry/AdaptiveRetryStrategy.js",
+      "bytes": 1511,
+      "sha256": "826965148cb6b0f7aae779bcc88909a275b3551f139da9d848b8558cd4463c8e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/util-retry/ConfiguredRetryStrategy.js",
+      "bytes": 827,
+      "sha256": "c073ca5b34e8c3f4a000c9504191ca528d1975cb8e2a1dfa3ffee03f0023d3c7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/util-retry/DefaultRateLimiter.js",
+      "bytes": 4346,
+      "sha256": "32b28572e13668dba2520b02298ae894bc922a5523690f6ffb052fd1273c879b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/util-retry/DefaultRetryBackoffStrategy.js",
+      "bytes": 419,
+      "sha256": "3764e919ef6daeba0a8531bac3f6935dfd5e9067fecd14dea17d4d8798b90fe0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/util-retry/DefaultRetryToken.js",
+      "bytes": 605,
+      "sha256": "d38ebea2d523743cf12ca49ba057bfe390c065c3020c52a8be50e0c64e87ac24",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/util-retry/StandardRetryStrategy.js",
+      "bytes": 4412,
+      "sha256": "e8271020a1032df507937cd713e545e6e87c181a5243fbe4a92a54714d96d288",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/util-retry/config.js",
+      "bytes": 268,
+      "sha256": "f212efaead76bb289cbe9d1f7da1298544a218fe308658d9c412e2a7c32d12b8",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/util-retry/constants.js",
+      "bytes": 394,
+      "sha256": "58746cf7cd7304538717d49d624e8d38ee9c72d9ae78cebf82b2fccea0289349",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/retry/util-retry/retries-2026-config.js",
+      "bytes": 501,
+      "sha256": "beb225bddd3c9664d922c242cb2bba2d71ecd15a2d7c6ea1a6d5a4a71c62693b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/schema/TypeRegistry.js",
+      "bytes": 3249,
+      "sha256": "b6139dd8f7e67505fa786cd45f68d615f62120bce4b194baaf02c47e4efea359",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/schema/deref.js",
+      "bytes": 140,
+      "sha256": "6e996e1191654f49b5d89252f79f24b02b6d818a378048a0a834e4f7b86fe472",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/schema/index.js",
+      "bytes": 921,
+      "sha256": "f2d5fcaf1bc1f50df8a9605413065cbd815505004026f1a15e733949dac4c76a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/schema/middleware/getSchemaSerdePlugin.js",
+      "bytes": 847,
+      "sha256": "7bfb8ef14d9ce3548f9e75879c8c9cd885d113019a9f46658febc025e7f607ca",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/schema/middleware/schemaDeserializationMiddleware.js",
+      "bytes": 2424,
+      "sha256": "b50e0a8f2109ee0c447ecbd22b76fe3899867d65b59d8f78cb6207cf9924f1fb",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/schema/middleware/schemaSerializationMiddleware.js",
+      "bytes": 680,
+      "sha256": "5c0658ed35f087d691a1beec1b87cc79c21a1a0aa40ccb21f4496c8e3f4a2e73",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/schema/schemas/ErrorSchema.js",
+      "bytes": 438,
+      "sha256": "12f764aaa426461bd9382fff1e6cae4405fcab8632288b2c12966685db2ab602",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/schema/schemas/ListSchema.js",
+      "bytes": 328,
+      "sha256": "d099ffe5918e7ac35be834dc09f8fa512f43ff65b83c97d40608933091b42fbc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/schema/schemas/MapSchema.js",
+      "bytes": 365,
+      "sha256": "32f9ebd34f361e4444f3d7545323eb48864ca5a41c793cc508a1df19537e1531",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/schema/schemas/NormalizedSchema.js",
+      "bytes": 9738,
+      "sha256": "7891746d10a9e4ebed9709f293ecd5ce90e582c65ae3b11d9652e9222d33ef56",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/schema/schemas/OperationSchema.js",
+      "bytes": 355,
+      "sha256": "6cb52bef9bafc06108009b770659b8ba5bf5c36dbaaedd039147e439e8ea1982",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/schema/schemas/Schema.js",
+      "bytes": 550,
+      "sha256": "1a044589c68c3e7ce3b0b99ce15490da4edb8b16f7f47a49097ee3e9cd6e0abc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/schema/schemas/SimpleSchema.js",
+      "bytes": 485,
+      "sha256": "1221a744466f1629b3c0c902fa8fe7033f592c04e4a736500e7cdbe7a2a1956b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/schema/schemas/StructureSchema.js",
+      "bytes": 389,
+      "sha256": "97e0b991310692d63b0b9034e438204055b53976d0716e085b5228371111f429",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/schema/schemas/operation.js",
+      "bytes": 136,
+      "sha256": "a5da0d7d106ec949520cb93bc0b6df9514570a5482ccb5e95cb448a5cb6e91af",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/schema/schemas/sentinels.js",
+      "bytes": 464,
+      "sha256": "51b8b5a0bd66acb7c5b69a045c52beb6b50fc9feb338af200cd02f1987137a13",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/schema/schemas/translateTraits.js",
+      "bytes": 643,
+      "sha256": "226f58eeaeb4b07149cebaa1a592b05df4027a2ce658d5cd292341c2ed32600e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/concatBytes.js",
+      "bytes": 381,
+      "sha256": "338796b588e3ce435babf0b4c7e49bc55e0f9fdaba64399b3754623e68d6cd47",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/copyDocumentWithTransform.js",
+      "bytes": 96,
+      "sha256": "56b2796ece7820ee33f2a2686d4bced5bd42bbd0ce84718940dd852c8201f2df",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/date-utils.js",
+      "bytes": 8773,
+      "sha256": "9b64f13c90463b44c0183721802eb8e482f3207d12b4f397c92a9da9ed688590",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/hash-node/hash-node.js",
+      "bytes": 1153,
+      "sha256": "712bd7948bf56ce583056971ab5c13dea53c45e3d3234279c5a69261c05bb0e0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/index.js",
+      "bytes": 3116,
+      "sha256": "d5aa832be47d888b3b6c7a43061ea9b682bcfe25043e43aa2aa0f68996587a86",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/is-array-buffer/is-array-buffer.js",
+      "bytes": 175,
+      "sha256": "1cadc42bc291fb5519761d6d6f99634a0d032fc9190f9754ae995cd656f451e7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/lazy-json.js",
+      "bytes": 781,
+      "sha256": "119ec70e7dd90c1333b1207531c9de0f9dbad2a120952e82396bdb17cb12b37c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/middleware-serde/deserializerMiddleware.js",
+      "bytes": 2145,
+      "sha256": "d6c82fb90844b2da1d4dbbd208a09ef69060451b247bfec1eb96bf8601baaceb",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/middleware-serde/serdePlugin.js",
+      "bytes": 786,
+      "sha256": "b79f14ac37db103b275069292e560a6ed7eec5c1b3f93cdd31baeb9aedf62a1a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/middleware-serde/serializerMiddleware.js",
+      "bytes": 551,
+      "sha256": "3810f2e52ce70a1ed5103803ba19e500bafee39be653f8f6c1a2be5418c7d596",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/parse-utils.js",
+      "bytes": 7538,
+      "sha256": "79e7add3b12e9e81a6fdb260aa6953f593a0772b10cfa45596352b2fd6e53377",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/quote-header.js",
+      "bytes": 162,
+      "sha256": "49e123d0f32ab258059e0cd8ffc23c1da9faa748196ed6199e2eb7c1fc4261c5",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/schema-serde-lib/schema-date-utils.js",
+      "bytes": 4030,
+      "sha256": "3321f9ebd0a4057879a521e476599eeeccd14643d990d3420f0833552fca0729",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/split-every.js",
+      "bytes": 879,
+      "sha256": "d9b896d5a1e9663e1cf71507bf13805eafb5dfc4c7cfe5aa045a20d35b892db9",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/split-header.js",
+      "bytes": 984,
+      "sha256": "e0d7edca88c23867580c26cf658822b4c40b420c51e2cf6eaf7daf8fcab36b45",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-base64/constants-for-browser.js",
+      "bytes": 362,
+      "sha256": "0a4acf4aca0c828ed642ac3779b3995feddc51ba053bd1e59e1614ff0fc45557",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-base64/fromBase64.js",
+      "bytes": 491,
+      "sha256": "40969ef2ac8d1ee68269739beb545cbf7da6170ef7f745b5be26c30fea5dfeb2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-base64/toBase64.browser.js",
+      "bytes": 1449,
+      "sha256": "dc03858a24907d2d87d4ce61f3776063371b5134ff12347bffb88031021540f7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-base64/toBase64.js",
+      "bytes": 621,
+      "sha256": "57813a013bf8e078782e0ef845f81075216db0b2ba57b198d9341ea8e73e13e5",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-body-length/calculateBodyLength.js",
+      "bytes": 835,
+      "sha256": "ee0d32ae531f45709deae546a32924cda94c1303bf5f382c1f6f5144b6d56487",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-buffer-from/buffer-from.js",
+      "bytes": 650,
+      "sha256": "67233738743fe391f82356fd8f5bd398eb9833ddae652188326c8fd08d3fdeb3",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-hex-encoding/hex-encoding.js",
+      "bytes": 1028,
+      "sha256": "d33fc907a8b44a218b29f1f50a718e231301fdf0b89167118ab4845fcc21205b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/ByteArrayCollector.js",
+      "bytes": 891,
+      "sha256": "32ef73a55e5ecb81e2ab190b0621a8754ee26f0e957dc7986f93a18b819004a5",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/blob/Uint8ArrayBlobAdapter.js",
+      "bytes": 923,
+      "sha256": "4cfbdc372b08a9b962f3617a3974d5e40128e7a84f00d765d1783ca241a41a9b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/checksum/ChecksumStream.browser.js",
+      "bytes": 157,
+      "sha256": "403e9ee7106656364584cc5d52fa2a7655a992814fdedad5873812fa508ee7f6",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/checksum/ChecksumStream.js",
+      "bytes": 2663,
+      "sha256": "061046fdcfa9e7ec547995a5fd6a24f6174aff1f387840194d3d4d950833bef0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/checksum/createChecksumStream.browser.js",
+      "bytes": 1601,
+      "sha256": "8ddcd61ae097d562b267a16c1c483553c4e76b6bf196b416092529334335c7fa",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/checksum/createChecksumStream.js",
+      "bytes": 424,
+      "sha256": "739bb0503f993001b7e20b3512d8f4c172ce18630ba943248c0b9bc5b89a5e76",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/createBufferedReadable.browser.js",
+      "bytes": 3093,
+      "sha256": "7a706b053e5b1be080039f18b2c26ac808eb4fb2ae6008867da6bdb0f05c1fd2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/createBufferedReadable.js",
+      "bytes": 2098,
+      "sha256": "007edcc7d793d91a633d0d1cb3c34be27346e1a9348278b6afb3eddcd38d585e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/getAwsChunkedEncodingStream.browser.js",
+      "bytes": 1271,
+      "sha256": "b2668e7976ee474f93d532aeac45408356a29a6fdca1208e196add42af584b69",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/getAwsChunkedEncodingStream.js",
+      "bytes": 2063,
+      "sha256": "5d48b096d8dbdab3278d0af894eacd429636f69ca43bc8f676f6a941994177bd",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/headStream.browser.js",
+      "bytes": 923,
+      "sha256": "a6862a058a983cf9dd465fc364840e076ba23a002b918aab73572b2293e0444e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/headStream.js",
+      "bytes": 1372,
+      "sha256": "654be80964a63ca8244070f12bb88f3b3a33ee9e9d98b09ed83132319e82b45d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/sdk-stream-mixin.browser.js",
+      "bytes": 2768,
+      "sha256": "b5913e68a53d5f89b873ae526658605a300d754ca6c4f1a0d92f89328066cf4d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/sdk-stream-mixin.js",
+      "bytes": 2079,
+      "sha256": "c409e3da2f1bbed47c342a24fc8e69f75c73546fd579840374ab776d0343ca95",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/splitStream.browser.js",
+      "bytes": 201,
+      "sha256": "c39ea9db5940a630696f4bc1582932c6c207bb8de88b15cf81a6cc6b2d81f916",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/splitStream.js",
+      "bytes": 484,
+      "sha256": "cf287217fef75672e162f0e5526b1a88a037bf3a8423866ae59194f54062c96e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/stream-collector.browser.js",
+      "bytes": 768,
+      "sha256": "d60530c8987df15c658828abbc7e1e276b672203a873fbca1c14468ebd7e3028",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/stream-collector.js",
+      "bytes": 1061,
+      "sha256": "021f010619155906c5ec9767df3adeb431497e26bd7ce12731e28560dd655c36",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-stream/stream-type-check.js",
+      "bytes": 320,
+      "sha256": "23dd8d4e6bf7ab9f5119bbe1b6ec09d10a2465bedb99010af620d6e9b91a6f1d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-utf8/fromUtf8.browser.js",
+      "bytes": 68,
+      "sha256": "a9af222fae9485d50eb9f31c8fff29934f915f009dd9ee6366f91b3c667025cc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-utf8/fromUtf8.js",
+      "bytes": 247,
+      "sha256": "f148ed9ef862006e884891fbc8997f3785fc04d38659c722b0d15e35de74b3ef",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-utf8/toUint8Array.js",
+      "bytes": 404,
+      "sha256": "01211d5f05220154b9b28ac732186c9450e996d60d4bd007569bbe4d2f401297",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-utf8/toUtf8.browser.js",
+      "bytes": 382,
+      "sha256": "2ba2be84d25b802ae9e0a41cfe62662ba3e60847c8d3d7ab68e096e3d5671535",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/util-utf8/toUtf8.js",
+      "bytes": 493,
+      "sha256": "82e14f8b0be03a3b7154116e1ab0a48f279c54313af9cecd89901b664dc76770",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/uuid/v4.js",
+      "bytes": 1111,
+      "sha256": "a350c133f995aec4f692dc67df2d4992499d9b4b6f97f7ad7b0bdac03de798e2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/serde/value/NumericValue.js",
+      "bytes": 822,
+      "sha256": "40648a94225e90efb6c66bdd918881089bdc2c18ff64572842d4016b95458806",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/transport/getSmithyContext.js",
+      "bytes": 164,
+      "sha256": "88d85f910cd00073aabb21d7ac7a148fc4f84397a470cb4330a6b7994956ba00",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/transport/hasOwn.js",
+      "bytes": 88,
+      "sha256": "25e5de9d2bee6ebd411d91987f9fdfb4f790d0cb4ed6bb56cf3d5e9a7932ba5f",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/transport/httpRequest.js",
+      "bytes": 1832,
+      "sha256": "af681fcfaad3339a0545047f3cfd4c93ad09fa6523f75d8a4545a55df793765c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/transport/httpResponse.js",
+      "bytes": 486,
+      "sha256": "428771784daa2e62ecd932a11d70b47de4be5bfb3a2bbc7e79cd86d763fd6e34",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/transport/index.js",
+      "bytes": 488,
+      "sha256": "32a64e94aa2d1e085dad7dcda18c8e440eb2068c3a4bfb1daaab0e0fbff7490f",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/transport/isValidHostLabel.js",
+      "bytes": 408,
+      "sha256": "16d62f74ed97e93e72faecba4ab5cfe4c6a3749cdcb0c9ddceda8317324a6a08",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/transport/isValidHostname.js",
+      "bytes": 142,
+      "sha256": "b2795927982d1a2bb1dc04ca2ba1d1564066ccd282803078b250417dd933a94a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/transport/normalizeProvider.js",
+      "bytes": 186,
+      "sha256": "e927e9b665c202b4703bfedb3ed09a8ec8b9c9ef22d18c4e496585b16483307d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/transport/parseQueryString.js",
+      "bytes": 692,
+      "sha256": "0fd6e80e261f30666311ae321611388ec5cc1889510e194edc24e87fcc292633",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/transport/parseUrl.js",
+      "bytes": 462,
+      "sha256": "b981a24f81594ec898f1fdc00ba3723868cdec522d3485a10c25ce0a4a23f24a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/core/dist-es/submodules/transport/toEndpointV1.js",
+      "bytes": 703,
+      "sha256": "d5e8fd8df4e90b4a59035655c7b757371bd0561bbcf5d0d9bb4cba9c066b10c5",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/credential-provider-imds/dist-cjs/index.js",
+      "bytes": 15218,
+      "sha256": "b26d7faec162460d7416db210743260b3bd1a6a3f3c565216feb75e9123d5cb7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/node-http-handler/dist-cjs/index.js",
+      "bytes": 32353,
+      "sha256": "0ecc976029422fbbb832c64fd9d320f7bac410a04a21b9c3bd217c7877135e13",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/signature-v4/dist-cjs/index.js",
+      "bytes": 23803,
+      "sha256": "d547b51fb2b9e9494e0bc7286425320d7909eaab4007d32a87796a2160cd79a8",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/@smithy/types/dist-cjs/index.js",
+      "bytes": 3349,
+      "sha256": "9d6dc721faba0c34fce3d8e1fa464f10446cb998529a1a774d9538a071e8c5ab",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/bowser/es5.js",
+      "bytes": 36752,
+      "sha256": "fb1c1a555d9f830754a48122557f5d67e3216ab4ac1bb238190c504afefd65d2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg-cloudflare/dist/empty.js",
+      "bytes": 258,
+      "sha256": "3f83d105df21adbeeffb03450deb422644c30023ece93b2d6191fac3c620a316",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg-connection-string/index.js",
+      "bytes": 7467,
+      "sha256": "6523b5d5ad961775b9befa691edccf8080a79da52b91142834f9e6f6d75eb5e3",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg-int8/index.js",
+      "bytes": 1572,
+      "sha256": "f991b0a41119bce0efbb471275dbd02de31a79fe6f87f8f5e5678e373a0f1627",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg-pool/index.js",
+      "bytes": 14460,
+      "sha256": "6f304776edaabde2954cbf8c4366fa6d9512bfba0e408e78cc56b3c46c69d058",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg-protocol/dist/buffer-reader.js",
+      "bytes": 1600,
+      "sha256": "fdae5fd80c1ad1015f91a92da667467752eabdf531f19558897e205559e6b714",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg-protocol/dist/buffer-writer.js",
+      "bytes": 3814,
+      "sha256": "618b3b9be3ad19e873d19494b34be41ea1ee91ddee66e4b065b5d416981c7859",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg-protocol/dist/index.js",
+      "bytes": 775,
+      "sha256": "e7a99ac02633393d8c3ef16cd6385b8246100d28c838b02420844068429a46c9",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg-protocol/dist/messages.js",
+      "bytes": 4973,
+      "sha256": "dfd22ad639f3030b41617ff0ee201ece7cdbce4adb7e1aae7978541b1384cd31",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg-protocol/dist/parser.js",
+      "bytes": 13515,
+      "sha256": "6f841aabda7240df44e1b08bbe8e202502ead969576c1ecc17311af48f57f2ef",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg-protocol/dist/serializer.js",
+      "bytes": 7059,
+      "sha256": "342f298021498cbf35ccc8c06fd7ec36d215a3616549f6c87f286844b24f5578",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg-types/index.js",
+      "bytes": 1214,
+      "sha256": "ece6d549270ba55d08126b10c9997324d808ee828ef00dad236e84e54d9d556d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg-types/lib/arrayParser.js",
+      "bytes": 208,
+      "sha256": "cad20b20e6312125b45f74480eba3ef46b456997da4f53bbec56356d66edd730",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg-types/lib/binaryParsers.js",
+      "bytes": 6063,
+      "sha256": "4b0105414068ea96450ef0d420db9449c00c565c5894683955af15bf94075fb9",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg-types/lib/builtins.js",
+      "bytes": 1564,
+      "sha256": "09213197e4b44012e4c83669aa80884a189e90c777ddfef1f44c90c412167354",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg-types/lib/textParsers.js",
+      "bytes": 5367,
+      "sha256": "bd811a530000508b6b90c1db462078e122f0404769d73f57ad41fe90aca159bd",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg/esm/index.mjs",
+      "bytes": 579,
+      "sha256": "5ef4d06556eeb775987759c2c09229dca2139421ee40e819b566612db2b4a8dc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg/lib/client.js",
+      "bytes": 24930,
+      "sha256": "992c12d10cd42ece06b0b224601fa783a02ed08f3ace8bd8089cc441b6308abf",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg/lib/connection-parameters.js",
+      "bytes": 5957,
+      "sha256": "6b6548f99acba3502663a17a180582ba8e1f1725aa9d94b5f47cac19dcb6211b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg/lib/connection.js",
+      "bytes": 5900,
+      "sha256": "836b6abbfbc68744769ba499e2a79062dba5fd281af31fc5e83431514bdefd4a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg/lib/crypto/cert-signatures.js",
+      "bytes": 4096,
+      "sha256": "206ec95c51012b73fe15d549b24db2acab969271e971940a0b79cfdcf830755b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg/lib/crypto/sasl.js",
+      "bytes": 9900,
+      "sha256": "99f1a2607fe2a29f1c4dd1aaf43dec0fc2b5de8755de72b39d3aa8c575bd6a71",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg/lib/crypto/utils.js",
+      "bytes": 2649,
+      "sha256": "a849cfe22d7590d79ddee76c8d7a058e2b67360a0d76683275d34133e5637117",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg/lib/defaults.js",
+      "bytes": 2612,
+      "sha256": "d91c22d082ec974f9f878a71e8d9d56a7e5fa9a711cc63f32522b43f5e9169d4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg/lib/index.js",
+      "bytes": 1810,
+      "sha256": "3fad6e6d3d976edbabe0cbc9e1d39f4340bcb719bbbb186a0d3a24f3dbd4a94c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg/lib/native/client.js",
+      "bytes": 11086,
+      "sha256": "9fe2f45918152531b1e76ff4cf54ff754fcd9651d85cfb997efd450a97d55917",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg/lib/native/index.js",
+      "bytes": 50,
+      "sha256": "99fb61cb78a6d78b7a5fc0b9ac264ad58272af48be4bc50bfdb948b1342e3292",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg/lib/native/query.js",
+      "bytes": 4772,
+      "sha256": "4f7849f59591d4ad165196d809228fb192b4fb7b13ffc2dcb6731bd249da56c2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg/lib/query.js",
+      "bytes": 7654,
+      "sha256": "a13377272ad4f842f6f6616d187ef3123cfed90e764cae9a663058ab41a769a0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg/lib/result.js",
+      "bytes": 2829,
+      "sha256": "6d7193da53f8557600a065e4356626026e8c5baf12c477dc19e439d8f204225c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg/lib/stream.js",
+      "bytes": 2132,
+      "sha256": "0bd4001775301604ddf7c94152e05f6f30a9354876717bdae2ab636d00eb12ba",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg/lib/type-overrides.js",
+      "bytes": 770,
+      "sha256": "47cb7f7bc6a6e1b1d4dc7c92bacacb436f12e99242b77da8391fd5b71991d2a5",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pg/lib/utils.js",
+      "bytes": 5121,
+      "sha256": "97fb5d56e301d00412e85ce91d796a61c79493dc03ae5adc05995ed8a0ed7936",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pgpass/lib/helper.js",
+      "bytes": 5488,
+      "sha256": "28d823dcde115f31848ba93d9cb55ba20089ac701b6a38b228d185d96df4f1b5",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/pgpass/lib/index.js",
+      "bytes": 467,
+      "sha256": "cc95b8ef6c32a9afdc48b85a5e7128d5e29567f8ded02d9bf7acd27c3d870c39",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/postgres-array/index.js",
+      "bytes": 2320,
+      "sha256": "807ba580ed423e518672c27b4022a56acb693be04349733ffc1fe6f324fbcee2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/postgres-bytea/index.js",
+      "bytes": 863,
+      "sha256": "c078b99e1009c4bcf6e3ab59d9fe808b12caee3461204ae599cdd9cccd990801",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/postgres-date/index.js",
+      "bytes": 2676,
+      "sha256": "9a09e3ec0775237576b1f6ff0fba0ed6171235aeded635a42c174b517e34cb1a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/postgres-interval/index.js",
+      "bytes": 3413,
+      "sha256": "836fe0a39e52f051d62583d8375d3b270b4cb93dd026b125438a89e5a0258c41",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/split2/index.js",
+      "bytes": 3764,
+      "sha256": "842471719e0e901e01ae1a1d3a6a4d1ff3e36747a7f50d5644f09d1d595c1857",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/xtend/mutable.js",
+      "bytes": 369,
+      "sha256": "71a38649c77408217483f81f55daee1d6646d6c670e3d034a4482cb3453886e9",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/index.js",
+      "bytes": 422,
+      "sha256": "32e7efd49a94a765f6d10a1a0a3c02c50c246def17c80c6f0225f85525d98505",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/classic/checks.js",
+      "bytes": 690,
+      "sha256": "7543391a9ad5e7df287bbfecaa79844d46af44c75c1de0d43a411d65795d9dd1",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/classic/coerce.js",
+      "bytes": 550,
+      "sha256": "fb2efe3b6eacc475c77cbb571b5fb8650d92a10f316dc869e49b722973d83c3c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/classic/compat.js",
+      "bytes": 1090,
+      "sha256": "0e948b101771cc0e7b753e54b3f5b486929d3db9bd4c09d98fe4ce86271bcf7b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/classic/deep-partial.js",
+      "bytes": 543,
+      "sha256": "0abffcc9838e04dc6f091229c1d522fbfd43aab9563316b52d3eb8ff2bacf26d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/classic/errors.js",
+      "bytes": 2532,
+      "sha256": "d32f7c1ef8e2c70072f6f0ec8ba7081bbc331353cc3a7cb4429e5ece91409543",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/classic/external.js",
+      "bytes": 1080,
+      "sha256": "92a7244eb7306dd5035e3d2002a5f447cd6b4ec2f510adf08f11df090b0de610",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/classic/from-json-schema.js",
+      "bytes": 28987,
+      "sha256": "e47add3abea25a4980f56df7c7e2fcb31a9fd8ae627c49fa07104e83f4697e91",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/classic/in-out.js",
+      "bytes": 2190,
+      "sha256": "34370913842ff02d14a9796b11c5ec2af160bdb35a7148edc286e9a9c6fb5c17",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/classic/iso.js",
+      "bytes": 556,
+      "sha256": "deaa026b7c5302e59719f401248e7866691d8d8a892884dd2b6868b1cb7252d8",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/classic/parse.js",
+      "bytes": 1057,
+      "sha256": "11941573401bbef138842c7a523dff554873343fccbf0e8b0a144259d2d703f1",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/classic/schemas.js",
+      "bytes": 51518,
+      "sha256": "5f05c8227d5ab4579552303f6f3204f8bc57e1341226007dc5fcc8479b055a8a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/api.js",
+      "bytes": 28647,
+      "sha256": "4c147782e1baaf518dc52e4041a898e718a171e03fdb5fd2b8dcbffa8545ea54",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/checks.js",
+      "bytes": 21291,
+      "sha256": "92a4400fe5964b5bc6db6e9cb37470959d4594ad932e347ca691c59462deeca0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/compile.js",
+      "bytes": 87063,
+      "sha256": "888783d09a521996f26f35de24c38460577ee094b433489e5119d0830d922bfc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/core.js",
+      "bytes": 6637,
+      "sha256": "db75715d529e69c9dec49651c020aa8b67a9620e76024c8a46e917ed8b111ff4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/doc.js",
+      "bytes": 1117,
+      "sha256": "8f49aae02f25258170291bb99ece6f58e50480db51ed2ef9f1e1621ebc54540d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/errors.js",
+      "bytes": 10947,
+      "sha256": "2c02617e5e7bfebffa8176901a6ed4894d62d4942ed2ed2804c81239385c0bf9",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/index.js",
+      "bytes": 690,
+      "sha256": "2a0e452323aa5b75b7d7de4879289e2579b9dd2d6af291c0416ba6806ca2199d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/json-schema-generator.js",
+      "bytes": 3845,
+      "sha256": "c2e74b910ee71c0d07148442d8306c78860c13fa2d0a215ebd5c9166f6cb8a9e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/json-schema-processors.js",
+      "bytes": 30200,
+      "sha256": "de52da8e4c33d4c54b44c1515e702a3fac2663b4772d4a343b4891ac2d46af03",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/json-schema.js",
+      "bytes": 11,
+      "sha256": "8e609bb71c20b858c77f0e9f90bb1319db8477b13f9f965f1a1e18524bf50881",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/memoizer.js",
+      "bytes": 10173,
+      "sha256": "c0f46352b24c7457bd5b89df4d3847aced732d6d74a11f2d44502b8c035a7821",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/parse.js",
+      "bytes": 7080,
+      "sha256": "cb65fa29960a4b0becfb3538d5afd5d5ff1fa4c52e8d53e531a9967b71905116",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/regexes.js",
+      "bytes": 10238,
+      "sha256": "a401e10ad34078b4cfe8da337c21d2d8e20cc2c82b43406b95ae8523100d3c45",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/registries.js",
+      "bytes": 1540,
+      "sha256": "f04d4b2c0bc5b4ac2d6610ea34edf2e5260eade18f20976b79916dcdbeb9fa4d",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/schemas.js",
+      "bytes": 98236,
+      "sha256": "d19d514ab02c347143f129e2212d63496f2dda4c6ba607cb939f7aa5eb4d8846",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/to-json-schema.js",
+      "bytes": 28766,
+      "sha256": "16cb6032d2810d664102af0dca07d50af7a6a808b5036e33415b38492fc00564",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/util.js",
+      "bytes": 32376,
+      "sha256": "e50c63d70e8b1abf2968936acf22c9e4e96e735f0af6d367785e0948e46553fa",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/versions.js",
+      "bytes": 70,
+      "sha256": "0040e7f6554f6d3d1569388cde7dbd66c017ad1d3dfcfd731f9e810c429b4811",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/core/visit.js",
+      "bytes": 6643,
+      "sha256": "a804062900869e09ea0b975cfa569fd3c70dc33bad7fc30b63872d451cae29f7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/ar.js",
+      "bytes": 5336,
+      "sha256": "954b1ecdf9beae18b24a078d888b741d498c4475527b63666cbde681636ce597",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/az.js",
+      "bytes": 4642,
+      "sha256": "0f3c71cd60e4bb4c0506b0fc2ffdf615abc56dc351517b734953796e9daac5fd",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/be.js",
+      "bytes": 6930,
+      "sha256": "08c0d312d33bb213b8c8a2688e4e32ac156b980c6786fe1435795fa457b1e735",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/bg.js",
+      "bytes": 5956,
+      "sha256": "c9dc2ff4a430959c226a28ec71cceda54a4b9c83eb28ad9f27fa984ecc4bbaa0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/bn.js",
+      "bytes": 5680,
+      "sha256": "c438a45fb8f142d0c715abdd5bde85f97fdcd7a4ecbb19baa22fa5544b931cf8",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/ca.js",
+      "bytes": 4845,
+      "sha256": "6525cce3d7a7a6486be11a603325ffb40a7a67b88ce2ad5605387f4762c4b4bc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/ckb.js",
+      "bytes": 5882,
+      "sha256": "858c8ff792ead63bc21433a9d5134cc1a12d6b43fe40a247ade2759f0f5217c3",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/cs.js",
+      "bytes": 4894,
+      "sha256": "1d5d88fdfc2ddfcb9719f70f8b1367acc87cb7f7f541dfbaa380ee3477119422",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/da.js",
+      "bytes": 4928,
+      "sha256": "0a16ebf92bc38487863c29be28d49cf015b00d40a72f4723b570e4bca07af306",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/de.js",
+      "bytes": 4712,
+      "sha256": "b75e66c589a7e664b6527cab5495851c87e9d69e754caa192460642280c164f9",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/el.js",
+      "bytes": 5617,
+      "sha256": "1d6f7c0a139fc18d7741749cbbe0a385f5737af7563a4915c70deecd878f18ee",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/en.js",
+      "bytes": 5240,
+      "sha256": "bf9bc721244e649eaf1f69c34c33c6a8ebd08c2e0f65cff8ad4ed0c9005977c3",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/eo.js",
+      "bytes": 4724,
+      "sha256": "43371beb2bb1cb02591167d95ea6de356ee2f7a6753b6d539ab1d5625676f361",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/es.js",
+      "bytes": 5525,
+      "sha256": "5610ea1773e87f333322946c0b6e9fcfd0fc0a3155eb773cc1e767aa0e9a6c88",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/fa.js",
+      "bytes": 5283,
+      "sha256": "c69ee6bdf38106800a979cb5383a4de3f3d45af7d66807ae4abd6fde877a9418",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/fi.js",
+      "bytes": 4945,
+      "sha256": "703ba6e565c7ce2d442b8e8e0b0051e38171b07e17e249ff522e7125fbfce5a0",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/fr-CA.js",
+      "bytes": 4686,
+      "sha256": "daef8904651e0d426b54d5642b4e1b6a2e91e1db25bf11a470209550621fd04a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/fr.js",
+      "bytes": 5351,
+      "sha256": "4ecf245f7f8f22a8af9ba710ebf1bbfd9c69dca2b69972d86e8ae6dba31c4552",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/gu.js",
+      "bytes": 5862,
+      "sha256": "7a72be7ef3e973003d0ea87d4a1f525e1273bff0504143977199bea8e7dd09c9",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/he.js",
+      "bytes": 12299,
+      "sha256": "29455674b3c042f12719f76096b968363f614e5dc2454d1e2c7b480724dc8d95",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/hi.js",
+      "bytes": 5863,
+      "sha256": "5cd963e4293c850c29e929f9905d982f1efebaca6560209ab03e14e9b4136e05",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/hr.js",
+      "bytes": 5125,
+      "sha256": "645d68ac923f8ebc21533e6b08bf349600eedb7751f9dd630691cb50d4150a5b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/hu.js",
+      "bytes": 4810,
+      "sha256": "3f3f0630d4d0444a41e59cdde46accc9c2ea495083066a9299cf0c40001aca90",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/hy.js",
+      "bytes": 6648,
+      "sha256": "b9500a95d63ef1280673934af9ccffcc7a9c68e53e5cc4820a1cfb72893684f3",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/id.js",
+      "bytes": 4696,
+      "sha256": "1ac54626137d02dfd3a7a24edf42a6f06f9f8a01fc920db8c4d18c9320729987",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/index.js",
+      "bytes": 2566,
+      "sha256": "2d7e03f825285ae178748fe7186ad8e80bfb1a0eb55ef1e160b4e5f800d8f014",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/is.js",
+      "bytes": 4755,
+      "sha256": "d16df422e9bce5fa866dc66c89e11a854c78b875368250b2dc6d309bca2ee8c8",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/it.js",
+      "bytes": 4713,
+      "sha256": "753d91ff007abf517212631a0012370a0b178a7fa787e026e7f5bffcf0f84053",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/ja.js",
+      "bytes": 4990,
+      "sha256": "e86ae224917fd95945de947b3af81c55f9ab250a69e53f3f7ad0635f3f7c0022",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/ka.js",
+      "bytes": 6444,
+      "sha256": "031b439f4720482b427b953d60307cbd2fe2c89079b309c4df23f645d7b709cc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/kh.js",
+      "bytes": 111,
+      "sha256": "78c3d1991041bb8c8fc0f7c5d745aae422d4c2e4e8f30bae44f3fef4765900a8",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/km.js",
+      "bytes": 6421,
+      "sha256": "02c05625e6ade1ff10935a4509555ee4d1f778ddc946ea7aaf016311cb5c3fd4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/kn.js",
+      "bytes": 6429,
+      "sha256": "cd46ade57ca318fd6128884dbdc581a6fae77d349adc3965ee8e768cef67abb2",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/ko.js",
+      "bytes": 5047,
+      "sha256": "8f3a1013116b364df91d6d7fb4d73558277d6cc6b8c36b15771a1a1271cf00ad",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/lt.js",
+      "bytes": 8160,
+      "sha256": "075f0d917ccca164aaf033e74f20323eac29ba6e6e5f9a7727b756e3ad396760",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/mk.js",
+      "bytes": 5326,
+      "sha256": "3867d845830499ef1fdb942705a7fd2b4925518cb848e0c44effd8fce66ecf10",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/ms.js",
+      "bytes": 4612,
+      "sha256": "cf6c69c51fc57a63d571ef10b10b9fff5956f2ba9691eb9bf3a35e65a35e4e2e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/ne.js",
+      "bytes": 5742,
+      "sha256": "5a503c5fb2cd676114fa54d3085758796f63b45d6a0c5a8ef25a8c579625f5a7",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/nl.js",
+      "bytes": 4880,
+      "sha256": "dd4d6293dd962769503a77de077b2e0ecb4f35879e541a9c525e642ec1172d27",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/nn.js",
+      "bytes": 4619,
+      "sha256": "de30d64d6c0affc8076c91b3eb15f5a59aa30bc8d705569336dc7878f50a0efc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/no.js",
+      "bytes": 4634,
+      "sha256": "909d5b032afc4593c80b33d40c365d7e92933e491d075feb3736471ba30ab432",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/ota.js",
+      "bytes": 4658,
+      "sha256": "7ac7db9c471408796059ae98182b89319d2d220b54e31eab7f6c5bc9da36e048",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/pl.js",
+      "bytes": 5091,
+      "sha256": "7deb22313f5547c8a76240d155fbc3889366f10b78113c7343ff16a7726a98cc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/ps.js",
+      "bytes": 5052,
+      "sha256": "bff575c5ea157ba66f882763f047c742fe82b3d88ee58ffc8e2d0089a47b46c1",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/pt-BR.js",
+      "bytes": 6955,
+      "sha256": "6ed21969db4af569b0e7bddd86be996cc4e311f3b2f1279de84029f37988c463",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/pt.js",
+      "bytes": 6955,
+      "sha256": "6976fd2b1afa35abe404a04bd2a6780c474fdf3680dc430bea37873a86b0026f",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/ro.js",
+      "bytes": 4823,
+      "sha256": "a9d953e9295f181aad6b4a1b841a271071aa0ad49993c64c9096298f9ac27c7c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/ru.js",
+      "bytes": 7027,
+      "sha256": "69711d561391804b9ef55d8429b50a4ab0da960aeda8e26d44d9c12e858c7432",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/sk.js",
+      "bytes": 4891,
+      "sha256": "8368e3997cdb66290adade3353b246cf80f33836860ce23560dab5252ad18a3a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/sl.js",
+      "bytes": 4696,
+      "sha256": "76af13e027fd69fc90c66337a9e25da67eecb1414a565407e7fdecd6db485e3a",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/sv.js",
+      "bytes": 4783,
+      "sha256": "dd4b5a0b37ebe65edf6bed4d0f3889eed08825b7561db424ac65f6be8da58588",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/ta.js",
+      "bytes": 6596,
+      "sha256": "70f11a941273beedbccfa0bd06e7699c46b2591895632b2b5cfd136e3134b09c",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/th.js",
+      "bytes": 6478,
+      "sha256": "7c43bf69b788629e15e5f569cbb5db86c684d03f8a2143ecabe8fd9b56b67569",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/tk.js",
+      "bytes": 4396,
+      "sha256": "033b56bbedf63901978158b747636e45efa7f6b3599cba13d9675ebc1908a3cf",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/tr.js",
+      "bytes": 4577,
+      "sha256": "dad0163bc78c77c600eeea79e22dad5c1826f351e56002ad7099e2212c9d7f3b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/ua.js",
+      "bytes": 111,
+      "sha256": "9391169ffbc72f777a83230b6ffcc3f4cf46ab5945ec540de9ef4609dca1f4cc",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/uk.js",
+      "bytes": 5597,
+      "sha256": "91b29aabf7b30aa72cb4d67dd2de9d7a1eb33e027dc3603bf2fbbb63870b4a6e",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/ur.js",
+      "bytes": 5425,
+      "sha256": "42de4029904c64a22a31fb1432ba53b423338f0ac1822d2a326f52e764de9da8",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/uz.js",
+      "bytes": 4783,
+      "sha256": "0428527e1ab1a35f68815786bcb5170c21087fac4a9cf4f1d0160a9abde18c3f",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/vi.js",
+      "bytes": 4903,
+      "sha256": "9ece89e06392bdbd0b4f36d5b0c18468f0a8cd5755f5ddd0d44adff61072c7d4",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/yo.js",
+      "bytes": 4788,
+      "sha256": "0194dd8af94d993ea43ce59bd5b27b8bb0b12a45a43203d669c0483ac25a723b",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/zh-CN.js",
+      "bytes": 4561,
+      "sha256": "149874e8079020bdd9fff6d1e7b411cea32745088479590a4b5d9eaa716b0941",
+      "kind": "dependency"
+    },
+    {
+      "path": "node_modules/zod/v4/locales/zh-TW.js",
+      "bytes": 4611,
+      "sha256": "b9bbf30d36a4d6bbd32e1ada333baf45fff3ad5b0f13a2caf3ae580c041bb5d8",
+      "kind": "dependency"
+    },
+    {
+      "path": "scripts/higgsfield-remote-archive-worker.ts",
+      "bytes": 7322,
+      "sha256": "e9ddb60d450cbc9dc87cc8bd0d182d7e2289e21581b6672bf4d20058c4f2ee11",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/agent-policy.ts",
+      "bytes": 2290,
+      "sha256": "6d9cdc00501cff124cd196f93cd46a75780d15b672ed1923504fd9000e7b9855",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/agent-runs.ts",
+      "bytes": 31521,
+      "sha256": "b317bacf9f261ab0536979af58cbf1db1a588df6201e9f59c27377827f8b946f",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/agent-task-actions.ts",
+      "bytes": 3903,
+      "sha256": "e4d86c8d7839d8bc02db1a6be8a80164e02e518782cbd74ba723cd74bd9bd28c",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/auth.ts",
+      "bytes": 4283,
+      "sha256": "33e621405b4aa14725815f900fcf6d9a52f53f230cf42a9ad6328c08de4bd7a8",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/avatar-catalog.ts",
+      "bytes": 3895,
+      "sha256": "553f2d5b0ee8ffefe50b59328fc8ba64e09acf6f4dde29b7d8367d3c2e3ec0b8",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/company.ts",
+      "bytes": 25448,
+      "sha256": "fdb37d9d465ef721151c36cb3b637827a4841333c45fd8be97a383e08d14abea",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/conversation-protocol.ts",
+      "bytes": 1527,
+      "sha256": "a0159578d7187106b2bf1708f51a4f60e3dd59fd79d73351330a8d0270911cbc",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/conversations.ts",
+      "bytes": 20482,
+      "sha256": "4252e5e114f023e4cbc41f89f733db26ea587227bd41b29a1c56c484df468f66",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/db.ts",
+      "bytes": 993,
+      "sha256": "4b732a9fcd5ddf5b4e347696595e66ef9669a96a9b1514af36bdae85fee7a0f3",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/floor-plan.ts",
+      "bytes": 1836,
+      "sha256": "23982262e31f20f2290f92c39b491ff9373ffdd5f01a4fdacc661847f79d2d12",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/higgsfield-archive-config.ts",
+      "bytes": 491,
+      "sha256": "a2e98141d3a48cc6b542f3447dfd85466ea4491d9676d0669e675b82977df716",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/higgsfield-archive-preflight.ts",
+      "bytes": 10414,
+      "sha256": "a9296277ae1b4e77338a4e5c823b363a481103f8318ff7116ec152d2a0b6f9b7",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/higgsfield-archive-protocol.ts",
+      "bytes": 2472,
+      "sha256": "3f5b9b5d56cc4c2b0491adfbd4b2db99ef9372463f0c44adf0ca8f17ed4c4a06",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/higgsfield-archive-worker.ts",
+      "bytes": 31831,
+      "sha256": "37601d23c968168384634ad8080292c9af8f65b1f89bd768b974e0ac57770140",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/higgsfield-archives.ts",
+      "bytes": 24222,
+      "sha256": "b222959fde6d43da5fa4852b74c8fd9214e506b26908a865e728ef66b09d3881",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/higgsfield-media-inspection.ts",
+      "bytes": 21890,
+      "sha256": "d97e1d6fbe2ed854daea8e270775d8cc58ce00f503bbf764f4edc38a02b120b8",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/higgsfield-media-sandbox.ts",
+      "bytes": 17894,
+      "sha256": "f156c5a7a819f7be540a6c53c5983a10c54ed2ebffacb0cbf524d25cc10d6891",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/higgsfield-output-fetch.ts",
+      "bytes": 13161,
+      "sha256": "8c2f0b1deefc4b9310f11a0037ee7f96cb18a517e8666d28b0a7d2dc09c6b499",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/higgsfield-remote-archive-config.ts",
+      "bytes": 6158,
+      "sha256": "d8f8702de54ca5be21c1e971ade1b09d3b4623063f6d3b9e0fd58657b48ca400",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/higgsfield-remote-media-controller.ts",
+      "bytes": 15845,
+      "sha256": "237bb88958d5aef247b14280f352814b18613b3529d8d7f39eaee8681c5ce92e",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/higgsfield-secrets.ts",
+      "bytes": 2462,
+      "sha256": "8b8997ca725bfbb820355644c0e39e4955080edb86b2289f39c1f072b33645a6",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/higgsfield-vercel-media-sandbox.ts",
+      "bytes": 29022,
+      "sha256": "abd4b274c4a4fb9d46cbbd4dbb8d7caa3db9fb34a1205c17e15c247175af36b9",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/model.ts",
+      "bytes": 6382,
+      "sha256": "23690dfff2f29f875baff0cc2c86a97c1ef9a6c2a1da1c71195392f386db58bd",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/office-catalog.ts",
+      "bytes": 17931,
+      "sha256": "66b67eb1a3ff14dbc44f1221cc2ee50373248ea3ce37db1c562d10a717f86523",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/office-seating.ts",
+      "bytes": 2078,
+      "sha256": "3f5035690633ac8b3301b522d8c6f778b2d7e069a89601a575acb9fb0d65a861",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/plugin-catalog.ts",
+      "bytes": 8382,
+      "sha256": "bb7a454899cce7a4343ba705fd08bae1dc2d3d84fdcf1c103653ec7dc5b64c37",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/plugin-marketplace.ts",
+      "bytes": 15058,
+      "sha256": "a48056e80b96a0aefdb2e1b29a27d7cba93c57d4345315fdd914288a6894be63",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/presence-protocol.ts",
+      "bytes": 763,
+      "sha256": "4bbe7097d5c2d200e76a61f671231da7f98726ade5924800f47a3b34e0371441",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/project-storage-config.ts",
+      "bytes": 1172,
+      "sha256": "47a7ba07dc6a8e2b28fdb77eef390e0e02a0da8490df2d6181069aee598ed1ce",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/project-storage-protocol.ts",
+      "bytes": 4976,
+      "sha256": "c18b264f3fb780a655cdd52e32392e5af1ec4438be86c3a6e6ef58039cf9a0c2",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/project-storage-runpod.ts",
+      "bytes": 24001,
+      "sha256": "a28750a73cfbd3d8d0302b8269c3aa7273942961ef8e342319c5fae408a3ec7a",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/project-storage.ts",
+      "bytes": 37648,
+      "sha256": "78364b25841d834c240898d5f890a1916ce813399395a2e6d427a2dbdde6fa74",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/security.ts",
+      "bytes": 6374,
+      "sha256": "36bed3fd1959e135584c526d5985cd27d77e666bda6157615edeea7ac80d0e50",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/studio-coordination-protocol.ts",
+      "bytes": 2521,
+      "sha256": "d7695adb08a2b4a594312cf0d0aa89f21334393617d747dad11a11a8d051b473",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/studio-coordination.ts",
+      "bytes": 32519,
+      "sha256": "f87ad67b23dde2e8a8c4fb4cf29a8eca767aca763ce4641ed0b24dbbf6fe8c7d",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/studio-creative-followup-protocol.ts",
+      "bytes": 1258,
+      "sha256": "8a4e98def29bb616d518f36a704318c110059f88a1383e67f118ab42805ec24a",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/studio-creative-followup.ts",
+      "bytes": 15699,
+      "sha256": "c2f71e6be659eae16c5780f2885889adf16fadda34f93e309a6ecf6def2b56eb",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/studio-generated-artifacts.ts",
+      "bytes": 35984,
+      "sha256": "01143c66d7b1bfd8e3e7161c5bcfb41981044bbc9bdac51c3380aaafa5be6ba9",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/studio-generated-followup-protocol.ts",
+      "bytes": 892,
+      "sha256": "98d296beb5b2e05dac9386807221b1762e62d06ff6d45b47e0a903e6d74e2e4b",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/studio-generated-followups.ts",
+      "bytes": 30564,
+      "sha256": "2387539a4c5f8982a11b1e3e4a9c08e066d63901d332ec19ad1836c011883ec6",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/studio-generated-protocol.ts",
+      "bytes": 19949,
+      "sha256": "d96eb52bffeb2ecc142ae361c15c84df51c40b94096ea3d82bff813c660d1ab1",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/studio-generated-review.ts",
+      "bytes": 13611,
+      "sha256": "fd66750e42861827caa4e76a5294bb5cac118aba826f74b6dcc47cb505d52925",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/studio-generated-rounds.ts",
+      "bytes": 5810,
+      "sha256": "4fa4e5a83902d6798ef4e470c086d13091aed5e7ef97908d2d57228ff118ceb6",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/studio-hosting-protocol.ts",
+      "bytes": 2225,
+      "sha256": "94dff345073c0d12cd44b57e3d48e5cc8bde18a91ee5ec3e16c7f733b5491e36",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/studio-hosting.ts",
+      "bytes": 30574,
+      "sha256": "a367011c3ea39e83649490c4797474a6370f4c8979ba8007aece54f069c17c97",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/studio-protocol.ts",
+      "bytes": 20072,
+      "sha256": "fc9db8b710df71dfb4b8cdba9a511a819f26c406baac21a0ea9ac05cc036f644",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/studio-render-followups.ts",
+      "bytes": 9084,
+      "sha256": "00deed9bb0697f30bb2410e1b65b97f808d4bd87a67dd822b95fb4ac526b1d8b",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/studio-review-policy-protocol.ts",
+      "bytes": 3002,
+      "sha256": "40943165729c4195701f6fce75989824f6703c62cdf255756f938e51ae1116e3",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/studio-review-policy.ts",
+      "bytes": 30653,
+      "sha256": "eb0ddd9e158aad31a1296dfc2998b9a1ee4cd024c49f690c9c3cc184e8e8813f",
+      "kind": "source"
+    },
+    {
+      "path": "src/lib/studio.ts",
+      "bytes": 62247,
+      "sha256": "a325bd89687fd1fbbb929332b9bdd0b81e058980d8e32dc5b765cf516f441f69",
+      "kind": "source"
+    }
+  ],
+  "runtime": {
+    "path": "runtime.mjs",
+    "bytes": 2530736,
+    "sha256": "ce5a888ef8b7ca17afce3183c46a389a94a27726d22699a7ea50551168c703f2"
+  },
+  "deployable": true,
+  "qualified": false
+}

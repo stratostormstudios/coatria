@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Readable} from 'node:stream';
+import {createServer} from 'node:http';
+import {createHash} from 'node:crypto';
 import {createRunpodProjectStorage,runpodProjectRoot,runpodProjectObjectKey,runpodStorageEndpoint,RUNPOD_STORAGE_REGIONS,RunpodStorageError,type RunpodProjectStorageConfig} from '../src/lib/project-storage-runpod';
 
 const companyId='00000000-0000-4000-8000-000000000001',projectId='00000000-0000-4000-8000-000000000002',versionId='00000000-0000-4000-8000-000000000003',otherId='00000000-0000-4000-8000-000000000004';
@@ -47,6 +49,12 @@ test('HEAD returns metadata, only maps genuine 404 to missing, and sanitizes oth
  const denied=fixture(()=>xml(`<Error><Code>AccessDenied</Code><Message>${config.credentials.secretAccessKey}</Message></Error>`,403));try{await assert.rejects(denied.storage.head(versionId),error=>isCode('STORAGE_PROVIDER_UNAVAILABLE')(error)&&!String(error).includes(config.credentials.secretAccessKey));assert.equal(denied.calls.length,1);}finally{denied.storage.close();}
 });
 
+test('known-volume access requires signed HEAD200 on only the selected bucket and never treats404 as authenticated access',async()=>{
+ const f=fixture(({url,init})=>{assert.equal(init.method,'HEAD');assert.equal(url.pathname,'/'+config.volumeId+'/');assert.equal(url.searchParams.size,0);assert.match(new Headers(init.headers).get('authorization')!,/^AWS4-HMAC-SHA256 /);return new Response(null,{status:200});});try{assert.equal(await f.storage.verifyBucketAccess(),undefined);assert.equal(f.calls.length,1);}finally{f.storage.close();}
+ for(const status of[403,404,500]){const denied=fixture(()=>new Response(null,{status}));try{await assert.rejects(denied.storage.verifyBucketAccess(),isCode('STORAGE_PROVIDER_UNAVAILABLE'));assert.equal(denied.calls.length,1);}finally{denied.storage.close();}}
+ const malformed=fixture(()=>new Response(null,{status:201}));try{await assert.rejects(malformed.storage.verifyBucketAccess(),isCode('STORAGE_PROVIDER_PROTOCOL'));}finally{malformed.storage.close();}
+});
+
 test('HEAD allows heavy object lengths without treating them as a metadata response body',async()=>{
  const f=fixture(()=>new Response(null,{headers:{'Content-Length':String(10*1024**3),ETag:'"large-object"'}}),{maxObjectBytes:100*1024**3});try{assert.equal((await f.storage.head(versionId))?.bytes,10*1024**3);assert.equal(f.calls.length,1);}finally{f.storage.close();}
 });
@@ -57,8 +65,23 @@ test('multipart upload streams bounded parts through signed SDK requests and com
  }finally{f.storage.close();}
 });
 
+test('real SDK uploads a five MiB byte buffer and Node stream through native fetch without Expect', {timeout:10000},async t=>{
+ const size=5*1024**2,body=Buffer.alloc(size,90),expected=createHash('sha256').update(body).digest('hex'),received:Array<{bytes:number;sha256:string;expect:string|undefined;length:string|undefined}>=[];
+ const server=createServer(async(request,response)=>{const hash=createHash('sha256');let bytes=0;for await(const chunk of request){bytes+=chunk.length;hash.update(chunk);}received.push({bytes,sha256:hash.digest('hex'),expect:request.headers.expect,length:request.headers['content-length']});response.writeHead(200,{ETag:'"native-part"'});response.end();});
+ await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));const address=server.address();assert(address&&typeof address!=='string');
+ const f=fixture(async({url,init})=>{if(url.searchParams.has('uploads'))return created();try{return await fetch(`http://127.0.0.1:${address.port}/sdk-upload`,init);}catch(error){const code=(error as {cause?:{code?:unknown}}).cause?.code;t.diagnostic('Native fetch rejection: '+(typeof code==='string'&&/^[A-Z_]+$/.test(code)?code:'unclassified'));throw error;}},{partBytes:size,maxObjectBytes:size,timeoutMs:5000});
+ try{for(const input of[body,Readable.from([body.subarray(0,1024**2),body.subarray(1024**2)])]){const upload=await multipart(f,size),part=await f.storage.uploadPart({upload,partNumber:1,body:input});assert.equal(part.bytes,size);assert.equal(part.etag,'"native-part"');}assert.deepEqual(received,[{bytes:size,sha256:expected,expect:undefined,length:String(size)},{bytes:size,sha256:expected,expect:undefined,length:String(size)}]);assert.equal(f.calls.length,4);}finally{f.storage.close();server.closeAllConnections();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));}
+});
+
 test('multipart rejects foreign handles, invalid part lengths and incomplete/duplicate/out-of-order receipts before I/O',async()=>{
  const f=fixture(()=>created());try{const upload=await multipart(f);for(const candidate of [{...upload,scope:'wrong'},{...upload,versionId:'../escape'},{...upload,partBytes:8}])await assert.rejects(f.storage.uploadPart({upload:candidate,partNumber:1,body:Buffer.from('abcd')}),isCode('STORAGE_INPUT_INVALID'));await assert.rejects(f.storage.uploadPart({upload,partNumber:2,body:Buffer.from('abc')}),isCode('STORAGE_INPUT_INVALID'));for(const parts of [[],[{partNumber:1,etag:'a',bytes:4}],[{partNumber:1,etag:'a',bytes:4},{partNumber:1,etag:'b',bytes:2}]])await assert.rejects(f.storage.completeMultipart({upload,parts}),isCode('STORAGE_INPUT_INVALID'));assert.equal(f.calls.length,1);}finally{f.storage.close();}
+});
+
+test('multipart replies accept only the exact request key or its single leading slash representation',async()=>{
+ for(const prefix of['','/']){const f=fixture(({url})=>url.searchParams.has('uploads')?xml(`<InitiateMultipartUploadResult><Bucket>${config.volumeId}</Bucket><Key>${prefix+key}</Key><UploadId>known-upload</UploadId></InitiateMultipartUploadResult>`):xml(`<CompleteMultipartUploadResult><Bucket>${config.volumeId}</Bucket><Key>${prefix+key}</Key><ETag>"stored"</ETag></CompleteMultipartUploadResult>`));try{const upload=await multipart(f);assert.equal(upload.versionId,versionId);assert.equal((await f.storage.completeMultipart({upload,parts:[{partNumber:1,bytes:4,etag:'"part1"'},{partNumber:2,bytes:2,etag:'"part2"'}]})).versionId,versionId);assert(f.calls.every(call=>call.url.pathname==='/'+config.volumeId+'/'+key));}finally{f.storage.close();}}
+ for(const [returnedKey,returnedBucket]of [['//'+key,config.volumeId],['/'+config.volumeId+'/'+key,config.volumeId],[key.replace(versionId,otherId),config.volumeId],[encodeURIComponent(key),config.volumeId],[key+'/',config.volumeId],[key,'foreign-bucket']]){
+  for(const phase of['create','complete']){const f=fixture(({url})=>url.searchParams.has('uploads')?(phase==='create'?xml(`<InitiateMultipartUploadResult><Bucket>${returnedBucket}</Bucket><Key>${returnedKey}</Key><UploadId>known-upload</UploadId></InitiateMultipartUploadResult>`):created()):xml(`<CompleteMultipartUploadResult><Bucket>${returnedBucket}</Bucket><Key>${returnedKey}</Key><ETag>"stored"</ETag></CompleteMultipartUploadResult>`));try{if(phase==='create')await assert.rejects(multipart(f),isCode('STORAGE_PROVIDER_UNCERTAIN'));else{const upload=await multipart(f);await assert.rejects(f.storage.completeMultipart({upload,parts:[{partNumber:1,bytes:4,etag:'"part1"'},{partNumber:2,bytes:2,etag:'"part2"'}]}),isCode('STORAGE_PROVIDER_UNCERTAIN'));}assert.equal(f.calls.length,phase==='create'?1:2);}finally{f.storage.close();}}
+ }
 });
 
 test('gateway Node streams stay streaming and multipart descriptors are validated without accepting authority from extra fields',async()=>{
@@ -82,6 +105,18 @@ test('abort targets one persisted multipart upload; write failures never auto-re
 test('streamed GET validates full object size and exact range metadata before exposing bytes',async()=>{
  const f=fixture(({init})=>{const range=new Headers(init.headers).get('range');return range?object('cde',206,{'Content-Range':'bytes 2-4/6'}):object('abcdef');});
  try{const whole=await f.storage.get({versionId,maxBytes:6});assert.equal(whole.bytes,6);assert.equal(whole.totalBytes,6);assert.equal(whole.range,null);assert.equal((await buffer(whole.stream)).toString(),'abcdef');const part=await f.storage.get({versionId,range:{start:2,end:4},maxBytes:3});assert.equal(part.totalBytes,6);assert.deepEqual(part.range,{start:2,end:4});assert.equal((await buffer(part.stream)).toString(),'cde');await assert.rejects(f.storage.get({versionId,range:{start:0,end:6},maxBytes:3}),isCode('STORAGE_INPUT_INVALID'));assert.equal(f.calls.length,2);}finally{f.storage.close();}
+});
+
+test('real SDK GetObject query streams more than five MiB through native fetch within the object limit', {timeout:10000},async()=>{
+ const size=5*1024**2+64*1024,body=Buffer.alloc(size,37),expected=createHash('sha256').update(body).digest('hex');let requests=0;
+ const server=createServer((_request,response)=>{requests++;response.writeHead(200,{'Content-Length':String(size),ETag:'"large-get"','Content-Type':'application/octet-stream'});response.end(body);});
+ await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));const address=server.address();assert(address&&typeof address!=='string');
+ const f=fixture(({url,init})=>{assert.equal(url.searchParams.get('x-id'),'GetObject');assert.equal(init.method,'GET');return fetch(`http://127.0.0.1:${address.port}/sdk-download`,init);},{maxObjectBytes:size,timeoutMs:5000});
+ try{const result=await f.storage.get({versionId,maxBytes:size,ifMatch:'"large-get"'}),received=await buffer(result.stream);assert.equal(result.bytes,size);assert.equal(received.length,size);assert.equal(createHash('sha256').update(received).digest('hex'),expected);assert.equal(requests,1);assert.equal(f.calls.length,1);}finally{f.storage.close();server.closeAllConnections();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));}
+});
+
+test('large configured objects do not raise the one MiB cap for metadata or failed object responses',async()=>{
+ for(const kind of['listing','failed-get']){const f=fixture(()=>new Response('x'.repeat(1024*1024+1),{status:kind==='listing'?200:500,headers:{'Content-Type':'application/xml','Content-Length':String(1024*1024+1)}}),{maxObjectBytes:10*1024**2});try{await assert.rejects(kind==='listing'?f.storage.list():f.storage.get({versionId,maxBytes:5*1024**2}),isCode('STORAGE_RESPONSE_TOO_LARGE'));assert.equal(f.calls.length,1);}finally{f.storage.close();}}
 });
 
 test('ignored or malformed Range cannot masquerade as successful seeking',async()=>{

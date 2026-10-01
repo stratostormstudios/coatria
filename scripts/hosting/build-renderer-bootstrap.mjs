@@ -4,7 +4,7 @@ import {resolve} from 'node:path';
 import {nodeImage} from './build-runpod-bootstrap.mjs';
 import {BLENDER_RELEASE} from './renderer-bootstrap-runtime.mjs';
 
-export const RENDERER_SOURCE_PATHS=Object.freeze(['scripts/vfx/worker.mts','scripts/vfx/renderer.mts','scripts/vfx/manifest.mts','scripts/vfx/publish.mts','scripts/vfx/product_turntable.py','src/lib/studio-execution-protocol.ts','src/lib/studio-protocol.ts','public/downloads/agent-worker.mjs','scripts/hosting/run-renderer-host.mts','scripts/hosting/renderer-bootstrap-runtime.mjs','scripts/hosting/renderer-runtime/package.json','scripts/hosting/renderer-runtime/package-lock.json']);
+export const RENDERER_SOURCE_PATHS=Object.freeze(['scripts/vfx/worker.mts','scripts/vfx/renderer.mts','scripts/vfx/manifest.mts','scripts/vfx/publish.mts','scripts/vfx/product_turntable.py','src/lib/studio-execution-protocol.ts','src/lib/studio-protocol.ts','src/lib/studio-generated-protocol.ts','public/downloads/agent-worker.mjs','scripts/hosting/run-renderer-host.mts','scripts/hosting/renderer-bootstrap-runtime.mjs','scripts/hosting/renderer-runtime/package.json','scripts/hosting/renderer-runtime/package-lock.json']);
 /** Local artifact creation only: never provisions a Pod or embeds a credential. */
 export async function buildRendererBootstrap({commit,root}){
  if(!/^[a-f0-9]{40}$/.test(commit))throw Error('A full reviewed commit SHA is required.');

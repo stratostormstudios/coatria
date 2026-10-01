@@ -54,3 +54,13 @@ test('scanner catches staged-only values, binary-looking files, nested environme
     const target=relative(tmpdir(),temporary);assert.ok(target&&!target.startsWith('..')&&!isAbsolute(target));await rm(temporary,{recursive:true,force:true});
   }
 });
+
+test('storage access capabilities are detected without revealing values',()=>{
+  for(const prefix of ['stg','sct']){
+    const token=prefix+'_'+'aB09_-'.repeat(7)+'x';
+    assert.deepEqual(detectSecrets(token),['Coatria scoped token']);
+    assert.deepEqual(detectSecrets(prefix+'_'+'x'.repeat(39)),[]);
+    assert.deepEqual(detectSecrets('example'+token),[]);
+    assert.ok(!JSON.stringify(detectSecrets(token)).includes(token));
+  }
+});

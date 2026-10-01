@@ -84,6 +84,36 @@ test('managed hosting has tenant isolation, encrypted enrollment, live authority
     await assert.rejects(writer.query('SELECT user_id FROM memberships WHERE company_id=$1 AND user_id=$2 FOR UPDATE NOWAIT',[company,operator]),(error:any)=>error.code==='55P03');
    }finally{await writer.query('ROLLBACK');await reader.query('ROLLBACK');writer.release();reader.release();await query('UPDATE studio_host_credentials SET enrolled_by=$3 WHERE company_id=$1 AND agent_id=$2',[company,i2.agentId,owner]);}
   });
+  await t.test('timestamp-only host and distinct agent sponsor revocation blocks issued tokens and cached run authority',async()=>{
+   const {authenticateAgent}=await import('../src/lib/integrations'),{authorizeRunTool}=await import('../src/lib/agent-runs');
+   for(const sponsor of [operator,owner]){
+    // In the second case the agent sponsor differs from both host sponsor and enroller.
+    if(sponsor===owner)await query('UPDATE studio_host_credentials SET enrolled_by=$3 WHERE company_id=$1 AND agent_id=$2',[company,i2.agentId,operator]);
+    const run=(await call(`companies/${company}/conversations/commons/runs`,'POST',{clientId:randomUUID(),agentId:i2.agentId,prompt:'Synthetic revocation boundary check.'},'owner',201)).run;
+    const lease=await call('agent/runs/claim','POST',{workerId:'host-revocation-fixture',claimId:randomUUID()},'agent');assert.equal(lease.run.id,run.id);
+    const identity=await authenticateAgent(new Request(origin+'/api/agent/identity',{headers:{Authorization:'Bearer '+agentToken}}));
+    const before=(await query('SELECT token_hash,version FROM studio_host_credentials WHERE company_id=$1 AND agent_id=$2',[company,i2.agentId])).rows[0];
+    try{
+     await query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[company,sponsor]);
+     assert.equal((await query('SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2',[company,sponsor])).rows[0].role,sponsor===owner?'owner':'admin');
+     await call('agent/identity','GET',undefined,'agent',401);
+     await assert.rejects(transaction(client=>authorizeRunTool(client,identity,run.id,lease.leaseToken)),{status:401});
+     if(sponsor===operator){await call('host/identity','GET',undefined,'host',401);await call('host/credentials','POST',{supervisorId:supervisor,leaseEpoch:epoch},'host',401);}
+     else{await call('host/identity','GET',undefined,'host');const withheld=await pull();assert.equal(withheld.credentials.length,0);assert(withheld.unavailable.some((row:any)=>row.agentId===i2.agentId&&row.reason==='sponsor_unavailable'));}
+     assert.deepEqual((await query('SELECT token_hash,version FROM studio_host_credentials WHERE company_id=$1 AND agent_id=$2',[company,i2.agentId])).rows[0],before);
+    }finally{await query('UPDATE memberships SET access_revoked_at=NULL WHERE company_id=$1 AND user_id=$2',[company,sponsor]);await query('UPDATE studio_host_credentials SET enrolled_by=$3 WHERE company_id=$1 AND agent_id=$2',[company,i2.agentId,owner]);}
+    await call(`agent/runs/${run.id}/complete`,'POST',{leaseToken:lease.leaseToken,clientId:randomUUID(),result:'Revocation test restored its fixture authority.'},'agent');
+   }
+  });
+  await t.test('credential delivery rechecks sponsor revocation committed after initial host authentication',async()=>{
+   const pool=database(),original=pool.query,execute=original.bind(pool) as (sql:string,values:unknown[])=>Promise<unknown>;let revoked=false;
+   const leaseBefore=(await query('SELECT lease_expires_at FROM studio_managed_hosts WHERE id=$1',[h1.id])).rows[0];
+   // Interpose only the scheduling boundary; every authority query and mutation uses the actual database.
+   pool.query=(async(sql:string,values:unknown[])=>{const result=await execute(sql,values);if(!revoked&&sql.startsWith('SELECT h.* FROM studio_managed_hosts h JOIN memberships')){revoked=true;await execute('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[company,operator]);}return result;}) as typeof pool.query;
+   try{const result=await call('host/credentials','POST',{supervisorId:supervisor,leaseEpoch:epoch},'host',403);assert(revoked);assert.equal(result.code,'HOST_SPONSOR_UNAVAILABLE');}
+   finally{pool.query=original;await query('UPDATE memberships SET access_revoked_at=NULL WHERE company_id=$1 AND user_id=$2',[company,operator]);}
+   assert.deepEqual((await query('SELECT lease_expires_at FROM studio_managed_hosts WHERE id=$1',[h1.id])).rows[0],leaseBefore);
+  });
   await t.test('ciphertext or AAD tampering and unavailable keys fail closed without renewing the lease',async()=>{
    const row=(await query('SELECT * FROM studio_host_credentials WHERE company_id=$1 AND agent_id=$2',[company,i2.agentId])).rows[0],lease=(await query('SELECT lease_expires_at FROM studio_managed_hosts WHERE id=$1',[h1.id])).rows[0].lease_expires_at;
    await query('UPDATE studio_host_credentials SET version=version+1 WHERE company_id=$1 AND agent_id=$2',[company,i2.agentId]);const changed=await call('host/credentials','POST',{supervisorId:supervisor,leaseEpoch:epoch},'host',503);assert.equal(changed.code,'HOST_CREDENTIAL_INTEGRITY');assert.equal(+new Date((await query('SELECT lease_expires_at FROM studio_managed_hosts WHERE id=$1',[h1.id])).rows[0].lease_expires_at),+new Date(lease));await query('UPDATE studio_host_credentials SET version=$3 WHERE company_id=$1 AND agent_id=$2',[company,i2.agentId,row.version]);
@@ -109,6 +139,9 @@ test('managed hosting has tenant isolation, encrypted enrollment, live authority
   });
   await t.test('manual plugin rotation and pause override hosting, while re-enrollment requires a fresh exact revision',async()=>{
    let current=await currentInstall(i1.id);const rotated=await call(`companies/${company}/plugin-installations/${i1.id}/rotate`,'POST',{revision:current.revision,expiresInDays:30});manualAgentToken=rotated.token;const stale=(await pull()).unavailable.find((c:any)=>c.agentId===i1.agentId);assert.equal(stale.reason,'credential_rotated');agentToken=manualAgentToken;assert.equal((await call('agent/identity','GET',undefined,'agent')).agent.id,i1.agentId);
+   await query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[company,owner]);
+   try{await call('agent/identity','GET',undefined,'agent',401);}finally{await query('UPDATE memberships SET access_revoked_at=NULL WHERE company_id=$1 AND user_id=$2',[company,owner]);}
+   assert.equal((await call('agent/identity','GET',undefined,'agent')).agent.id,i1.agentId);
    current=await currentInstall(i2.id);await call(`companies/${company}/plugin-installations/${i2.id}`,'PATCH',{revision:current.revision,status:'paused'});assert((await pull()).unavailable.some((c:any)=>c.agentId===i2.agentId));current=await currentInstall(i2.id);await call(`companies/${company}/plugin-installations/${i2.id}`,'PATCH',{revision:current.revision,status:'active'});assert.equal((await pull()).credentials.length,0);
    current=await currentInstall(i2.id);const enrolled=await call(`${prefix}/${h1.id}/enroll`,'POST',{clientId:randomUUID(),revision:h1.revision,activateAgents:true,installations:[{installationId:i2.id,revision:current.revision}]},'owner',201);h1=enrolled.host;const bundle=await pull();assert.equal(bundle.credentials.length,1);agentToken=bundle.credentials[0].agentToken;await call('agent/identity','GET',undefined,'agent');
   });
@@ -124,6 +157,19 @@ test('managed hosting has tenant isolation, encrypted enrollment, live authority
    const current=await currentInstall(i2.id);h2=(await call(`${prefix}/${h2.id}/enroll`,'POST',{clientId:randomUUID(),revision:h2.revision,activateAgents:true,installations:[{installationId:i2.id,revision:current.revision}]},'operator',201)).host;
    // Release the alternate host's earlier empty lease for an explicit fixture takeover.
    await query("UPDATE studio_managed_hosts SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[h2.id]);const second=await pull('host2',randomUUID(),undefined);agentToken=second.credentials[0].agentToken;await call('agent/identity','GET',undefined,'agent');await query("UPDATE memberships SET role='member' WHERE company_id=$1 AND user_id=$2",[company,operator]);await call('agent/identity','GET',undefined,'agent',401);await query("UPDATE memberships SET role='admin' WHERE company_id=$1 AND user_id=$2",[company,operator]);
+  });
+  await t.test('distinct enroller timestamp revocation withholds credentials and rejects a cached active run',async()=>{
+   const {authenticateAgent}=await import('../src/lib/integrations'),{authorizeRunTool}=await import('../src/lib/agent-runs');
+   const run=(await call(`companies/${company}/conversations/commons/runs`,'POST',{clientId:randomUUID(),agentId:i2.agentId,prompt:'Synthetic enroller revocation check.'},'owner',201)).run;
+   const lease=await call('agent/runs/claim','POST',{workerId:'enroller-revocation-fixture',claimId:randomUUID()},'agent');assert.equal(lease.run.id,run.id);
+   const identity=await authenticateAgent(new Request(origin+'/api/agent/identity',{headers:{Authorization:'Bearer '+agentToken}}));
+   const host=(await query('SELECT lease_owner,lease_epoch FROM studio_managed_hosts WHERE id=$1',[h2.id])).rows[0];
+   try{
+    await query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[company,operator]);
+    await call('host/identity','GET',undefined,'host2');const withheld=await pull('host2',host.lease_owner,host.lease_epoch);assert.deepEqual(withheld.credentials,[]);assert.deepEqual(withheld.unavailable,[{agentId:i2.agentId,reason:'sponsor_unavailable'}]);
+    await call('agent/identity','GET',undefined,'agent',401);await assert.rejects(transaction(client=>authorizeRunTool(client,identity,run.id,lease.leaseToken)),{status:401});
+   }finally{await query('UPDATE memberships SET access_revoked_at=NULL WHERE company_id=$1 AND user_id=$2',[company,operator]);}
+   await call(`agent/runs/${run.id}/complete`,'POST',{leaseToken:lease.leaseToken,clientId:randomUUID(),result:'Enroller fixture authority restored.'},'agent');
   });
   await t.test('revocation works without the encryption key, invalidates issued tokens and preserves a manually rotated identity',async()=>{
    const run=(await call(`companies/${company}/conversations/commons/runs`,'POST',{clientId:randomUUID(),agentId:i2.agentId,prompt:'Synthetic queued run before host revocation.'},'owner',201)).run;

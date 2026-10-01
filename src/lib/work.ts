@@ -32,6 +32,10 @@ export async function workRoute(request: Request, parts: string[], method: strin
   }
   if(parts[2]==='tasks') {
     const member=await requireMembership(request,companyId);
+    if(parts.length===4&&method==='GET') {
+      const task=(await query(`SELECT ${taskColumns} FROM tasks WHERE id=$1 AND company_id=$2`,[id(parts[3]),companyId])).rows[0];
+      if(!task)fail(404,'Task not found.');return json({task});
+    }
     if(parts.length===3&&method==='POST') {
       await rateLimit(`tasks-create:${member.userId}`,100,3600);const data=await body(request,taskInput);
       const task=await memberMutation(member,false,async client=>{
@@ -49,6 +53,9 @@ export async function workRoute(request: Request, parts: string[], method: strin
         current.author_ids=(await client.query('SELECT user_id FROM task_authors WHERE task_id=$1 UNION SELECT a.created_by AS user_id FROM contributions c JOIN agents a ON a.id=c.agent_id WHERE c.task_id=$1',[taskId])).rows.map(row=>row.user_id);
         const admin=['owner','admin'].includes(member.role);const worker=current.assignee_id===member.userId||current.created_by===member.userId;
         if(!admin&&!worker)fail(403,'Only the task creator, assignee, or an administrator can change this task.');
+        // Compare after acquiring the row lock: a return, edit and resubmission
+        // must not inherit a decision made against an earlier contribution.
+        if(current.revision!==data.expectedRevision)fail(409,'This task changed. Reload it and review the current contribution before trying again.','TASK_REVISION_CONFLICT');
         if(current.status==='done')fail(409,'Accepted contributions are immutable. Create a follow-up task for further work.');
         if(data.assigneeId!==undefined) {
           if(data.assigneeId!==current.assignee_id&&!admin&&current.created_by!==member.userId)fail(403,'Only the task creator or an administrator can reassign work.');
@@ -57,7 +64,7 @@ export async function workRoute(request: Request, parts: string[], method: strin
         const next=data.status||current.status;
         if(next==='done') {
           if(!canApproveTask(current,member.userId,member.role))fail(403,'Acceptance requires a different administrator who did not perform or sponsor this work. Submit the task for review first.');
-          if(Object.keys(data).some(key=>!['status','reviewNote'].includes(key)))fail(400,'Review acceptance cannot change the submitted work.');
+          if(Object.keys(data).some(key=>!['expectedRevision','status','reviewNote'].includes(key)))fail(400,'Review acceptance cannot change the submitted work.');
         }
         if(data.reviewNote!==undefined&&data.reviewNote!==current.review_note&&!admin)fail(403,'Only an administrator can leave the review decision.');
         const isSubmission=next==='review'&&current.status!=='review';
@@ -65,9 +72,10 @@ export async function workRoute(request: Request, parts: string[], method: strin
         if(current.status==='review'&&next==='review'&&((data.title!==undefined&&data.title!==current.title)||(data.description!==undefined&&data.description!==current.description)||(data.submissionUrl!==undefined&&data.submissionUrl!==current.submission_url)||(data.assigneeId!==undefined&&data.assigneeId!==current.assignee_id)))fail(409,'Move the task back to doing before changing a submitted contribution.');
         if(isSubmission||(data.submissionUrl!==undefined&&data.submissionUrl!==current.submission_url))await client.query('INSERT INTO task_authors(task_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[taskId,member.userId]);
         const row=(await client.query(`UPDATE tasks SET title=$3,description=$4,status=$5,assignee_id=$6,submission_url=$7,review_note=$8,
-          submitted_by=$9,submitted_agent_id=$10,approved_by=$11,approved_agent_id=NULL,machine_review_id=NULL,submission_summary=$12,agent_run_id=NULL,revision=revision+1,updated_at=now() WHERE id=$1 AND company_id=$2 RETURNING ${taskColumns}`,
+          submitted_by=$9,submitted_agent_id=$10,approved_by=$11,approved_agent_id=NULL,machine_review_id=NULL,submission_summary=$12,agent_run_id=NULL,revision=revision+1,updated_at=now() WHERE id=$1 AND company_id=$2 AND revision=$13 RETURNING ${taskColumns}`,
           [taskId,companyId,data.title??current.title,data.description??current.description,next,data.assigneeId===undefined?current.assignee_id:data.assigneeId,data.submissionUrl===undefined?current.submission_url:data.submissionUrl,data.reviewNote??current.review_note,
-          isSubmission?member.userId:current.submitted_by,isSubmission?null:current.submitted_agent_id,next==='done'?member.userId:null,isSubmission?'':current.submission_summary])).rows[0];
+          isSubmission?member.userId:current.submitted_by,isSubmission?null:current.submitted_agent_id,next==='done'?member.userId:null,isSubmission?'':current.submission_summary,data.expectedRevision])).rows[0];
+        if(!row)fail(409,'This task changed. Reload it and review the current contribution before trying again.','TASK_REVISION_CONFLICT');
         await recordActivity(client,member,next==='done'?'task.accepted':isSubmission?'task.submitted':'task.updated',`${member.user.name} ${next==='done'?'accepted':isSubmission?'submitted':'updated'} “${row.title}”.`);return row;
       });return json({task});
     }

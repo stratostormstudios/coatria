@@ -6,9 +6,10 @@ import {database,query,transaction} from '../src/lib/db';
 import {memberMutation} from '../src/lib/company';
 import type {Membership} from '../src/lib/auth';
 import {hashToken} from '../src/lib/security';
-import {createStudioHostProvisionPlan,startStudioHostProvision,stopStudioHostProvision,getStudioHostProvision,listStudioHostProvisions,reconcileStudioHostProvision,studioCpuPreset,studioCpuReadiness} from '../src/lib/studio-host-provisioning';
+import {createStudioHostProvisionPlan,startStudioHostProvision,stopStudioHostProvision,getStudioHostProvision,listStudioHostProvisions,reconcileStudioHostProvision,reconcileStudioHostProvisions,studioCpuPreset,studioCpuReadiness} from '../src/lib/studio-host-provisioning';
 import {studioHostProvisionPlanInput,studioHostProvisionStartInput} from '../src/lib/studio-host-provisioning-protocol';
 import {buildStudioBootstrap} from '../scripts/hosting/build-studio-bootstrap.mjs';
+import {selectCompanyRuntimeConfiguration,revokeCompanyRuntimeConfiguration,companyRuntimeHash} from '../src/lib/company-runtime-config';
 
 test('public CPU approval accepts only exact bounded plans and explicit charges and activation',()=>{
  const request={clientId:randomUUID(),durationMinutes:20,installations:[{installationId:randomUUID(),revision:1}]};assert(studioHostProvisionPlanInput.safeParse(request).success);
@@ -43,7 +44,7 @@ test('managed CPU saga uses actual transactions and fake Runpod transport withou
   const calls:Array<{method:string;path:string}>=[],pods:any[]=[],requests:any[]=[];let loseCreate=false,emptyDiscovery=false,malformedDiscovery=false,price=.03,stopConfirmed=true,endpointEnabled=true,healthAllowed=true;
   const transport:typeof fetch=async(url,init)=>{const u=new URL(String(url)),method=init?.method??'GET';assert.equal(init?.redirect,'error');assert(init?.signal);calls.push({method,path:u.pathname});if(u.origin==='https://api.runpod.ai'){assert.equal(u.pathname,'/v2/fixture-endpoint/health');assert.equal((init?.headers as any).Authorization,'Bearer '+(mode==='broker'?'fixture-lifecycle-secret':'fixture-restricted-inference-secret'));return Response.json(healthAllowed?{workers:{idle:0,ready:0}}:{error:'Unauthorized'},{status:healthAllowed?200:401});}assert.equal(u.origin,'https://api.runpod.io');assert.equal((init?.headers as any).Authorization,'Bearer fixture-lifecycle-secret');
    if(u.pathname==='/v2/serverless/fixture-endpoint')return Response.json({id:'fixture-endpoint',workers:{min:0,max:endpointEnabled?1:0}});
-   if(u.pathname==='/v2/catalog/cpus/cpu3c')return Response.json({id:'cpu3c',ramGbPerVcpu:2,vcpu:{min:2,max:32},price:{securePerVcpu:price}});
+   if(u.pathname==='/v2/catalog/cpus/cpu3c'){assert.equal(u.search,'?include=AVAILABILITY&product=POD&vcpuCount=2');return Response.json({id:'cpu3c',ramGbPerVcpu:2,vcpu:{min:2,max:32},price:{securePerVcpu:price},availability:'HIGH',dataCenters:[{id:'US-NC-2',availability:'HIGH'}]});}
    if(u.pathname.startsWith('/v2/network-volumes/'))return Response.json({id:u.pathname.split('/').at(-1),dataCenter:'US-NC-2',size:10,type:'HIGH_PERFORMANCE'});
    if(u.pathname==='/v2/pods'&&method==='POST'){const body=JSON.parse(String(init?.body));requests.push(body);assert.equal(body.image,release.image);assert.equal(body.args,release.args);if(mode==='broker'){assert.equal(body.env.COATRIA_INFERENCE_MODE,'coatria_broker_v1');assert.equal(Object.keys(body.env).length,12);assert(!Object.hasOwn(body.env,'RUNPOD_API_KEY'));assert(!Object.hasOwn(body.env,'COATRIA_RUNPOD_ENDPOINT_ID'));assert(!JSON.stringify(body).includes('fixture-restricted-inference-secret'));assert(!JSON.stringify(body).includes('fixture-endpoint'));}else{assert.equal(body.env.RUNPOD_API_KEY,'fixture-restricted-inference-secret');assert.equal(body.env.COATRIA_RUNPOD_ENDPOINT_ID,'fixture-endpoint');assert.equal(Object.keys(body.env).length,13);assert(!Object.hasOwn(body.env,'COATRIA_INFERENCE_MODE'));}assert(!JSON.stringify(body).includes('fixture-lifecycle-secret'));assert.equal(body.startSsh,false);assert.equal(body.startJupyter,false);assert.deepEqual(body.ports,[]);assert(!('globalNetworking'in body));const pod={...body,id:'pod-'+randomUUID(),cpu:{...body.cpu,memory:4},dataCenterId:body.dataCenterIds[0],status:'PROVISIONING',actions:['stop']};pods.push(pod);if(loseCreate)throw Error('Synthetic lost response; credentials must not be logged.');return Response.json(pod,{status:201});}
    if(u.pathname==='/v2/pods')return Response.json(malformedDiscovery?{pods:[]}:{pods:emptyDiscovery?[]:pods,pagination:{hasNextPage:false,nextCursor:null}});
@@ -52,7 +53,163 @@ test('managed CPU saga uses actual transactions and fake Runpod transport withou
   return{transport,calls,pods,requests,setEndpoint:(v:boolean)=>endpointEnabled=v,setHealth:(v:boolean)=>healthAllowed=v,setLoseCreate:(v:boolean)=>loseCreate=v,setEmpty:(v:boolean)=>emptyDiscovery=v,setMalformed:(v:boolean)=>malformedDiscovery=v,setPrice:(v:number)=>price=v,setStopConfirmed:(v:boolean)=>stopConfirmed=v,creates:()=>calls.filter(c=>c.method==='POST'&&c.path==='/v2/pods').length,stops:()=>calls.filter(c=>c.method==='POST'&&c.path.endsWith('/action')).length};
  }
  const reconcile=(provisionId:string,provider:ReturnType<typeof transportFixture>)=>reconcileStudioHostProvision(provisionId,{fetch:provider.transport});
+ async function selectRuntime(a:Awaited<ReturnType<typeof fixture>>,expectedRevision=0,expiresAt=new Date(Date.now()+3600000).toISOString()){
+  await query("INSERT INTO platform_operator_grants(user_id,expires_at) VALUES($1,clock_timestamp()+interval '2 hours') ON CONFLICT DO NOTHING",[a.userId]);
+  const preset={...presetBase,companies:companies.filter(c=>c.companyId===a.companyId)};
+  return transaction(db=>selectCompanyRuntimeConfiguration(db,a.member,'managed_agent',{clientId:randomUUID(),expectedRevision,phase:'service',expiresAt,preset,configurationHash:companyRuntimeHash(preset)}));
+ }
+ const revokeRuntime=(a:Awaited<ReturnType<typeof fixture>>,expectedRevision=1)=>transaction(db=>revokeCompanyRuntimeConfiguration(db,a.member,'managed_agent',{clientId:randomUUID(),expectedRevision}));
  try{
+  for(const point of ['before_reconcile','catalog','create','running_read'] as const)await t.test(`timestamp-only owner revocation at ${point} fences paid CPU lifecycle`,async()=>{
+   const a=await fixture(),p=(await a.plan()).provision,cloud=transportFixture();await a.start(p);
+   const revoke=()=>query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[a.companyId,a.userId]);
+   if(point==='before_reconcile')await revoke();
+   if(point==='running_read'){await reconcile(p.id,cloud);cloud.pods[0].status='RUNNING';}
+   let revoked=point==='before_reconcile';const transport:typeof fetch=async(url,init)=>{const response=await cloud.transport(url,init),path=new URL(String(url)).pathname;
+    if(!revoked&&(point==='catalog'&&path.includes('/catalog/')||point==='create'&&path==='/v2/pods'&&init?.method==='POST'||point==='running_read'&&path==='/v2/pods/'+cloud.pods[0].id)){revoked=true;await revoke();}return response;};
+   await reconcileStudioHostProvision(p.id,{fetch:transport});assert(revoked);
+   assert.equal((await query('SELECT role FROM memberships WHERE company_id=$1 AND user_id=$2',[a.companyId,a.userId])).rows[0].role,'owner');
+   const submitted=point==='create'||point==='running_read';assert.equal(cloud.creates(),submitted?1:0);assert.equal(cloud.stops(),submitted?1:0);
+   if(submitted)await reconcile(p.id,cloud);const current=await a.get(p.id);assert.equal(current.phase,'stopped');assert.equal(current.billingVerified,false);
+   if(!submitted){assert.equal(current.submittedAt,null);assert.equal(current.podId,null);}
+   assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE provision_id=$1',[p.id])).rows[0].count),1);assert(cloud.calls.every(call=>call.method!=='DELETE'));
+  });
+  await t.test('timestamp-only separate agent sponsor revocation during preflight blocks paid CPU submission',async()=>{
+   const a=await fixture(),sponsor=await fixture();await query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'admin')",[a.companyId,sponsor.userId]);
+   await query('UPDATE agents SET created_by=$2 WHERE id=$1',[a.installation.agentId,sponsor.userId]);const p=(await a.plan()).provision,cloud=transportFixture();await a.start(p);let revoked=false;
+   const transport:typeof fetch=async(url,init)=>{const response=await cloud.transport(url,init);if(!revoked&&String(url).includes('/catalog/')){revoked=true;await query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[a.companyId,sponsor.userId]);}return response;};
+   await reconcileStudioHostProvision(p.id,{fetch:transport});const current=await a.get(p.id);assert.equal(cloud.creates(),0);assert.equal(current.phase,'stopped');assert.equal(current.submittedAt,null);assert.equal(current.podId,null);
+   assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE provision_id=$1',[p.id])).rows[0].count),1);
+  });
+  for(const point of ['catalog','create'] as const)await t.test(`timestamp-only separate host administrator revocation at ${point} fences paid CPU lifecycle`,async()=>{
+   const a=await fixture(),administrator=await fixture();await query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'admin')",[a.companyId,administrator.userId]);
+   const member={...administrator.member,companyId:a.companyId,role:'admin'} as Membership,p=(await a.plan()).provision,cloud=transportFixture();
+   await memberMutation(member,true,client=>startStudioHostProvision(client,member,p.id,{clientId:randomUUID(),revision:p.revision,planHash:p.planHash,acknowledgeCharges:true,activateAgents:true}));let revoked=false;
+   const transport:typeof fetch=async(url,init)=>{const response=await cloud.transport(url,init),path=new URL(String(url)).pathname;
+    if(!revoked&&(point==='catalog'&&path.includes('/catalog/')||point==='create'&&path==='/v2/pods'&&init?.method==='POST')){revoked=true;await query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[a.companyId,administrator.userId]);}return response;};
+   await reconcileStudioHostProvision(p.id,{fetch:transport});assert.equal(cloud.creates(),point==='create'?1:0);assert.equal(cloud.stops(),point==='create'?1:0);
+   if(point==='create')await reconcile(p.id,cloud);assert.equal((await a.get(p.id)).phase,'stopped');assert.equal((await query('SELECT access_revoked_at FROM memberships WHERE company_id=$1 AND user_id=$2',[a.companyId,a.userId])).rows[0].access_revoked_at,null);
+  });
+  await t.test('timestamp-only original requester revocation during preflight blocks CPU despite a separate live host administrator and agent sponsor',async()=>{
+   const a=await fixture(),administrator=await fixture();await query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'admin')",[a.companyId,administrator.userId]);await query('UPDATE agents SET created_by=$2 WHERE id=$1',[a.installation.agentId,administrator.userId]);
+   const member={...administrator.member,companyId:a.companyId,role:'admin'} as Membership,p=(await a.plan()).provision,cloud=transportFixture();
+   await memberMutation(member,true,client=>startStudioHostProvision(client,member,p.id,{clientId:randomUUID(),revision:p.revision,planHash:p.planHash,acknowledgeCharges:true,activateAgents:true}));let revoked=false;
+   const transport:typeof fetch=async(url,init)=>{const response=await cloud.transport(url,init);if(!revoked&&String(url).includes('/catalog/')){revoked=true;await query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[a.companyId,a.userId]);}return response;};
+   await reconcileStudioHostProvision(p.id,{fetch:transport});const current=await a.get(p.id);assert.equal(cloud.creates(),0);assert.equal(current.phase,'stopped');assert.equal(current.submittedAt,null);assert.equal(current.podId,null);
+   assert.equal((await query('SELECT access_revoked_at FROM memberships WHERE company_id=$1 AND user_id=$2',[a.companyId,administrator.userId])).rows[0].access_revoked_at,null);assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE provision_id=$1',[p.id])).rows[0].count),1);
+  });
+  await t.test('real PostgreSQL final CPU admission waits for a distinct sponsor membership and observes committed timestamp revocation',{skip:emulate},async()=>{
+   const a=await fixture(),sponsor=await fixture();await query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'admin')",[a.companyId,sponsor.userId]);await query('UPDATE agents SET created_by=$2 WHERE id=$1',[a.installation.agentId,sponsor.userId]);
+   const p=(await a.plan()).provision,cloud=transportFixture();await a.start(p);const holder=await database().connect(),holderPid=(await holder.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;let held=false,pending:Promise<unknown>|undefined;
+   try{
+    const transport:typeof fetch=async(url,init)=>{const response=await cloud.transport(url,init);if(!held&&String(url).includes('/catalog/')){held=true;await holder.query('BEGIN');await holder.query('SELECT user_id FROM memberships WHERE company_id=$1 AND user_id=$2 FOR UPDATE',[a.companyId,sponsor.userId]);}return response;};
+    pending=reconcileStudioHostProvision(p.id,{fetch:transport});let blocked=false;
+    for(let i=0;i<200;i++){const waits=await query('SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid))',[holderPid]);if(waits.rowCount){blocked=true;break;}await new Promise(resolve=>setTimeout(resolve,10));}
+    assert(blocked,'The final admission must actually block on the distinct sponsor membership row.');assert.equal(cloud.creates(),0);
+    await holder.query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[a.companyId,sponsor.userId]);await holder.query('COMMIT');await pending;
+    const current=await a.get(p.id);assert.equal(cloud.creates(),0);assert.equal(current.phase,'stopped');assert.equal(current.submittedAt,null);assert.equal(current.podId,null);assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE provision_id=$1',[p.id])).rows[0].count),1);
+   }finally{await holder.query('ROLLBACK');holder.release();await pending;}
+  });
+  await t.test('CPU deadline ending after binding reads cannot cross the atomic paid submission fence',async()=>{
+   const a=await fixture(),p=(await a.plan()).provision,cloud=transportFixture();await a.start(p);let expired=false;
+   const guarded:typeof transaction=async fn=>transaction(client=>{const wrapped=Object.create(client);wrapped.query=async(text:string,values?:unknown[])=>{const result=await client.query(text,values);if(!expired&&text.startsWith('SELECT count(*)::int AS count FROM studio_host_credentials')){expired=true;await client.query("UPDATE studio_host_provisions SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1",[p.id]);}return result;};return fn(wrapped);});
+   await reconcileStudioHostProvision(p.id,{fetch:cloud.transport,transaction:guarded});assert(expired);assert.equal(cloud.creates(),0);const current=await a.get(p.id);assert.equal(current.phase,'stopped');assert.equal(current.submittedAt,null);assert.equal(current.podId,null);
+  });
+  await t.test('oversized complete CPU body fails before submission and is never retried after environment repair',async()=>{
+   const a=await fixture(),plan=(await a.plan()).provision,cloud=transportFixture();await a.start(plan);
+   assert(studioCpuPreset(a.companyId).bootstrapArgs.length<100000);
+   const original=process.env.COATRIA_MANAGED_RUNPOD_INFERENCE_KEY,largeValue='synthetic-private-inference-'+'é'.repeat(52000);let healthChecks=0;
+   process.env.COATRIA_MANAGED_RUNPOD_INFERENCE_KEY=largeValue;
+   const transport:typeof fetch=async(url,init)=>{
+    if(new URL(String(url)).origin==='https://api.runpod.ai'){
+     healthChecks++;assert.equal(init?.method,'GET');assert.equal((init?.headers as Record<string,string>).Authorization,'Bearer '+largeValue);
+     return Response.json({workers:{idle:0,ready:0}});
+    }
+    return cloud.transport(url,init);
+   };
+   try{
+    await reconcileStudioHostProvision(plan.id,{fetch:transport});assert.equal(healthChecks,1);assert.equal(cloud.creates(),0);
+    const failed=await a.get(plan.id);assert.equal(failed.phase,'failed');assert.equal(failed.errorCode,'CPU_CREATE_REQUEST_TOO_LARGE');
+    assert.equal(failed.submittedAt,null);assert.equal(failed.podId,null);assert(!JSON.stringify(failed).includes('synthetic-private-inference-'));
+    const stored=(await query('SELECT submitted_at,pod_id FROM studio_host_provisions WHERE id=$1',[plan.id])).rows[0];assert.deepEqual(stored,{submitted_at:null,pod_id:null});
+    assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE company_id=$1',[a.companyId])).rows[0].count),1);
+   }finally{process.env.COATRIA_MANAGED_RUNPOD_INFERENCE_KEY=original;}
+   const calls=cloud.calls.length;assert.deepEqual(await reconcile(plan.id,cloud),{skipped:true});assert.equal(cloud.calls.length,calls);assert.equal(cloud.creates(),0);
+  });
+  await t.test('durable CPU configuration pins the selection epoch, works without env presets, and rejects prior approvals',async()=>{
+   const a=await fixture(),legacy=(await a.plan()).provision,selected=await selectRuntime(a);
+   await assert.rejects(a.start(legacy),{code:'CPU_PRESET_CHANGED'});delete process.env.COATRIA_MANAGED_CPU_PRESET;
+   const plan=(await a.plan({...a.planInput,clientId:randomUUID()})).provision;
+   assert.equal(plan.readiness.ready,true);assert.equal(plan.plan.runtimeConfiguration?.configurationId,selected.configuration.configurationId);assert.equal(plan.plan.runtimeConfiguration?.selectionRevision,1);
+   await selectRuntime(a,1);await assert.rejects(a.start(plan),{code:'CPU_PRESET_CHANGED'});
+   assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE company_id=$1',[a.companyId])).rows[0].count),0);
+   updatePreset();await revokeRuntime(a,2);await assert.rejects(a.plan({...a.planInput,clientId:randomUUID()}),{code:'CPU_CONFIGURATION_INACTIVE'});
+   assert.equal((await transaction(db=>listStudioHostProvisions(db,a.companyId))).readiness.ready,false);
+  });
+  await t.test('company runtime deadline must cover the requested CPU lifetime',async()=>{
+   const a=await fixture();await selectRuntime(a,0,new Date(Date.now()+600000).toISOString());
+   await assert.rejects(a.plan(),{code:'CPU_CONFIGURATION_EXPIRED'});
+   assert.equal(Number((await query('SELECT count(*) FROM studio_host_provisions WHERE company_id=$1',[a.companyId])).rows[0].count),0);
+  });
+  await t.test('revocation during catalog preflight fences CPU submission without refunding approval',async()=>{
+   const a=await fixture();await selectRuntime(a);const plan=(await a.plan()).provision;await a.start(plan);const cloud=transportFixture();let revoked=false;
+   const transport:typeof fetch=async(url,init)=>{const response=await cloud.transport(url,init);if(!revoked&&String(url).includes('/catalog/')){revoked=true;await revokeRuntime(a);}return response;};
+   await reconcileStudioHostProvision(plan.id,{fetch:transport});assert.equal(cloud.creates(),0);assert.equal((await a.get(plan.id)).phase,'stopped');
+   assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE company_id=$1',[a.companyId])).rows[0].count),1);
+  });
+  await t.test('revocation during provider create stops the same CPU before returning and cleanup survives removed configuration',async()=>{
+   const a=await fixture();await selectRuntime(a);const plan=(await a.plan()).provision;await a.start(plan);const cloud=transportFixture();
+   const transport:typeof fetch=async(url,init)=>{const response=await cloud.transport(url,init);if(String(url).endsWith('/pods')&&init?.method==='POST')await revokeRuntime(a);return response;};
+   await reconcileStudioHostProvision(plan.id,{fetch:transport});assert.equal(cloud.creates(),1);assert.equal(cloud.stops(),1);assert.equal((await a.get(plan.id)).phase,'stopping');
+   delete process.env.COATRIA_MANAGED_CPU_PRESET;await reconcile(plan.id,cloud);assert.equal((await a.get(plan.id)).phase,'stopped');assert.equal((await a.get(plan.id)).readiness.ready,false);
+   assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE company_id=$1',[a.companyId])).rows[0].count),1);updatePreset();
+  });
+  await t.test('registry revocation durably prioritizes its pinned CPU over older healthy polls and replays without new revisions',async()=>{
+   const healthy=await fixture(),cloud=transportFixture(),healthyPlan=(await healthy.plan()).provision;await healthy.start(healthyPlan);await reconcile(healthyPlan.id,cloud);
+   const target=await fixture();await selectRuntime(target);const plan=(await target.plan()).provision;await target.start(plan);await reconcile(plan.id,cloud);
+   await query("UPDATE studio_host_provisions SET last_reconciled_at='2000-01-01T00:00:00Z' WHERE id=$1",[healthyPlan.id]);
+   const before=(await target.get(plan.id)),input={clientId:randomUUID(),expectedRevision:1};
+   await transaction(db=>revokeCompanyRuntimeConfiguration(db,target.member,'managed_agent',input));
+   const requested=await target.get(plan.id);assert(requested.stopRequestedAt);assert.equal(requested.revision,before.revision+1);assert.equal(requested.phase,before.phase);
+   assert.equal((await healthy.get(healthyPlan.id)).stopRequestedAt,null);assert.equal(cloud.stops(),0);
+   assert.equal((await transaction(db=>revokeCompanyRuntimeConfiguration(db,target.member,'managed_agent',input))).replayed,true);assert.equal((await target.get(plan.id)).revision,requested.revision);
+   const batch=await reconcileStudioHostProvisions(1,{fetch:cloud.transport});assert.equal((batch.results[0] as any).provision.id,plan.id);assert.equal(cloud.stops(),1);
+   assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE company_id=$1',[target.companyId])).rows[0].count),1);
+   await query("UPDATE studio_host_provisions SET phase='stopped' WHERE id=ANY($1::uuid[])",[[healthyPlan.id,plan.id]]);
+  });
+  await t.test('fleet batches prioritize shutdowns and rotate deterministically within each priority class',async()=>{
+   const provider=transportFixture(),ids:string[]=[];provider.setStopConfirmed(false);
+   const batch=async()=>{const result=await reconcileStudioHostProvisions(2,{fetch:provider.transport});return result.results.map(item=>{assert('provision'in item&&item.provision&&typeof item.provision==='object');assert('id'in item.provision&&typeof item.provision.id==='string');return item.provision.id;});};
+   try{
+    for(let i=0;i<9;i++){const a=await fixture(),p=(await a.plan()).provision;await a.start(p);await reconcile(p.id,provider);ids.push(p.id);provider.pods.at(-1).status='RUNNING';}
+    const [healthyA,healthyB,healthyOld,expiredUnseen,expiredOld,requestedA,requestedB,leased,terminal]=ids;
+    // Ordinary polling has older work than the shutdowns, including two never
+    // polled rows. A timestamp tie deliberately exercises the UUID tie-breaker.
+    await query("UPDATE studio_host_provisions SET phase='running',last_reconciled_at='2000-01-01T00:00:00Z' WHERE id=ANY($1::uuid[])",[ids]);
+    await query('UPDATE studio_host_provisions SET last_reconciled_at=NULL WHERE id=ANY($1::uuid[])',[[healthyA,healthyB,expiredUnseen]]);
+    await query("UPDATE studio_host_provisions SET expires_at=clock_timestamp()-interval '1 minute' WHERE id=ANY($1::uuid[])",[[expiredUnseen,expiredOld]]);
+    await query("UPDATE studio_host_provisions SET last_reconciled_at='2020-01-01T00:00:00Z' WHERE id=$1",[expiredOld]);
+    await query("UPDATE studio_host_provisions SET stop_requested_at=clock_timestamp(),last_reconciled_at='2021-01-01T00:00:00Z' WHERE id=ANY($1::uuid[])",[[requestedA,requestedB]]);
+    await query("UPDATE studio_host_provisions SET stop_requested_at=clock_timestamp(),lease_id=$2,lease_expires_at=clock_timestamp()+interval '1 hour' WHERE id=$1",[leased,randomUUID()]);
+    await query("UPDATE studio_host_provisions SET phase='stopped',stop_requested_at=clock_timestamp() WHERE id=$1",[terminal]);
+    provider.calls.length=0;
+    assert.deepEqual(await batch(),[expiredUnseen,expiredOld]);
+    assert.deepEqual(await batch(),[requestedA,requestedB].sort());
+    // Unconfirmed stops remain eligible, but one failing stop cannot monopolize
+    // the batch ahead of other pending shutdowns with an older reconciliation.
+    assert.deepEqual(await batch(),[expiredUnseen,expiredOld]);
+    assert.equal(provider.stops(),6);
+    assert(provider.calls.every(call=>!call.path.includes(provider.pods[7].id)&&!call.path.includes(provider.pods[8].id)));
+    const urgent=[expiredUnseen,expiredOld,requestedA,requestedB];
+    for(const pod of provider.pods)if(urgent.some(id=>pod.name==='coatria-cpu-'+id))pod.status='EXITED';
+    assert.deepEqual(await batch(),[requestedA,requestedB].sort());
+    assert.deepEqual(await batch(),[expiredUnseen,expiredOld]);
+    assert.deepEqual(await batch(),[healthyA,healthyB].sort());
+    assert.equal((await batch())[0],healthyOld);
+    assert.equal(provider.creates(),0,'Batch polling never submits another paid create');
+    assert.equal(provider.stops(),6,'Terminal readback and healthy polls issue no stop');
+   }finally{await query("UPDATE studio_host_provisions SET phase='stopped',lease_id=NULL,lease_expires_at=NULL WHERE id=ANY($1::uuid[])",[ids]);}
+  });
   await t.test('review is tenant scoped, idempotent, non-billing and explicit about configuration readiness',async()=>{
    const a=await fixture(),b=await fixture(),p=await a.plan();assert.equal(p.provision.phase,'planned');assert.equal(p.provision.readiness.ready,true);assert.equal((await a.plan()).provision.id,p.provision.id);assert.equal((await a.plan()).replayed,true);await assert.rejects(a.plan({...a.planInput,durationMinutes:30}),/already used/);await assert.rejects(transaction(c=>getStudioHostProvision(c,b.companyId,p.provision.id)),/not found/);
    await query("UPDATE memberships SET role='member' WHERE company_id=$1 AND user_id=$2",[a.companyId,a.userId]);await assert.rejects(a.plan(),/administrator|permission|access/i);await query("UPDATE memberships SET role='owner' WHERE company_id=$1 AND user_id=$2",[a.companyId,a.userId]);
@@ -84,11 +241,62 @@ test('managed CPU saga uses actual transactions and fake Runpod transport withou
   await t.test('catalog price, ciphertext tampering and missing keys fail closed before any paid create',async()=>{
    for(const fault of ['price','ciphertext','key'] as const){const a=await fixture(),p=(await a.plan()).provision;await a.start(p);const provider=transportFixture();if(fault==='price')provider.setPrice(.04);if(fault==='ciphertext')await query("UPDATE studio_host_provisions SET sealed_host_token=jsonb_set(sealed_host_token,'{ciphertext}','\"AAAA\"') WHERE id=$1",[p.id]);const ring=process.env.COATRIA_HOSTING_KEYRING;if(fault==='key')delete process.env.COATRIA_HOSTING_KEYRING;await reconcile(p.id,provider);process.env.COATRIA_HOSTING_KEYRING=ring;assert.equal(provider.creates(),0);assert.equal((await a.get(p.id)).phase,'failed');}
   });
+  await t.test('regional CPU capacity fails before submission and never turns into an automatic retry',async()=>{
+   for(const [capacity,expected] of [[{},'CPU_CAPACITY_UNCONFIRMED'],[{availability:'NONE'},'CPU_CAPACITY_UNAVAILABLE'],[{availability:'HIGH',dataCenters:[{id:'US-TX-3',availability:'HIGH'}]},'CPU_CAPACITY_UNAVAILABLE'],[{availability:'HIGH',dataCenters:[{id:'US-NC-2',availability:'NONE'}]},'CPU_CAPACITY_UNAVAILABLE']] as const){
+    const a=await fixture(),p=(await a.plan()).provision;await a.start(p);const provider=transportFixture(),original=provider.transport;
+    provider.transport=async(url,init)=>{const response=await original(url,init);if(new URL(String(url)).pathname!=='/v2/catalog/cpus/cpu3c')return response;const value=await response.json();delete value.availability;delete value.dataCenters;return Response.json({...value,...capacity});};
+    await reconcile(p.id,provider);const current=await a.get(p.id);assert.equal(current.phase,'failed');assert.equal(current.errorCode,expected);assert.equal(current.submittedAt,null);assert.equal(provider.creates(),0);assert(provider.calls.every(c=>c.method==='GET'));
+    provider.transport=original;await reconcile(p.id,provider);assert.equal(provider.creates(),0);assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE provision_id=$1',[p.id])).rows[0].count),1);
+   }
+  });
+  await t.test('HTTP create rejection logs only safe metadata and preserves one submitted attempt across empty discovery',async()=>{
+   for(const status of [400,422,503]){
+    const a=await fixture(),p=(await a.plan()).provision;await a.start(p);const provider=transportFixture(),original=provider.transport,events:string[]=[],warn=t.mock.method(console,'warn',(value:string)=>events.push(value));let creates=0;
+    provider.transport=async(url,init)=>{if(new URL(String(url)).pathname==='/v2/pods'&&init?.method==='POST'){creates++;return new Response('fixture-lifecycle-secret PRIVATE_PROVIDER_BODY',{status,headers:{'x-request-id':'11111111-1111-4111-8111-111111111111','x-error-code':'PRIVATE_PROVIDER_BODY'}});}return original(url,init);};
+    try{await reconcile(p.id,provider);const current=await a.get(p.id);assert.equal(current.phase,'uncertain');assert.equal(current.errorCode,'CPU_PROVIDER_UNCONFIRMED');assert(current.submittedAt);for(let i=0;i<3;i++)await reconcile(p.id,provider);assert.equal(creates,1);assert.equal((await a.get(p.id)).errorCode,'CPU_CREATE_UNCERTAIN');assert.equal(events.length,1);assert.equal(JSON.parse(events[0]).httpStatus,status);assert.equal(JSON.parse(events[0]).provisionId,p.id);assert.doesNotMatch(events.join(''),/fixture-lifecycle|PRIVATE_PROVIDER_BODY/);assert.doesNotMatch(JSON.stringify(await a.get(p.id)),/httpStatus|requestId|PRIVATE_PROVIDER_BODY/);}finally{warn.mock.restore();}
+   }
+  });
   await t.test('a late enrollment rejection rolls back the new host, token rotation and reservation',async()=>{
    const a=await fixture();await query("UPDATE agents SET invocation_access='none' WHERE id=$1",[a.installation.agentId]);const p=(await a.plan()).provision,before=(await query('SELECT token_hash FROM agents WHERE id=$1',[a.installation.agentId])).rows[0].token_hash;await assert.rejects(a.start(p),/invocation is disabled/);assert.equal(Number((await query('SELECT count(*) FROM studio_managed_hosts WHERE company_id=$1',[a.companyId])).rows[0].count),0);assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE company_id=$1',[a.companyId])).rows[0].count),0);assert.equal((await query('SELECT token_hash FROM agents WHERE id=$1',[a.installation.agentId])).rows[0].token_hash,before);assert.equal((await a.get(p.id)).phase,'planned');
   });
   await t.test('a disabled inference endpoint or restricted-key health denial never starts CPU or enables GPU',async()=>{
    for(const disabled of [true,false]){const a=await fixture(),p=(await a.plan()).provision;await a.start(p);const provider=transportFixture();if(disabled)provider.setEndpoint(false);else provider.setHealth(false);await reconcile(p.id,provider);const current=await a.get(p.id);assert.equal(current.phase,'failed');assert.equal(current.errorCode,'CPU_INFERENCE_UNAVAILABLE');assert.equal(current.readiness.ready,false);assert.equal(provider.creates(),0);assert(provider.calls.every(c=>c.method==='GET'));}
+  });
+  await t.test('failed preflight cleanup revokes only its unused enrollment without any provider effect or refunded reservation',async()=>{
+   const a=await fixture();await selectRuntime(a);const p=(await a.plan()).provision;await a.start(p);const provider=transportFixture();provider.setEndpoint(false);await reconcile(p.id,provider);
+   const failed=await a.get(p.id),original=(await query('SELECT plan,plan_hash,preset,error_code,sealed_host_token FROM studio_host_provisions WHERE id=$1',[p.id])).rows[0];
+   const issued=(await query('SELECT token_hash FROM agents WHERE id=$1',[a.installation.agentId])).rows[0].token_hash;
+   const reservations=(await query('SELECT * FROM studio_host_compute_reservations WHERE company_id=$1',[a.companyId])).rows;
+   const stop={clientId:randomUUID(),revision:failed.revision};await memberMutation(a.member,true,c=>stopStudioHostProvision(c,a.member,p.id,stop));
+   // Cleanup must not depend on live configuration, a surviving sponsor, or
+   // encryption/provider credentials. No external request is allowed at all.
+   await revokeRuntime(a);await query("UPDATE memberships SET role='member' WHERE company_id=$1 AND user_id=$2",[a.companyId,a.userId]);
+   const ring=process.env.COATRIA_HOSTING_KEYRING,key=process.env.MANAGED_RUNPOD_API_KEY;delete process.env.COATRIA_HOSTING_KEYRING;delete process.env.MANAGED_RUNPOD_API_KEY;
+   let calls=0;try{
+    const result=await reconcileStudioHostProvision(p.id,{fetch:async()=>{calls++;throw Error('Cleanup may not access the provider');}});assert.equal(result.skipped,false);
+    const closed=await a.get(p.id);assert.equal(closed.phase,'stopped');assert.equal(closed.computeStopped,true);assert.equal(closed.credentialsRevoked,true);assert.equal(closed.errorCode,'CPU_INFERENCE_UNAVAILABLE');assert.equal(closed.submittedAt,null);assert.equal(closed.podId,null);assert.equal(closed.billingVerified,false);
+    const host=(await query('SELECT status,lease_owner,lease_expires_at FROM studio_managed_hosts WHERE id=$1',[closed.hostId])).rows[0];assert.equal(host.status,'revoked');assert.equal(host.lease_owner,null);assert(host.lease_expires_at);
+    assert.equal(Number((await query('SELECT count(*) FROM studio_host_credentials WHERE host_id=$1 AND revoked_at IS NULL',[closed.hostId])).rows[0].count),0);
+    const agent=(await query('SELECT status,token_hash FROM agents WHERE id=$1',[a.installation.agentId])).rows[0];assert.equal(agent.status,'paused');assert.notEqual(agent.token_hash,issued);
+    assert.deepEqual((await query('SELECT plan,plan_hash,preset,error_code,sealed_host_token FROM studio_host_provisions WHERE id=$1',[p.id])).rows[0],original);assert.deepEqual((await query('SELECT * FROM studio_host_compute_reservations WHERE company_id=$1',[a.companyId])).rows,reservations);
+    assert.equal(Number((await query("SELECT count(*) FROM activity WHERE company_id=$1 AND kind='studio.host_failed_cleanup'",[a.companyId])).rows[0].count),1);
+    const revision=closed.revision;assert.equal((await reconcileStudioHostProvision(p.id,{fetch:async()=>{calls++;throw Error();}})).skipped,true);assert.equal((await a.get(p.id)).revision,revision);assert.equal(calls,0);assert.equal(provider.creates(),0);
+   }finally{process.env.COATRIA_HOSTING_KEYRING=ring;process.env.MANAGED_RUNPOD_API_KEY=key;updatePreset();}
+  });
+  await t.test('failed cleanup requires explicit stop and both submission fences; active leases remain fenced',async()=>{
+   const a=await fixture(),p=(await a.plan()).provision;await a.start(p);const provider=transportFixture();provider.setEndpoint(false);await reconcile(p.id,provider);const before=await a.get(p.id);provider.calls.length=0;
+   assert.equal((await reconcile(p.id,provider)).skipped,true);assert.equal((await a.get(p.id)).phase,'failed');assert.equal(provider.calls.length,0);
+   await memberMutation(a.member,true,c=>stopStudioHostProvision(c,a.member,p.id,{clientId:randomUUID(),revision:before.revision}));
+   for(const patch of ["submitted_at=clock_timestamp()","pod_id='unconfirmed-fixture-pod'","lease_id='11111111-1111-4111-8111-111111111111',lease_expires_at=clock_timestamp()+interval '1 hour'"]){
+    await query('UPDATE studio_host_provisions SET '+patch+' WHERE id=$1',[p.id]);assert.equal((await reconcile(p.id,provider)).skipped,true);assert.equal((await a.get(p.id)).computeStopped,false);assert.equal((await a.get(p.id)).credentialsRevoked,false);assert.equal(provider.calls.length,0);
+    await query('UPDATE studio_host_provisions SET submitted_at=NULL,pod_id=NULL,lease_id=NULL,lease_expires_at=NULL WHERE id=$1',[p.id]);
+   }
+   // An agent whose credential was rotated elsewhere must not be paused by
+   // cleanup of this old host. Only the old encrypted binding is revoked.
+   const replacement=hashToken('separately-rotated-fixture');await query('UPDATE agents SET token_hash=$2 WHERE id=$1',[a.installation.agentId,replacement]);
+   await query("UPDATE studio_host_provisions SET last_reconciled_at='1900-01-01T00:00:00Z' WHERE id=$1",[p.id]);
+   const batch=await reconcileStudioHostProvisions(1,{fetch:provider.transport});assert.equal((batch.results[0] as any).provision.id,p.id);assert.equal((await a.get(p.id)).phase,'stopped');assert.equal(provider.calls.length,0);
+   const agent=(await query('SELECT status,token_hash FROM agents WHERE id=$1',[a.installation.agentId])).rows[0];assert.equal(agent.status,'active');assert.equal(agent.token_hash,replacement);
   });
   await t.test('mutated origin, model, provider destination, budget or token environment is rejected before further control',async()=>{
    const a=await fixture(),p=(await a.plan()).provision;await a.start(p);const provider=transportFixture();await reconcile(p.id,provider);const env=structuredClone(provider.pods[0].env);
@@ -131,5 +339,5 @@ test('managed CPU saga uses actual transactions and fake Runpod transport withou
   await t.test('real PostgreSQL concurrent approvals and reconcilers create exactly one host, reservation and Pod',{skip:emulate},async()=>{
    const a=await fixture(),p=(await a.plan()).provision,input={clientId:randomUUID(),revision:p.revision,planHash:p.planHash,acknowledgeCharges:true,activateAgents:true};const approvals=await Promise.all([a.start(p,input),a.start(p,input)]);assert.equal(approvals.filter(r=>r.replayed).length,1);assert.equal(approvals[0].provision.hostId,approvals[1].provision.hostId);assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE company_id=$1',[a.companyId])).rows[0].count),1);const provider=transportFixture();await Promise.all([reconcile(p.id,provider),reconcile(p.id,provider),reconcile(p.id,provider)]);assert.equal(provider.creates(),1);assert.equal((await a.get(p.id)).phase,'provisioning');
   });
- }finally{await query('DELETE FROM companies WHERE id=ANY($1::uuid[])',[companies.map(c=>c.companyId)]);await query('DELETE FROM users WHERE id=ANY($1::uuid[])',[owners]);await database().end();delete(globalThis as any).coatriaPool;await stop?.();for(const[key,value]of Object.entries(before)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
+ }finally{await transaction(async db=>{await db.query("SET LOCAL session_replication_role='replica'");const ids=companies.map(c=>c.companyId);await db.query('DELETE FROM company_runtime_requests WHERE company_id=ANY($1::uuid[])',[ids]);await db.query('DELETE FROM company_runtime_selections WHERE company_id=ANY($1::uuid[])',[ids]);await db.query('DELETE FROM company_runtime_configurations WHERE company_id=ANY($1::uuid[])',[ids]);await db.query('DELETE FROM platform_operator_grants WHERE user_id=ANY($1::uuid[])',[owners]);});await query('DELETE FROM companies WHERE id=ANY($1::uuid[])',[companies.map(c=>c.companyId)]);await query('DELETE FROM users WHERE id=ANY($1::uuid[])',[owners]);await database().end();delete(globalThis as any).coatriaPool;await stop?.();for(const[key,value]of Object.entries(before)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
 });

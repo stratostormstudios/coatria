@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {readFile,readdir,mkdir,writeFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
+import {Pool} from 'pg';
 import {database,query,transaction} from '../src/lib/db';
 import {hashToken,errorResponse} from '../src/lib/security';
 import {setupStudio,createStudioProject,studioProjectDetail} from '../src/lib/studio';
@@ -28,9 +29,15 @@ test('client delivery API documentation exposes distinct account auth, package c
 });
 
 const emulate=process.env.COATRIA_TEST_EMULATOR==='1',connection=process.env.COATRIA_INTEGRATION_DATABASE_URL;
-test('authenticated client delivery enforces immutable package, external authority and truthful receipts',{skip:!emulate&&!connection,timeout:240000},async t=>{
- process.env.DATABASE_URL=connection;process.env.DATABASE_POOL_MAX='4';let stop:(()=>Promise<void>)|undefined;
- if(emulate){const{PGlite}=await import('@electric-sql/pglite');const{PGLiteSocketServer}=await import('@electric-sql/pglite-socket');const db=await PGlite.create();for(const file of(await readdir('database')).filter(file=>/^\d.*\.sql$/.test(file)).sort())await db.exec(await readFile('database/'+file,'utf8'));const server=new PGLiteSocketServer({db,host:'127.0.0.1',port:0,maxConnections:4});await server.start();process.env.DATABASE_URL=`postgresql://postgres:postgres@${server.getServerConn()}/postgres`;stop=async()=>{await server.stop();await db.close();};}
+const localPostgres=(()=>{try{return !!connection&&['localhost','127.0.0.1'].includes(new URL(connection).hostname);}catch{return false;}})();
+test('authenticated client delivery enforces immutable package, external authority and truthful receipts',{skip:!emulate&&!localPostgres,timeout:240000},async t=>{
+ const environment={...process.env},dbName='coatria_legacy_client_'+randomUUID().replaceAll('-','');let stop:(()=>Promise<void>)|undefined,control:Pool|undefined,created=false;
+ process.env.DATABASE_POOL_MAX='4';
+ const migrations=(await readdir('database')).filter(file=>/^\d.*\.sql$/.test(file)).sort(),beforeUpgrade=migrations.filter(file=>Number(file.split('_')[0])<=31);
+ // Populate real legacy packages at 031, then upgrade in the first test. A
+ // dedicated database keeps that migration boundary isolated from other suites.
+ if(emulate){const{PGlite}=await import('@electric-sql/pglite');const{PGLiteSocketServer}=await import('@electric-sql/pglite-socket');const db=await PGlite.create();for(const file of beforeUpgrade)await db.exec(await readFile('database/'+file,'utf8'));const server=new PGLiteSocketServer({db,host:'127.0.0.1',port:0,maxConnections:4});await server.start();process.env.DATABASE_URL=`postgresql://postgres:postgres@${server.getServerConn()}/postgres`;stop=async()=>{await server.stop();await db.close();};}
+ else{control=new Pool({connectionString:connection,max:1});await control.query('CREATE DATABASE '+dbName);created=true;const url=new URL(connection!);url.pathname='/'+dbName;process.env.DATABASE_URL=url.href;for(const file of beforeUpgrade)await query(await readFile('database/'+file,'utf8'));}
  const companies=[randomUUID(),randomUUID()],users={owner:randomUUID(),reviewer:randomUUID(),member:randomUUID(),client:randomUUID(),otherClient:randomUUID(),foreignOwner:randomUUID()},sessions=Object.fromEntries(Object.keys(users).map(key=>[key,randomUUID()])),origin='http://localhost:4180';
  const spec={width:128,height:128,fpsNumerator:24000,fpsDenominator:1001,format:'exr',colorSpace:'Linear Rec.709'},profile=EXECUTION_BUILTIN_PROFILES[0];let connectorId='',signed=0,onSign:(()=>Promise<void>)|null=null;
  const provider:StudioMediaProvider={signUpload:async()=>{throw new Error('No uploads in this synthetic authority fixture.');},read:async()=>null,signRead:async()=>{signed++;if(onSign)await onSign();return 'https://fixture.invalid/private?temporary=signature';}};
@@ -62,6 +69,34 @@ test('authenticated client delivery enforces immutable package, external authori
   await query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'owner'),($1,$3,'admin'),($1,$4,'member'),($5,$6,'owner')",[companies[0],users.owner,users.reviewer,users.member,companies[1],users.foreignOwner]);
   await transaction(client=>setupStudio(client,{companyId:companies[0],userId:users.owner},{clientId:randomUUID(),templateId:'vfx-boutique',templateVersion:1,revision:0,assignments:[]}));
   connectorId=(await query("INSERT INTO studio_execution_connectors(company_id,name,token_hash,profiles,created_by,expires_at) VALUES($1,'Synthetic portal fixture',$2,$3,$4,now()+interval '1 day') RETURNING id",[companies[0],hashToken(randomUUID()),JSON.stringify([profile]),users.owner])).rows[0].id;
+  await t.test('migration 032 preserves populated v1 packages, file foreign keys and exact client receipt replays',async()=>{
+   assert.equal((await query("SELECT count(*)::int count FROM information_schema.columns WHERE table_schema='public' AND table_name='studio_client_delivery_files' AND column_name='media_file_id'")).rows[0].count,0);
+   const p=await fresh(),shareInput={clientId:randomUUID(),expiresAt:new Date(Date.now()+3600000).toISOString()},s=(await share(p,shareInput)).share;
+   const opening={clientId:randomUUID()},accessInput={clientId:randomUUID()},responseInput={clientId:randomUUID(),revision:1,decision:'acknowledged',note:'Synthetic exact-package acknowledgement recorded before schema upgrade.'};
+   const opened=await call(clientPath(s)+'/open','POST',opening,'client'),access=await call(clientPath(s)+`/files/${p.files[0].fileId}/access`,'POST',accessInput,'client'),acknowledged=await call(clientPath(s)+'/responses','POST',responseInput,'client',201);
+   const persisted=async()=>({
+    grants:(await query('SELECT * FROM studio_client_deliveries WHERE id=$1',[s.id])).rows,
+    files:(await query('SELECT company_id,project_id,share_id,file_id,artifact_id FROM studio_client_delivery_files WHERE share_id=$1 ORDER BY file_id',[s.id])).rows,
+    receipts:(await query('SELECT * FROM studio_client_delivery_receipts WHERE share_id=$1 ORDER BY id',[s.id])).rows,
+    requests:(await query('SELECT * FROM studio_client_delivery_requests WHERE company_id=$1 ORDER BY actor_user_id,client_id',[companies[0]])).rows,
+    deliveries:(await query('SELECT * FROM studio_deliveries WHERE project_id=$1 ORDER BY id',[p.projectId])).rows,
+   });
+   const before=await persisted(),manifestBefore=await request(clientPath(s)+'/manifest','GET',undefined,'client'),manifestText=await manifestBefore.text();
+   assert.equal(before.grants[0].package_snapshot.schemaVersion,1);assert.equal(before.receipts.length,3);assert.equal(hashToken(manifestText),s.packageSha256);
+   const upgrade=migrations.find(file=>file.startsWith('032_'));assert(upgrade,'Migration 032 must be present');
+   const upgradeSql=await readFile('database/'+upgrade,'utf8');await transaction(client=>client.query(upgradeSql));
+   assert.deepEqual(await persisted(),before,'Upgrade must preserve existing package snapshots, delivery manifests, receipts and idempotency records exactly');
+   const mapped=(await query('SELECT file_id,media_file_id,storage_version_id,storage_sha256,storage_bytes,storage_content_type,storage_name,review_id FROM studio_client_delivery_files WHERE share_id=$1 ORDER BY file_id',[s.id])).rows;
+   assert.deepEqual(mapped,p.files.map(file=>({file_id:file.fileId,media_file_id:file.fileId,storage_version_id:null,storage_sha256:null,storage_bytes:null,storage_content_type:null,storage_name:null,review_id:null})).sort((a,b)=>a.file_id.localeCompare(b.file_id)));
+   await assert.rejects(()=>transaction(client=>client.query('INSERT INTO studio_client_delivery_files(company_id,project_id,share_id,file_id,artifact_id) VALUES($1,$2,$3,$4,$5)',[companies[0],p.projectId,s.id,randomUUID(),p.artifactId])),(error:Row)=>error.code==='23503'&&error.constraint==='studio_client_file_legacy_source');
+   const shareReplay=await share(p,shareInput,'owner',200),openReplay=await call(clientPath(s)+'/open','POST',opening,'client'),accessReplay=await call(clientPath(s)+`/files/${p.files[0].fileId}/access`,'POST',accessInput,'client'),responseReplay=await call(clientPath(s)+'/responses','POST',responseInput,'client');
+   assert.equal(shareReplay.replayed,true);assert.equal(shareReplay.share.id,s.id);
+   for(const [replay,original]of [[openReplay,opened],[accessReplay,access],[responseReplay,acknowledged]]){assert.equal(replay.replayed,true);assert.deepEqual(replay.receipt,original.receipt);}
+   assert.deepEqual(await persisted(),before,'Transport retries after upgrade must reuse the original logical receipts');
+   const after=await request(clientPath(s)+'/manifest','GET',undefined,'client');assert.equal(after.status,200);assert.equal(await after.text(),manifestText);assert.equal(after.headers.get('X-Content-SHA256'),s.packageSha256);
+   const signedBefore=signed,freshAccess=await call(clientPath(s)+`/files/${p.files[1].fileId}/access`,'POST',{clientId:randomUUID()},'client');assert.equal(signed,signedBefore+1);assert.equal(freshAccess.access.url,'https://fixture.invalid/private?temporary=signature');assert.equal(freshAccess.access.bytesReceivedByClient,'not_observed');assert.equal(freshAccess.receipt.fileId,p.files[1].fileId);
+   for(const file of migrations.filter(file=>Number(file.split('_')[0])>32))await query(await readFile('database/'+file,'utf8'));
+  });
   await t.test('creation requires an administrator, exact external account and independently completed handoff',async()=>{
    const p=await fresh();await share(p,{},'member',403);await share(p,{recipientUserId:users.owner},'owner',403);await share(p,{recipientUserId:users.member},'owner',403);await share(p,{recipientUserId:randomUUID()},'owner',403);await share(p,{revision:p.revision+1},'owner',409);await share(p,{expiresAt:new Date(Date.now()+31*86400000).toISOString()},'owner',400);
    await query("UPDATE tasks SET status='todo' WHERE id IN(SELECT task_id FROM studio_work_items WHERE project_id=$1 AND stage='delivery')",[p.projectId]);await share(p,{},'owner',409);await query("UPDATE tasks SET status='done' WHERE id IN(SELECT task_id FROM studio_work_items WHERE project_id=$1 AND stage='delivery')",[p.projectId]);
@@ -139,5 +174,5 @@ test('authenticated client delivery enforces immutable package, external authori
    }finally{await browser.close();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));}
   });
   assert(signed>0);
- }finally{try{await query('DELETE FROM companies WHERE id=ANY($1::uuid[])',[companies]);await query('DELETE FROM users WHERE id=ANY($1::uuid[])',[Object.values(users)]);}finally{await database().end();delete(globalThis as any).coatriaPool;await stop?.();}}
+ }finally{try{await query('DELETE FROM companies WHERE id=ANY($1::uuid[])',[companies]);await query('DELETE FROM users WHERE id=ANY($1::uuid[])',[Object.values(users)]);}finally{await database().end();delete(globalThis as {coatriaPool?:Pool}).coatriaPool;await stop?.();if(control){if(created)await control.query('DROP DATABASE '+dbName);await control.end();}for(const key of Object.keys(process.env))if(!(key in environment))delete process.env[key];Object.assign(process.env,environment);}}
 });

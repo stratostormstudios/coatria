@@ -48,6 +48,16 @@ export function summarizeRequests(records){
  const unexpectedErrors=records.filter(record=>!record.ok).length;
  return {requests:records.length,unexpectedErrors,errorRate:records.length?unexpectedErrors/records.length:0,p50Ms:quantile(.5),p95Ms:quantile(.95),maxMs:times.length?Math.round(times.at(-1)*100)/100:0,bytesReceived:records.reduce((sum,record)=>sum+record.bytes,0)};
 }
+export function summarizeRequestWindows(records){
+ const windowMs=5000,groups=new Map(),operations=new Set(['chat-write','chat-retry','task-write','presence-write','presence-read','conversation-events','workspace-read','session-read']);
+ for(const record of records){
+  if(!Number.isFinite(record.startedMs)||record.startedMs<0||!operations.has(record.operation))throw new Error('Load window diagnostics require monotonic start offsets and known measured operations.');
+  // Assign the unrounded request-start offset, never its completion time. A
+  // request draining after the admission deadline remains in its original window.
+  const index=Math.floor(record.startedMs/windowMs);if(!groups.has(index))groups.set(index,[]);groups.get(index).push(record);
+ }
+ return {windowMs,clock:'performance.now',assignment:'request-start',interval:'start-inclusive-end-exclusive',emptyWindowsOmitted:true,windows:[...groups.entries()].sort(([a],[b])=>a-b).map(([index,group])=>({startMs:index*windowMs,endMs:(index+1)*windowMs,...summarizeRequests(group),operations:[...new Set(group.map(record=>record.operation))].sort().map(operation=>({operation,...summarizeRequests(group.filter(record=>record.operation===operation))}))}))};
+}
 export async function readLoadResponse(response,expected){
  let bytes=0,value=null;
  try{
@@ -95,7 +105,7 @@ export async function runOfficeLoad(options){
  const outsider={id:randomUUID(),token:randomBytes(32).toString('base64url'),index:-1},expired={id:randomUUID(),token:randomBytes(32).toString('base64url'),index:-2};
  const identities=[...clients,outsider,expired],companyIds=[companyId,otherCompanyId],userIds=identities.map(client=>client.id);
  const origin=`http://127.0.0.1:${options.port}`,policy={...OFFICE_LOAD_POLICY,conversationPollMs:2000,conversationPageLimit:100,conversationPagesPerCycle:8};
- const records=[],checks=[],positions=new Map(),conversations=new Map(clients.map(client=>[client.id,{cursor:'0',messages:new Map(),events:0}])),conversationErrors=[];let socket,child,checkout,serverFailure=false,phase='check',warm=false,start=0,loadDuration=0;
+ const records=[],checks=[],positions=new Map(),conversations=new Map(clients.map(client=>[client.id,{cursor:'0',messages:new Map(),events:0}])),conversationErrors=[];let socket,child,checkout,serverFailure=false,phase='check',warm=false,start=0,loadDuration=0,loadStartedAt=0;
  const cleanup={verified:false,remainingUsers:identities.length,remainingCompanies:2};
  let fatal='';
  const check=(id,label,passed,detail)=>{checks.push({id,label,passed:Boolean(passed),detail});if(!passed)console.log(`Check failed: ${label}`);};
@@ -105,7 +115,7 @@ export async function runOfficeLoad(options){
    const response=await fetch(origin+path,{method,headers:{Origin:origin,Cookie:`coatria_session=${client.token}`,'X-Coatria-User':client.id,...(data?{'Content-Type':'application/json'}:{}),...extraHeaders},...(data?{body:JSON.stringify(data)}:{}),redirect:'error',signal:AbortSignal.timeout(10000)});
    ({status,bytes,value,ok}=await readLoadResponse(response,expected));
   }catch{/* Connection errors and timeouts receive status 0. */}
-  const record={operation,phase,ms:performance.now()-began,status,ok,bytes};if(warm)records.push(record);
+  const record={operation,phase,ms:performance.now()-began,status,ok,bytes,startedMs:phase==='load'?began-loadStartedAt:null};if(warm)records.push(record);
   return {status,value,ok:record.ok};
  }
  const path=resource=>`/api/companies/${companyId}/${resource}`;
@@ -178,7 +188,7 @@ export async function runOfficeLoad(options){
   const roster=await request(clients[0],path('presence'));check('initial-roster','Every connected client appears exactly once',roster.ok&&roster.value?.presence?.length===options.clients&&new Set(roster.value.presence.map(person=>person.userId)).size===options.clients,`Expected ${options.clients} presence entries.`);
   const bootstrapped=await Promise.all(clients.map(bootstrapConversation));check('conversation-bootstrap','Every session starts from a consistent history cursor',bootstrapped.every(Boolean),`${options.clients} independent history snapshots and event cursors were initialized before concurrent sends.`);
   console.log(`Measuring ${options.clients} sessions for ${options.duration} seconds; movement every 1 s, presence and conversation events every 2 s, workspace every 5 s…`);
-  phase='load';const began=performance.now(),until=began+options.duration*1000;
+  phase='load';const began=performance.now(),until=began+options.duration*1000;loadStartedAt=began;
   async function cadence(client,period,operation){
    await delay(period*client.index/options.clients);let count=0;
    while(performance.now()<until){const tick=performance.now();await operation(client,++count);await delay(Math.max(0,Math.min(until-performance.now(),period-(performance.now()-tick))));}
@@ -188,7 +198,7 @@ export async function runOfficeLoad(options){
   const collaboration=(async()=>{
    posted=await Promise.all(clients.map(client=>request(client,conversationPath('messages'),'POST',payload(client),'chat-write',201)));
    retried=await Promise.all(clients.map(client=>request(client,conversationPath('messages'),'POST',payload(client),'chat-retry',200)));
-   await Promise.all(clients.map(client=>request(client,path('tasks/'+client.taskId),'PATCH',{title:`Updated load task ${client.index}`,status:'doing'},'task-write')));
+   await Promise.all(clients.map(client=>request(client,path('tasks/'+client.taskId),'PATCH',{title:`Updated load task ${client.index}`,status:'doing',expectedRevision:1},'task-write')));
   })();
   await Promise.all([collaboration,...clients.flatMap(client=>[
    cadence(client,policy.movementMs,move),
@@ -250,6 +260,7 @@ export async function runOfficeLoad(options){
  const correctnessPassed=checks.every(check=>check.passed),performancePassed=meetsLoadBudget(summary);
  check('latency-budget','p95 request latency meets the 1,000 ms budget',performancePassed,`Measured p95 ${summary.p95Ms} ms; ${summary.unexpectedErrors} unexpected errors. Correctness is reported separately.`);
  const report={schemaVersion:1,kind:'coatria-connections',generatedAt:new Date().toISOString(),summary:{clients:options.clients,durationSeconds:Math.round(loadDuration*100)/100,...summary,requestsPerSecond:loadDuration?Math.round(summary.requests/loadDuration*100)/100:0,correctnessPassed,performancePassed,passed:correctnessPassed&&performancePassed,verificationRequests:records.length-measured.length,wallClockSeconds:start?Math.round((performance.now()-start)/1000):0},checks,environment:{applicationMode:options.mode,database:fixture.database,databaseVersion:fixture.version,isolated:true,origin,databasePoolMax:fixture.poolMax,...loadOfficeMetadata(),limitations:['Real Next HTTP requests with separate authenticated sessions; no browser rendering, assets, WebRTC or network geography are measured.',fixture.database==='PGlite'?'PGlite is a single-connection PostgreSQL emulator. These results do not establish production PostgreSQL concurrency, Vercel capacity or worldwide scale.':'An isolated local PostgreSQL service measures real database concurrency. It does not establish Vercel capacity, internet latency or worldwide scale.','Authentication sessions are inserted only into the owned fixture; signup/password hashing is outside the measured workload.']},policy,metrics:[...new Set(measured.map(record=>record.operation))].map(operation=>({operation,...summarizeRequests(measured.filter(record=>record.operation===operation))})),cleanup};
+ report.latencyWindows=summarizeRequestWindows(measured);
  await mkdir(dirname(options.report),{recursive:true});await writeFile(options.report,JSON.stringify(report,null,2)+'\n',{flag:'wx'});
  console.log(`Report saved: ${options.report}`);console.log(`${summary.requests} measured HTTP requests; p50 ${summary.p50Ms} ms, p95 ${summary.p95Ms} ms; ${summary.unexpectedErrors} unexpected errors. Correctness: ${correctnessPassed?'passed':'failed'}. Performance budget: ${performancePassed?'passed':'failed'}.`);
  for(const metric of report.metrics)console.log(`${metric.operation}: ${metric.requests} requests, p50 ${metric.p50Ms} ms, p95 ${metric.p95Ms} ms, ${metric.unexpectedErrors} errors.`);

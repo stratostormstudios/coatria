@@ -1,0 +1,177 @@
+{
+  "teamId": "team_mNvjACNLehVlP4pGhq1P8HD6",
+  "projectId": "prj_NGoUJJ34WtiTE3zBtQROMnVVXRAQ",
+  "region": "iad1",
+  "image": "vercel/sandbox/universal@sha256:112a1b3ad9ae53b6f9a6afbd9a102b62bcc3017db0b8465fa35fe1e3aa386b6d",
+  "closureSha256": "685af5121317167074dc378fb75bc303025b8469df2aae59f7b23d9c1231d153",
+  "limits": {
+    "maxInputBytes": 16777216,
+    "maxClosureBytes": 268435456,
+    "timeoutMs": 120000,
+    "maxOutputBytes": 2097152,
+    "maxStderrBytes": 65536
+  },
+  "version": 1,
+  "backend": "vercel-firecracker",
+  "mode": "live-provider",
+  "issuedAtMs": 1790119785345,
+  "expiresAtMs": 1790206185345,
+  "checks": {
+    "seven-formats": true,
+    "malformed-media": true,
+    "network-denied": true,
+    "external-secrets-denied": true,
+    "resource-output-bounds": true,
+    "normal-descendant-cleanup": true,
+    "abort-descendant-cleanup": true,
+    "ttl-controller-loss": true,
+    "ambiguous-create-reconciliation": true,
+    "identity-drift-rejected": true
+  },
+  "evidence": [
+    {
+      "sessionId": "sbx_A3rhYEP3714RxnZENgsT3ABDVQMT",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_kRRKtkFrPjSgNFB3Qoq10vP6R6wb",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_lE3abTNHhK4Zcr2rOq2YSMCcSKps",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_ehEonkVdnTULb6MT7XaWmbhOt0VR",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_6jjIiN4T9yrUQhrKMZ0pqBk3D2ST",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_0lEqrC9RIiVaQsD5uE6DegBqfGZZ",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_LKp5jAJTZ4mY6585OJNDD6iRMayr",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_649Wgy2A0RglqCDq4S7abcOLejMp",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_1pSc2wZd1lxacx6bgHzwSopO7SkU",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_aXSzKI08eD8TQPjjqK3qqTeRqRFk",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_Z9dnSho09KIOCxOCoho7Cj1PmrUA",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_gwx8uVQA9Z5TRB33AsneH3iEQ5ZV",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_dq9TYE8OArsd8288Kz9OvPOJBcqv",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_UTjbpWCvS2SEf8Y7PgVoSzdJqFYk",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_v8tU2k5oyntlj3zjLQhYtbFhBJt5",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_DAcbPXNgEzzhd8twAaDMIMsxV0qM",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_9Woco0HaEKNhE1t7tpWEopHzVlBd",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_VdKLxXiMWbnKTnjShmK8ljfnXBYU",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_qXgYdgTerUZfOs3dzkNO14Yaf9Vu",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_mFbTd1gmV5JSQopND69fiPVuEBeT",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_ASL4yeHn7xWQ273V6E9fTfQbTIq5",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_hNLGegdjjBKFhXipqYxPCeSmLr8C",
+      "sha256": "0deba602d5b51419968230bdf2594a4633d620391cb359eebec673fffbc1526f"
+    },
+    {
+      "sessionId": "sbx_tV0rDKPkvd3TWTQ0glpGymqltzCz",
+      "sha256": "ef3a76c2be45d00592d90f31631a66f413b401c2e95d298e06be08598bf89874"
+    },
+    {
+      "sessionId": "sbx_Vj65A4QspKe3vO2mA2jDdZqKdibz",
+      "sha256": "ef3a76c2be45d00592d90f31631a66f413b401c2e95d298e06be08598bf89874"
+    },
+    {
+      "sessionId": "sbx_BFOvDFFaPwsOPmZNscKuv2icBfA8",
+      "sha256": "ef3a76c2be45d00592d90f31631a66f413b401c2e95d298e06be08598bf89874"
+    },
+    {
+      "sessionId": "sbx_R0oXijVXVLCJ9JrJsAPGNYPdUQWj",
+      "sha256": "ef3a76c2be45d00592d90f31631a66f413b401c2e95d298e06be08598bf89874"
+    },
+    {
+      "sessionId": "sbx_UDcKn8HAmFWlcIrA4ryr08GEkoKJ",
+      "sha256": "ef3a76c2be45d00592d90f31631a66f413b401c2e95d298e06be08598bf89874"
+    },
+    {
+      "sessionId": "sbx_zDwwYMSBIkuU5P4yUUys8PIvC6Sv",
+      "sha256": "ef3a76c2be45d00592d90f31631a66f413b401c2e95d298e06be08598bf89874"
+    },
+    {
+      "sessionId": "sbx_HdlAXURKWvq0eo1DCA1qi3qxZqTI",
+      "sha256": "ef3a76c2be45d00592d90f31631a66f413b401c2e95d298e06be08598bf89874"
+    },
+    {
+      "sessionId": "sbx_6RVXEHi1btnZtjSsXffPL3jL1vRo",
+      "sha256": "ef3a76c2be45d00592d90f31631a66f413b401c2e95d298e06be08598bf89874"
+    },
+    {
+      "sessionId": "sbx_ce2BFRVd5qvhYV3wcHMd2MDHLtKz",
+      "sha256": "ef3a76c2be45d00592d90f31631a66f413b401c2e95d298e06be08598bf89874"
+    },
+    {
+      "sessionId": "sbx_Wjp0WrfXSi02eucWvxNv7oJ3iosa",
+      "sha256": "e6fd3b92e90761800f96d89c08b02704632129d026272bb5f2b156da0ca4d59d"
+    },
+    {
+      "sessionId": "sbx_D5EH0zMGNywUPFurIGIAUwWxi1Nh",
+      "sha256": "e6fd3b92e90761800f96d89c08b02704632129d026272bb5f2b156da0ca4d59d"
+    },
+    {
+      "sessionId": "sbx_i5wDH05GmQ4whakABs8VuamMcDQO",
+      "sha256": "ecf00578a292174be7d69e425ad81b1b148b795951a8a09516069bf97075d685"
+    },
+    {
+      "sessionId": "sbx_P4wk5mEwMCnS4bPyXqhVLnuADwBp",
+      "sha256": "ecf00578a292174be7d69e425ad81b1b148b795951a8a09516069bf97075d685"
+    },
+    {
+      "sessionId": "sbx_Al8bFVzNBKLG97Qopt6jJZoaM9mY",
+      "sha256": "ecf00578a292174be7d69e425ad81b1b148b795951a8a09516069bf97075d685"
+    }
+  ]
+}

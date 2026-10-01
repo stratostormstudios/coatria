@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join,relative,isAbsolute,resolve} from 'node:path';
 import {createServer,type Server} from 'node:http';
 import {spawn} from 'node:child_process';
-import {createRuntimeClient,runtimeOrigin,stableRequestId,RuntimeError,openWorkerState,workOnce,createAutonomyTicker} from '../public/downloads/agent-worker.mjs';
+import {createRuntimeClient,runtimeOrigin,stableRequestId,RuntimeError,openWorkerState,workOnce,workerDiagnostic,createAutonomyTicker} from '../public/downloads/agent-worker.mjs';
 import {createMcpBridge} from '../public/downloads/agent-mcp.mjs';
 import {CLAUDE_FAILURE_CODES,ClaudeAdapterError} from '../public/downloads/claude-code-adapter.mjs';
 
@@ -104,17 +104,39 @@ for(const code of ['RUN_CANCELLED','COORDINATION_AUTHORITY_ENDED','STUDIO_REVIEW
  await assert.rejects(()=>tools.call('workspace_get',{}, {requestId:tools.key('late')}),{code});assert.equal(calls,0);assert.equal(completed,0);assert.equal(state.data.job,null);
 });
 
-test('adapter failure records a bounded generic report and explicit tool keys remain stable across attempts',async()=>{
+test('adapter failure stops automatic replay and explicit tool keys remain stable across attempts',async()=>{
  const state=memoryState();let reported:any,toolPayload:any;
  const client=fakeClient({callTool:async(_name:string,payload:any)=>{toolPayload=payload;return {result:{value:1}};},fail:async(_id:string,payload:any)=>{reported=payload;return {run:{status:'queued'}};}});
  await workOnce({client,state,signal:controller().signal,execute:async({tools}:any)=>{await assert.rejects(()=>tools.call('workspace_get',{}),/stable requestId/);await tools.call('workspace_get',{}, {requestId:tools.key('workspace')});throw new Error('Sensitive adapter error '+token);}});
- assert.equal(toolPayload.requestId,stableRequestId(runId,'workspace'));assert.notEqual(stableRequestId(runId,'workspace'),stableRequestId(otherRun,'workspace'));assert.equal(reported.error.includes(token),false);assert.match(reported.clientId,/^[0-9a-f-]{36}$/);assert.equal(Object.hasOwn(reported,'retryable'),false);
+ assert.equal(toolPayload.requestId,stableRequestId(runId,'workspace'));assert.notEqual(stableRequestId(runId,'workspace'),stableRequestId(otherRun,'workspace'));assert.equal(reported.error.includes(token),false);assert.match(reported.clientId,/^[0-9a-f-]{36}$/);assert.equal(reported.retryable,false);assert.doesNotMatch(reported.error,/private local diagnostics/);
 });
 
-test('only allowlisted Claude failures record terminal disposition and safe local codes',async()=>{
+test('only allowlisted Claude failures receive specific safe codes and all adapter failures are terminal',async()=>{
  for(const code of CLAUDE_FAILURE_CODES){const logs:any[]=[];let reported:any;await workOnce({client:fakeClient({fail:async(_id:string,payload:any)=>{reported=payload;return{run:{status:'failed'}};}}),state:memoryState(),log:(entry:any)=>logs.push(entry),execute:async()=>{throw new ClaudeAdapterError(code,'Private prompt and provider diagnostics: '+token);}});assert.equal(reported.retryable,false);assert.equal(logs.find(row=>row.event==='adapter-failed').code,code);assert(!JSON.stringify(logs).includes(token));assert(!reported.error.includes(token));}
  const leaked='PRIVATE_ERROR_'+token;
- for(const error of [Object.assign(new Error(leaked),{code:leaked,retryable:false}),Object.assign(new Error(leaked),{name:'ClaudeAdapterError',code:leaked,retryable:false}),Object.assign(new Error(leaked),{name:'ClaudeAdapterError',code:'CLAUDE_TOKEN_LIMIT',retryable:true})]){const logs:any[]=[];let reported:any;await workOnce({client:fakeClient({fail:async(_id:string,payload:any)=>{reported=payload;return{run:{status:'queued'}};}}),state:memoryState(),log:(entry:any)=>logs.push(entry),execute:async()=>{throw error;}});assert.equal(Object.hasOwn(reported,'retryable'),false);assert.equal(logs.find(row=>row.event==='adapter-failed').code,'ADAPTER_FAILED');assert(!JSON.stringify(logs).includes(leaked));assert(!reported.error.includes(leaked));}
+ for(const error of [Object.assign(new Error(leaked),{code:leaked,retryable:false}),Object.assign(new Error(leaked),{name:'ClaudeAdapterError',code:leaked,retryable:false}),Object.assign(new Error(leaked),{name:'ClaudeAdapterError',code:'CLAUDE_TOKEN_LIMIT',retryable:true}),Object.assign(new Error(leaked),{code:'INFERENCE_OUTPUT_INVALID',retryable:true})]){const logs:any[]=[];let reported:any;await workOnce({client:fakeClient({fail:async(_id:string,payload:any)=>{reported=payload;return{run:{status:'failed'}};}}),state:memoryState(),log:(entry:any)=>logs.push(entry),execute:async()=>{throw error;}});assert.equal(reported.retryable,false);assert.equal(logs.find(row=>row.event==='adapter-failed').code,'ADAPTER_FAILED');assert(!JSON.stringify(logs).includes(leaked));assert(!reported.error.includes(leaked));}
+});
+
+test('worker diagnostics copy only fixed codes, valid run IDs and known dispositions without evaluating getters',()=>{
+ const privateText='PRIVATE_ERROR_'+token;
+ assert.deepEqual(workerDiagnostic({event:'adapter-failed',runId,code:'INFERENCE_OUTPUT_INVALID',error:privateText,stack:privateText,output:privateText}),{event:'adapter-failed',runId,code:'INFERENCE_OUTPUT_INVALID'});
+ assert.deepEqual(workerDiagnostic({event:'adapter-failed',runId:privateText,code:privateText}),{event:'adapter-failed',code:'ADAPTER_FAILED'});
+ assert.deepEqual(workerDiagnostic({event:'failure-recorded',runId,status:'failed',leaseToken:token}),{event:'failure-recorded',runId,status:'failed'});
+ assert.deepEqual(workerDiagnostic({event:'result-recorded',runId,status:privateText}),{event:'result-recorded',runId});
+ assert.equal(workerDiagnostic({event:privateText}),null);
+ assert.deepEqual(workerDiagnostic(Object.defineProperties({event:'adapter-failed'},{code:{get(){throw Error(privateText);}},runId:{get(){throw Error(privateText);}}})),{event:'adapter-failed',code:'ADAPTER_FAILED'});
+});
+
+test('terminal generic and broker failures reconcile a lost acknowledgement without a second execution',async()=>{
+ for(const failure of [Error('Private external state '+token),new RuntimeError(409,'INFERENCE_OUTPUT_INVALID'),new RuntimeError(409,'INFERENCE_UNCERTAIN')]){
+  const state=memoryState(),payloads:any[]=[],logs:any[]=[];let executions=0,finished=false;
+  const client=fakeClient({claim:async()=>finished?{run:null}:claim(),fail:async(_id:string,payload:any)=>{payloads.push(structuredClone(payload));assert.equal(payload.retryable,false);finished=true;if(payloads.length===1)throw new RuntimeError(503,'SERVER_ERROR');return{run:{status:'failed'},replayed:true};}});
+  const execute=async()=>{executions++;throw failure;};
+  await assert.rejects(()=>workOnce({client,state,execute,log:(entry:any)=>logs.push(entry)}),{status:503});assert.equal(state.saved.job.outcome.payload.retryable,false);
+  const restarted=memoryState(state.saved);restarted.data.job.leaseExpiresAt=new Date(Date.now()-60000).toISOString();await workOnce({client,state:restarted,execute});
+  assert.equal(await workOnce({client,state:restarted,execute}),false);assert.equal(executions,1);assert.deepEqual(payloads[1],payloads[0]);assert.equal(restarted.data.job,null);
+  assert.equal(logs.find(row=>row.event==='adapter-failed').code,failure instanceof RuntimeError?failure.code:'ADAPTER_FAILED');assert(!JSON.stringify(logs).includes(token));assert(!payloads[0].error.includes(token));
+ }
 });
 
 test('terminal Claude failure survives a lost acknowledgement without executing the adapter again',async()=>{
