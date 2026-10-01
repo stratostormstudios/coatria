@@ -213,8 +213,10 @@ jobs:
           database.password=process.env.PGPASSWORD;
           database.pathname=process.env.PGDATABASE;
           process.env.COATRIA_LOAD_DATABASE_URL=database.href;
-          const report=await runOfficeLoad(parseLoadOptions(['--mode','production','--clients','50','--duration','60','--report','load-reports/connections.json']));
-          process.exitCode=report.summary.passed?0:1;
+          const report=await runOfficeLoad(parseLoadOptions(['--mode','production','--clients','50','--duration','60','--diagnostics','true','--report','load-reports/connections.json']));
+          // Preserve the existing correctness and 1,000 ms p95 gate. Missing
+          // diagnostic coverage is a separate failure, never a latency waiver.
+          process.exitCode=report.summary.passed&&report.diagnostics?.requiredCoverage?.passed===true?0:1;
           NODE
       - name: Publish sanitized connection report
         if: always()
