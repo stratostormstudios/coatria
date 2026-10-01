@@ -23,6 +23,16 @@ export type InstalledImagePreparationFixtureOptions={transaction?:Transaction;co
 const SOURCE_MAX=32*1024**2,OUTPUT_MAX=10*1024**2,TOTAL_MAX=64*1024**2,ENDPOINT='https://s3api-us-ca-2.runpod.io';
 const ACCESS='user_synthetic',SECRET='rps_synthetic';
 const scenarios=['success','lost-initiation-response','changed-readback'];
+const METADATA_STATUSES=['200','400','401','403','404','405','408','409','413','415','429','499','503','other'] as const;
+const METADATA_ERROR_STATUS:Readonly<Record<string,number>>=Object.freeze({PREPARATION_SERVICE_REQUEST_INVALID:400,PREPARATION_SERVICE_NOT_FOUND:404,PREPARATION_SERVICE_METHOD_INVALID:405,PREPARATION_SERVICE_UNAUTHORIZED:401,PREPARATION_SERVICE_FORBIDDEN:403,PREPARATION_SERVICE_TOO_LARGE:413,PREPARATION_SERVICE_MEDIA_TYPE_INVALID:415,PREPARATION_SERVICE_CONFLICT:409,PREPARATION_SERVICE_RATE_LIMITED:429,PREPARATION_SERVICE_TIMEOUT:408,PREPARATION_SERVICE_ABORTED:499,PREPARATION_SERVICE_UNAVAILABLE:503,IMAGE_PREPARATION_SERVICE_OUTCOME_UNKNOWN:503});
+const METADATA_CODES=['none','unknown',...Object.keys(METADATA_ERROR_STATUS)],METADATA_DIAGNOSTIC_MAX=1024,METADATA_COUNT_MAX=100000;
+/** Fixed diagnostic projection only: arbitrary error text, identifiers and
+ * unrecognized codes must never become audit keys or values. */
+export function imagePreparationInstalledMetadataResponseDiagnostic(status:number,body?:string){
+ const statusKey=METADATA_STATUSES.find(value=>value===String(status))??'other';let code=status<400?'none':'unknown';
+ if(status>=400&&typeof body==='string'&&Buffer.byteLength(body)<=METADATA_DIAGNOSTIC_MAX)try{const parsed:unknown=JSON.parse(body);if(parsed&&typeof parsed==='object'&&!Array.isArray(parsed)&&'code' in parsed&&typeof parsed.code==='string'&&Object.hasOwn(METADATA_ERROR_STATUS,parsed.code)&&METADATA_ERROR_STATUS[parsed.code]===status)code=parsed.code;}catch{/* Unknown is the only retained parse result. */}
+ return {status:statusKey,code};
+}
 const hash=(v:Uint8Array|string)=>createHash('sha256').update(v).digest('hex'),same=(a:unknown,b:unknown)=>canonical(a)===canonical(b);
 const sha=(v:unknown):v is string=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
 const etag=(v:unknown):v is string=>typeof v==='string'&&v.length>0&&v.length<=256&&!/[\u0000-\u001f\u007f<>&,]/.test(v)&&v!=='*'&&!v.startsWith('W/');
@@ -57,6 +67,17 @@ export async function createImagePreparationInstalledFixture(options:InstalledIm
  const pending=new Set<Promise<unknown>>(),requestControllers=new Set<AbortController>(),servers=new Set<{close:()=>void;drain:()=>Promise<void>}>();let closed=false,drained=false,drainFailed=false,scenario=options.scenario??'success',retainedBytes=0,transportFailureStage:string|null=null;
  const owner={},counts={metadata:0,bytes:0,readSource:0,initiate:0,part:0,complete:0,readOutput:0,signatureVerified:0,rejectedEgress:0,transportRejected:0,lostInitiation:0,changedReadback:0,httpRejected:0};
  const metadataCounts=Object.fromEntries(Object.keys(preparationServiceRequests).map(k=>[k,0])) as Record<string,number>;
+ const metadataResponses=Object.fromEntries([...Object.keys(preparationServiceRequests),'unknown'].map(operation=>[operation,{completed:0,statuses:Object.fromEntries(METADATA_STATUSES.map(status=>[status,0])),codes:Object.fromEntries(METADATA_CODES.map(code=>[code,0]))}]));let metadataResponseOverflow=false;
+ function countMetadataResponse(operation:string,response:Response,body?:string){const row=metadataResponses[Object.hasOwn(preparationServiceRequests,operation)?operation:'unknown'],projection=imagePreparationInstalledMetadataResponseDiagnostic(response.status,body);const add=(value:number)=>{if(value>=METADATA_COUNT_MAX){metadataResponseOverflow=true;return value;}return value+1;};row.completed=add(row.completed);row.statuses[projection.status]=add(row.statuses[projection.status]);row.codes[projection.code]=add(row.codes[projection.code]);}
+ async function observeMetadataResponse(operation:string,response:Response){
+  let body:string|undefined;
+  // Only the real metadata HTTP handler returns here. Its response is a fully
+  // materialized, bounded JSON string. Never inspect success bodies (which can
+  // contain byte tokens), nor clone/read any gateway response stream.
+  const length=response.headers.get('content-length');
+  if(response.status>=400&&response.headers.get('content-type')==='application/json; charset=utf-8'&&length!==null&&/^[1-9]\d*$/.test(length)&&Number(length)<=METADATA_DIAGNOSTIC_MAX)try{body=await response.clone().text();}catch{/* Observation cannot change the handler result. */}
+  countMetadataResponse(operation,response,body);return response;
+ }
  const track=<T,>(p:Promise<T>)=>{pending.add(p);void p.then(()=>pending.delete(p),()=>pending.delete(p));return p;};
  const increment=(key:keyof typeof counts)=>{check(counts[key]<100000);counts[key]++;};
  try{
@@ -104,7 +125,7 @@ export async function createImagePreparationInstalledFixture(options:InstalledIm
  const fetchAdapter:typeof fetch=(input,init)=>track(syntheticFetch(input,init));
  const handle=(request:Request)=>track((async()=>{
   if(closed||installed!==owner||globalThis.fetch!==fetchAdapter)return errorResponse(503);const controller=new AbortController(),abort=()=>controller.abort();requestControllers.add(controller);request.signal.addEventListener('abort',abort,{once:true});if(request.signal.aborted)abort();
-  try{const scoped=new Request(request,{signal:controller.signal}),url=new URL(scoped.url);if(url.origin===identity.origin&&url.pathname.startsWith('/api/internal/image-preparation-services/'+identity.serviceId+'/')){increment('metadata');const operation=url.pathname.split('/').at(-1)!;if(Object.hasOwn(metadataCounts,operation))metadataCounts[operation]++;return await http(scoped);}
+  try{const scoped=new Request(request,{signal:controller.signal}),url=new URL(scoped.url);if(url.origin===identity.origin&&url.pathname.startsWith('/api/internal/image-preparation-services/'+identity.serviceId+'/')){increment('metadata');const operation=url.pathname.split('/').at(-1)!;if(Object.hasOwn(metadataCounts,operation))metadataCounts[operation]++;return await observeMetadataResponse(operation,await http(scoped));}
    if(url.origin===gatewayIdentity.origin&&url.pathname.startsWith('/v1/image-preparations/capabilities/')){increment('bytes');return await gateway.handle(scoped);}increment('httpRejected');return errorResponse(421);
   }finally{request.signal.removeEventListener('abort',abort);requestControllers.delete(controller);}
  })());
@@ -137,7 +158,7 @@ export async function createImagePreparationInstalledFixture(options:InstalledIm
  return {handle,addSource,startServer,installSyntheticS3Fetch,
   setScenario(next:InstalledImagePreparationScenario){check(!closed&&scenarios.includes(next));scenario=next;},
   objects(){return {sources:[...sources.values()].map(v=>({...v,bytes:Buffer.from(v.bytes)})),outputs:[...outputs.values()].map(v=>({...v,bytes:Buffer.from(v.bytes)}))};},
-  audit(){return {version:1,syntheticProvider:true,scenario,counts:{...counts},transportFailureStage,metadataOperations:{...metadataCounts},sources:[...sources.values()].map(v=>({bytes:v.bytes.length,sha256:hash(v.bytes)})),outputs:[...outputs.values()].map(v=>({bytes:v.bytes.length,sha256:hash(v.bytes)})),unconfirmedUploads:[...uploads.values()].filter(v=>!v.completed).length,activeOperations:pending.size};},
+  audit(){return {version:1,syntheticProvider:true,scenario,counts:{...counts},transportFailureStage,metadataOperations:{...metadataCounts},metadataResponses:structuredClone(metadataResponses),metadataResponseOverflow,sources:[...sources.values()].map(v=>({bytes:v.bytes.length,sha256:hash(v.bytes)})),outputs:[...outputs.values()].map(v=>({bytes:v.bytes.length,sha256:hash(v.bytes)})),unconfirmedUploads:[...uploads.values()].filter(v=>!v.completed).length,activeOperations:pending.size};},
   close(){closed=true;for(const controller of requestControllers)controller.abort();for(const server of servers)server.close();gateway.close();},
   async drain(){check(closed);let failed=drainFailed;for(const server of servers)try{await server.drain();}catch{failed=true;}while(pending.size)await Promise.allSettled([...pending]);try{await gateway.drain();}catch{failed=true;}if(failed){drainFailed=true;drained=false;throw Error('IMAGE_PREPARATION_INSTALLED_FIXTURE_DRAIN_FAILED');}drained=true;}
  };
