@@ -8,12 +8,17 @@ import {buildArchiveHostBundle} from './build-archive-host-bundle.mjs';
 import {installArchiveHost,acceptArchiveHostQualification,archiveHostQualificationInvocation,ARCHIVE_QUALIFIER_STATE_PROPERTIES} from './install-archive-host.mjs';
 import {createArchiveHostCiCommand,ArchiveHostCiCommandError} from './archive-host-ci-command.mjs';
 import {archiveHostJournalFailure} from './archive-host-diagnostics.mjs';
+import {collectImagePreparationCiEvidence,preserveImagePreparationCiEvidence} from './image-preparation-ci-evidence.mjs';
 
 const command=createArchiveHostCiCommand();
 if(process.platform!=='linux'||process.arch!=='x64'||process.getuid?.()!==0||process.env.CI!=='true'||!/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA??''))throw Error('Explicit root disposable Linux CI required.');
 const repo=process.cwd(),output=resolve('.devdata/media-sandbox-linux/evidence'),base='/var/lib/coatria-archive-build-'+randomUUID(),configPath=process.env.COATRIA_MEDIA_QUALIFICATION;
 if(!configPath||!process.env.COATRIA_NPM_CACHE)throw Error('Pinned CI preparation and cache required.');const config=JSON.parse(await archiveHostRead(configPath));await mkdir(base,{mode:0o755});
-const report={qualified:false,noProviderCalls:true,noCredentials:true,phase:'prerequisites'},exports=new Map();let failed=false;
+const report={qualified:false,noProviderCalls:true,noCredentials:true,phase:'prerequisites'},exports=new Map(),preserved=new Set();let failed=false,bundleIdentity;
+async function preserve(label,evidence){
+ const prefix='archive-host-'+label;exports.set(prefix+'-evidence.json',evidence.raw);exports.set(prefix+'-qualification.json',evidence.proof);
+ preserveImagePreparationCiEvidence(exports,prefix,await collectImagePreparationCiEvidence({directory:join(evidence.path,'..'),qualificationBytes:evidence.proof,hostEvidenceBytes:evidence.raw,...bundleIdentity,invocationId:evidence.host.invocationId}));preserved.add(archiveHostHash(evidence.proof));
+}
 async function latestEvidence(){
  const invocationId=archiveHostQualificationInvocation(command('read_qualifier_state',['show','coatria-archive-qualify.service','--property='+ARCHIVE_QUALIFIER_STATE_PROPERTIES])),names=await readdir('/var/lib/coatria-archive-state');if(names.length>1000)throw Error('ARCHIVE_HOST_CI_EVIDENCE_LIMIT');
  for(const name of names.filter(n=>/^qualification-[a-f0-9-]{36}$/.test(n))){const path=join('/var/lib/coatria-archive-state',name,'host-evidence.json');let raw;try{raw=await archiveHostRead(path,32768);}catch(error){if(error.code==='ENOENT')continue;throw error;}const host=JSON.parse(raw);if(host.invocationId===invocationId){const proof=await archiveHostRead(join('/var/lib/coatria-archive-state',name,'qualification.json'));if(archiveHostHash(proof)!==host.qualificationSha256)throw Error('ARCHIVE_HOST_CI_EVIDENCE_CHANGED');return {path,raw,host,proof};}}
@@ -23,16 +28,17 @@ try{
  command('install_acl',['install','-y','--no-install-recommends','acl']);command('create_service_user',['--system','--user-group','--no-create-home','--home-dir','/nonexistent','--shell','/usr/sbin/nologin','coatria-archive']);
  report.phase='offline-runtime-export';const runtime=await exportArchiveHostRuntime({sourceRoot:repo,qualificationPath:configPath,npmCache:process.env.COATRIA_NPM_CACHE,output:join(base,'prepared-runtime')});
  report.phase='exact-source-bundle';const build=await buildArchiveHostBundle({sourceRoot:repo,commit:process.env.GITHUB_SHA,runtimeRoot:runtime.output,runtimeManifestSha256:runtime.runtimeManifestSha256,output:join(base,'bundle')});
+ bundleIdentity={sourceCommit:build.commit,sourceTree:build.tree,bundleSha256:build.bundleSha256};
  const aclCanary=join(base,'acl-rejection-control');await writeFile(aclCanary,'original synthetic ACL control',{mode:0o444});command('set_acl_control',['-m','u:coatria-archive:r',aclCanary]);let aclRejected=false;try{archiveHostNoExtendedAcls([aclCanary]);}catch{aclRejected=true;}if(!aclRejected)throw Error('ARCHIVE_HOST_CI_ACL_GUARD_FAILED');
  report.phase='install-disabled';const plan=await installArchiveHost(build.output,build.bundleSha256);command('reload_units',['daemon-reload']);
  for(const unit of plan.units)if(command('read_unit_state',['show',unit.name,'--property=ActiveState','--value'])!=='inactive')throw Error('ARCHIVE_HOST_CI_EAGER_START');
  if(command('read_unit_install_state',['show','coatria-archive-worker.service','--property=UnitFileState','--value'])!=='static')throw Error('ARCHIVE_HOST_CI_ENABLED_UNIT');
- report.phase='systemd-first-qualification';command('start_qualifier',['start','coatria-archive-qualify.service'],210000);report.phase='collect-first-qualification';const first=await latestEvidence();report.phase='accept-first-qualification';await acceptArchiveHostQualification(first.path,archiveHostHash(first.raw));
+ report.phase='systemd-first-qualification';command('start_qualifier',['start','coatria-archive-qualify.service'],210000);report.phase='collect-first-qualification';const first=await latestEvidence();await preserve('first',first);report.phase='accept-first-qualification';await acceptArchiveHostQualification(first.path,archiveHostHash(first.raw));
  const previous=await archiveHostRead('/etc/coatria-archive/qualified.json');
  report.phase='retained-invocation-check';command('start_qualifier',['start','coatria-archive-qualify.service'],210000);const retained=await latestEvidence();if(retained.path!==first.path||retained.host.invocationId!==first.host.invocationId)throw Error('ARCHIVE_HOST_CI_RETAINED_INVOCATION_CHANGED');
  command('stop_qualifier',['stop','coatria-archive-qualify.service'],60000);if(command('read_unit_state',['show','coatria-archive-qualify.service','--property=ActiveState','--value'])!=='inactive')throw Error('ARCHIVE_HOST_CI_QUALIFIER_NOT_STOPPED');
  let stoppedRejected=false;try{await acceptArchiveHostQualification(first.path,archiveHostHash(first.raw));}catch{stoppedRejected=true;}if(!stoppedRejected||archiveHostHash(await archiveHostRead('/etc/coatria-archive/qualified.json'))!==archiveHostHash(previous))throw Error('ARCHIVE_HOST_CI_STOPPED_EVIDENCE_ACCEPTED');
- report.phase='systemd-repeat-qualification';command('start_qualifier',['start','coatria-archive-qualify.service'],210000);report.phase='collect-second-qualification';const second=await latestEvidence();if(first.path===second.path||first.host.invocationId===second.host.invocationId)throw Error('ARCHIVE_HOST_CI_ATTEMPT_REUSED');
+ report.phase='systemd-repeat-qualification';command('start_qualifier',['start','coatria-archive-qualify.service'],210000);report.phase='collect-second-qualification';const second=await latestEvidence();await preserve('second',second);if(first.path===second.path||first.host.invocationId===second.host.invocationId)throw Error('ARCHIVE_HOST_CI_ATTEMPT_REUSED');
  report.phase='accept-second-qualification';
  let priorRejected=false;try{await acceptArchiveHostQualification(first.path,archiveHostHash(first.raw));}catch{priorRejected=true;}if(!priorRejected||archiveHostHash(await archiveHostRead('/etc/coatria-archive/qualified.json'))!==archiveHostHash(previous))throw Error('ARCHIVE_HOST_CI_PRIOR_INVOCATION_ACCEPTED');
  let wrongCas=false;try{await acceptArchiveHostQualification(second.path,archiveHostHash(second.raw),'0'.repeat(64));}catch{wrongCas=true;}if(!wrongCas||archiveHostHash(await archiveHostRead('/etc/coatria-archive/qualified.json'))!==archiveHostHash(previous))throw Error('ARCHIVE_HOST_CI_REVIEW_CAS_FAILED');
@@ -47,6 +53,11 @@ try{
  }catch{report.hostFailureEvidence='diagnostic_collection_unavailable';}
 }
 finally{
+ if(failed)try{const state='/var/lib/coatria-archive-state',names=await readdir(state);if(names.length>1000)throw Error('ARCHIVE_HOST_CI_EVIDENCE_LIMIT');let index=0;for(const name of names.filter(n=>/^qualification-[a-f0-9-]{36}$/.test(n)).sort()){
+  let bytes;try{bytes=await archiveHostRead(join(state,name,'qualification.json'),1024**2);}catch(error){if(error.code==='ENOENT')continue;throw error;}if(preserved.has(archiveHostHash(bytes)))continue;
+  const prefix='archive-host-unaccepted-'+(++index);exports.set(prefix+'-qualification.json',bytes);
+  try{preserveImagePreparationCiEvidence(exports,prefix,await collectImagePreparationCiEvidence({directory:join(state,name),qualificationBytes:bytes,sourceCommit:process.env.GITHUB_SHA,sourceTree:bundleIdentity?.sourceTree??null,bundleSha256:bundleIdentity?.bundleSha256??null}));}catch{report.imagePreparationFailureReportUnavailable=true;}
+ }}catch{report.detailedFailureReportUnavailable=true;}
  exports.set('archive-host-bundle.json',Buffer.from(JSON.stringify(report,null,2)+'\n'));
  // Root never follows a workspace or service-owned destination. First preserve
  // bytes exclusively under this protected root, then export as the runner UID.
