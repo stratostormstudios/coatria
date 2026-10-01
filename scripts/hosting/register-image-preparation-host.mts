@@ -4,16 +4,16 @@ import {randomBytes,randomUUID} from 'node:crypto';
 import {realpath} from 'node:fs/promises';
 import {join,posix,resolve} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
-import type {Readable} from 'node:stream';
-import pg from 'pg';
 import {archiveHostRead,archiveHostTrusted,verifyArchiveTree} from './archive-host-package.mjs';
 import {inspectImagePreparationHostBundle} from './image-preparation-host-package.mjs';
-import {readCurrentImagePreparationHostQualification,assertImagePreparationHostQualificationEnvironment} from './image-preparation-host-qualification.mjs';
+import {readCurrentImagePreparationHostQualification} from './image-preparation-host-qualification.mjs';
 import {createImagePreparationEnrollmentStore,withImagePreparationEnrollmentLock,makeImagePreparationEnrollmentIntent,assertImagePreparationEnrollmentPending,executeImagePreparationHostEnrollment,enrollmentBytesHash,imagePreparationEnrollmentRequestFromHost,ImagePreparationHostEnrollmentError} from './image-preparation-host-enrollment.mjs';
 import {enrollImagePreparationService,reconcileImagePreparationService} from './image-preparation-enrollment-transaction.mjs';
 import type {ImagePreparationEnrollmentRequest} from '../../src/lib/project-image-preparation-enrollment-contract.mjs';
+import {assertImagePreparationRegistrarEnvironment,readImagePreparationRegistrarConnectionInput,imagePreparationRegistrarLogin} from './image-preparation-registrar-connection.mjs';
+export {parseImagePreparationRegistrarConnectionInput,assertImagePreparationRegistrarEnvironment,readImagePreparationRegistrarConnectionInput,imagePreparationRegistrarLogin} from './image-preparation-registrar-connection.mjs';
 
-const ROLE='coatria_image_preparation_registrar_v1',hash=/^[a-f0-9]{64}$/,uuid='(?:[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)';
+const hash=/^[a-f0-9]{64}$/,uuid='(?:[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)';
 const rejected='IMAGE_PREPARATION_HOST_ENROLLMENT_REJECTED';
 function fail():never{throw new ImagePreparationHostEnrollmentError(rejected);}
 type Arguments={mode:'plan'|'enroll'|'reconcile';hostPath:string;bundleSha256:string;registrarBundleSha256:string;scopePath?:string;scopeSha256?:string};
@@ -24,48 +24,6 @@ export function parseImagePreparationRegistrarArguments(input:readonly string[])
  if(args.length!==(mode==='reconcile'?6:10)||args[0]!=='--host'||args[2]!=='--bundle'||args[4]!=='--registrar-bundle'||!new RegExp('^/etc/coatria-image-preparation/'+uuid+'/host\\.json$').test(args[1])||!hash.test(args[3])||!hash.test(args[5]))fail();
  if(mode!=='reconcile'&&(args[6]!=='--scope'||args[8]!=='--scope-sha256'||!posix.isAbsolute(args[7])||posix.normalize(args[7])!==args[7]||args[7].includes('\\')||!hash.test(args[9])))fail();
  return {mode,hostPath:args[1],bundleSha256:args[3],registrarBundleSha256:args[5],...mode==='reconcile'?{}:{scopePath:args[7],scopeSha256:args[9]}};
-}
-
-/** URL options are validated then discarded. Only explicit pg fields survive;
- * nonlocal connections always verify TLS, including sslmode=require input. */
-export function parseImagePreparationRegistrarConnectionInput(value:unknown){
- if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==1||!('connectionString'in value)||typeof value.connectionString!=='string'||Buffer.byteLength(value.connectionString)>16000||/[\u0000-\u001f\u007f]/.test(value.connectionString))fail();
- let url:URL;try{url=new URL(value.connectionString);}catch{fail();}
- if(!['postgres:','postgresql:'].includes(url.protocol)||url.hash||!url.username||!url.password||url.pathname.length<2)fail();
- const hostname=url.hostname.toLowerCase(),local=['localhost','127.0.0.1','[::1]'].includes(hostname);
- if(!local&&(!hostname.endsWith('.neon.tech')||hostname.split('.')[0].endsWith('-pooler')))fail();
- for(const key of url.searchParams.keys())if(!['sslmode','channel_binding'].includes(key)||url.searchParams.getAll(key).length!==1)fail();
- const sslmode=url.searchParams.get('sslmode'),binding=url.searchParams.get('channel_binding');
- if(sslmode&&!['require','verify-ca','verify-full',...local?['disable']:[]].includes(sslmode)||binding&&!['require','prefer'].includes(binding))fail();
- let user:string,password:string,database:string;try{user=decodeURIComponent(url.username);password=decodeURIComponent(url.password);database=decodeURIComponent(url.pathname.slice(1));}catch{fail();}
- if(user!==ROLE||!password||!database||[user,password,database].some(v=>/[\u0000-\u001f\u007f]/.test(v))||database.includes('/'))fail();
- const port=url.port?Number(url.port):5432;if(!Number.isSafeInteger(port)||port<1||port>65535)fail();
- return {host:hostname==='[::1]'?'::1':hostname,port,user,password,database,ssl:local&&(!sslmode||sslmode==='disable')?false:{rejectUnauthorized:true},enableChannelBinding:true,application_name:'coatria-image-preparation-host-registrar',connectionTimeoutMillis:10000,statement_timeout:10000,query_timeout:15000};
-}
-export function assertImagePreparationRegistrarEnvironment(settings:Readonly<Record<string,string|undefined>>){
- try{assertImagePreparationHostQualificationEnvironment(settings);}catch{fail();}
- if(Object.entries(settings).some(([key,value])=>value&&(/^PG[A-Z_]*$/.test(key)||/(?:CREDENTIAL|AWS_PROFILE|AWS_CONFIG_FILE)/i.test(key))))fail();
-}
-
-/** Own and destroy the stream on every failure; never leave a detached read. */
-export async function readImagePreparationRegistrarConnectionInput(stream:Readable&{isTTY?:boolean}=process.stdin,timeoutMs=10000){
- if(stream.isTTY||!Number.isSafeInteger(timeoutMs)||timeoutMs<1||timeoutMs>10000)fail();
- let length=0,expired=false;const chunks:Buffer[]=[];let joined:Buffer|undefined;
- const timer=setTimeout(()=>{expired=true;stream.destroy(new ImagePreparationHostEnrollmentError(rejected));},timeoutMs);
- try{
-  for await(const chunk of stream){if(expired)fail();if(!Buffer.isBuffer(chunk)&&typeof chunk!=='string')fail();length+=Buffer.byteLength(chunk);if(length>16384)fail();chunks.push(Buffer.from(chunk));}
-  if(expired)fail();joined=Buffer.concat(chunks);let value:unknown;try{value=JSON.parse(joined.toString('utf8'));}catch{fail();}
-  return parseImagePreparationRegistrarConnectionInput(value);
- }catch{stream.destroy();fail();}finally{clearTimeout(timer);joined?.fill(0);for(const chunk of chunks)chunk.fill(0);}
-}
-
-/** Deliberately constructs a new physical client for each callback. Even an
- * unknown COMMIT cannot return its connection to a pool or trigger a retry. */
-export async function imagePreparationRegistrarLogin<T>(connection:ReturnType<typeof parseImagePreparationRegistrarConnectionInput>,operation:(db:pg.Client,request:ImagePreparationEnrollmentRequest)=>Promise<T>,request:ImagePreparationEnrollmentRequest):Promise<T>{
- const client=new pg.Client(connection);client.on('error',()=>{});let result:T|undefined,primary:unknown,failed=false;
- try{await client.connect();result=await operation(client,request);}catch(error){failed=true;primary=error;}
- try{await client.end();}catch(error){if(!failed){failed=true;primary=error;}}
- if(failed)throw primary;return result as T;
 }
 
 /** Historical identity only: no current expiry or boot check here. The exact
