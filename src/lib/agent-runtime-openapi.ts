@@ -164,7 +164,7 @@ const studioSpec=z.toJSONSchema(studioSpecInput,{io:'output',unrepresentable:'an
 const studioSchemas:Record<string,Schema>={
  StudioSpec:studioSpec,
  StudioTemplateRole:object(studioRoleProperties),
- StudioRole:object({...studioRoleProperties,agentId:nullable(uuid),humanId:nullable(uuid),agentName:nullable(string),humanName:nullable(string),connectionState:nullable(string)},[...Object.keys(studioRoleProperties),'agentId','humanId']),
+ StudioRole:object({...studioRoleProperties,agentId:nullable(uuid),humanId:nullable(uuid),agentName:nullable(string),humanName:nullable(string),agentSponsorId:{...nullable(uuid),description:'Current sponsor of the assigned agent. Useful for detecting potential reviewer conflicts; not proof of reviewer eligibility for any submission or artifact.'},connectionState:nullable(string)},[...Object.keys(studioRoleProperties),'agentId','humanId']),
  StudioSkill:object({key:string,title:string,version:revision,instructions:string}),
  StudioTemplate:object({id:string,version:revision,name:string,description:string,roles:{type:'array',items:ref('StudioTemplateRole')},stages:{type:'array',items:string},gates:{type:'array',items:object({key:string,title:string})},integrations:{type:'array',items:object({key:string,title:string,requiredFor:string})}}),
  StudioProfile:object({templateId:string,revision,roles:{type:'array',maxItems:30,items:ref('StudioRole')}}),
