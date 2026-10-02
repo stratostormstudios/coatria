@@ -143,3 +143,15 @@ test('prepared image policy is explicit, reviews its exact retry and preserves p
  expect(policyWrites(fixture)[1].body).toEqual(policyWrites(fixture)[0].body);expect(policyWrites(fixture)[0].body).toMatchObject({referencePreparationProfile:'prepared_image_v1',allowedRoleKeys:['comp'],revision:0});
  await page.getByRole('button',{name:'Pause delegation',exact:true}).click();expect(policyWrites(fixture)[2].body).toMatchObject({referencePreparationProfile:'prepared_image_v1',status:'paused'});expect(fixture.state.unexpected).toEqual([]);
 });
+
+test('planning corrections are an explicit reviewed opt-in with exact retry and pause preservation',async({page})=>{
+ const fixture=coordinationFixture({policy:false});await openCoordination(page,fixture);
+ await expect(page.getByText(/Planning corrections:/)).toContainText('Off');
+ await page.getByRole('button',{name:'Set delegation policy',exact:true}).click();
+ const toggle=page.getByRole('checkbox',{name:'Allow reviewed planning corrections',exact:true}),save=page.getByRole('button',{name:'Save reviewed policy',exact:true});await expect(toggle).not.toBeChecked();
+ await page.getByRole('checkbox',{name:/Generation specialist/}).check();await page.getByLabel('Policy state',{exact:true}).selectOption('active');await review(page).check();await toggle.check();await expect(review(page)).not.toBeChecked();await expect(save).toBeDisabled();
+ await expect(page.getByRole('dialog')).toContainText('Estimates and breakdowns only');await expect(page.getByRole('dialog')).toContainText('Failed or uncertain runs are not retried');await review(page).check();fixture.failOnce(true);await save.click();await expect(page.getByRole('dialog').getByRole('alert')).toContainText('Synthetic lost acknowledgement');await save.click();await expect(page.getByRole('dialog')).toHaveCount(0);
+ expect(policyWrites(fixture)[1].body).toEqual(policyWrites(fixture)[0].body);expect(policyWrites(fixture)[0].body).toMatchObject({planningRework:true,maxRuns:5,maxConcurrentRuns:1});
+ await expect(page.getByText(/Planning corrections:/)).toContainText('Opted in');await page.getByRole('button',{name:'Pause delegation',exact:true}).click();expect(policyWrites(fixture)[2].body).toMatchObject({planningRework:true,status:'paused'});
+ await page.getByRole('button',{name:'Review policy',exact:true}).click();await expect(toggle).toBeChecked();await toggle.uncheck();await review(page).check();await save.click();await expect(page.getByRole('dialog')).toHaveCount(0);expect(policyWrites(fixture)[3].body.planningRework).toBe(false);expect(fixture.state.unexpected).toEqual([]);
+});

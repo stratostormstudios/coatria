@@ -1,5 +1,5 @@
 import {managedAgentAuthoritySql,managedAgentAuthorityPrincipals} from './studio-hosting';
-import {coordinationRunAuthority} from './studio-coordination';
+import {coordinationRunAuthority,assertPlanningReworkCommitAuthority} from './studio-coordination';
 import {planningReviewRunAuthority} from './studio-review-policy';
 import {generatedFollowupRunAuthority,generatedFollowupRunContext} from './studio-generated-followups';
 import {createHmac,randomUUID} from 'node:crypto';
@@ -76,6 +76,7 @@ async function refreshRunLease(client:PoolClient,companyId:string,run:Record<str
  * locks, while the enclosing transaction can still roll every effect back. */
 export async function assertRunToolCommitAuthority(client:PoolClient,identity:Pick<AgentRunIdentity,'company_id'>,run:Record<string,any>,leaseToken:string){
  await assertGeneratedRunAuthority(client,identity.company_id,run);
+ await assertPlanningReworkCommitAuthority(client,identity.company_id,run);
  await refreshRunLease(client,identity.company_id,run);requireLease(run,leaseToken);
 }
 /** Caller owns the transaction. Locks company -> sorted memberships -> agent -> run. */
