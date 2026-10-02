@@ -7,7 +7,7 @@ import {access,lstat,open,realpath,readFile} from 'node:fs/promises';
 import {dirname,join,resolve} from 'node:path';
 import {gzipSync} from 'node:zlib';
 import {setTimeout as delay} from 'node:timers/promises';
-import {MediaSandboxError,type MediaSandboxRun} from './higgsfield-media-sandbox';
+import {MediaSandboxError,type MediaSandboxCode,type MediaSandboxRun} from './higgsfield-media-sandbox';
 
 export const VERCEL_MEDIA_IMAGE='vercel/sandbox/universal@sha256:112a1b3ad9ae53b6f9a6afbd9a102b62bcc3017db0b8465fa35fe1e3aa386b6d';
 export const VERCEL_MEDIA_CHECKS=['seven-formats','malformed-media','network-denied','external-secrets-denied','resource-output-bounds','normal-descendant-cleanup','abort-descendant-cleanup','ttl-controller-loss','ambiguous-create-reconciliation','identity-drift-rejected'] as const;
@@ -20,6 +20,21 @@ export type VercelMediaQualificationBinding=Readonly<{teamId:string;projectId:st
 export type VercelMediaQualification=VercelMediaQualificationBinding&{version:1;backend:'vercel-firecracker';mode:'live-provider';issuedAtMs:number;expiresAtMs:number;checks:Record<typeof VERCEL_MEDIA_CHECKS[number],true>;evidence:ReadonlyArray<{sessionId:string;sha256:string}>};
 export type VercelMediaSandboxCandidate=Readonly<{run:(input:MediaSandboxRun)=>Promise<string>;qualificationBinding:VercelMediaQualificationBinding}>;
 export type QualifiedVercelMediaSandbox=VercelMediaSandboxCandidate;
+type FailurePhase='input'|'reserve'|'authorize'|'create'|'create-identity'|'reconcile'|'upload'|'command'|'command-wait'|'logs'|'output'|'final-authorize'|'cleanup-stop'|'cleanup-read';
+type FailurePoint=Readonly<{phase:FailurePhase;code:MediaSandboxCode;stage:'local'|'token'|'request'|'response';httpStatus:number|null}>;
+export type VercelMediaFailureEvidence=Readonly<{primary:FailurePoint|null;cleanup:Readonly<{outcome:'not-created'|'terminal'|'unknown';stop:FailurePoint|null;failure:FailurePoint|null;terminalStatus:'stopped'|'failed'|'aborted'|null}>}>;
+/** Bounded diagnostics only: no raw errors, URLs, IDs, response bodies or tokens.
+ * CLEANUP_FAILED keeps precedence without erasing the original execution failure. */
+export class VercelMediaSandboxFailure extends MediaSandboxError {
+ constructor(code:MediaSandboxCode,readonly evidence:VercelMediaFailureEvidence){super(code);this.name='VercelMediaSandboxFailure';}
+}
+const failureCodes:readonly MediaSandboxCode[]=['SANDBOX_UNAVAILABLE','INVALID_PROFILE','INPUT_INVALID','ABORTED','TIMEOUT','OUTPUT_LIMIT','PROCESS_FAILED','CLEANUP_FAILED'];
+// Unverified exp can only restrict reuse of a token already obtained by the
+// trusted callback. It never authorizes a provider request; Vercel still does.
+// Opaque/undated tokens continue through the callback, never through this cache.
+function cleanupTokenExpiry(token:string):number{
+ try{const pieces=token.split('.');if(pieces.length!==3)return 0;const value:unknown=JSON.parse(Buffer.from(pieces[1],'base64url').toString('utf8'));return object(value)&&integer(value.exp,1,Math.floor(Number.MAX_SAFE_INTEGER/1000))?value.exp*1000-5000:0;}catch{return 0;}
+}
 const qualified=new WeakSet<object>();
 export const isQualifiedVercelMediaSandbox=(value:unknown):value is QualifiedVercelMediaSandbox=>!!value&&typeof value==='object'&&qualified.has(value);
 const nativeFetch=globalThis.fetch.bind(globalThis);
@@ -164,17 +179,24 @@ async function construct(options:VercelMediaSandboxOptions,fetcher:typeof fetch,
  const bounds=limits(options.limits),closure=await loadClosure(options.closure,bounds.maxClosureBytes,production),teamId=options.teamId,projectId=options.projectId,region=options.region;
  const token=options.token,reserve=options.journal.reserve,record=options.journal.record,authorize=options.journal.authorize;
  const binding=Object.freeze({teamId,projectId,region,image:VERCEL_MEDIA_IMAGE,closureSha256:hash(JSON.stringify({closureSha256:closure.sha256,launcherSha256:hash(launcher)})),limits:bounds});let busy=false,poisoned=false;
- const api=async(path:string,signal:AbortSignal,init:RequestInit={})=>{
-  const auth=await withSignal(token(),signal);if(typeof auth!=='string'||auth.length<8||auth.length>4096||/[\r\n]/.test(auth))fail('SANDBOX_UNAVAILABLE');signal.throwIfAborted();
-  const url=new URL('https://api.vercel.com'+path);url.searchParams.set('teamId',teamId);
-  return fetcher(url,{...init,redirect:'error',signal,headers:{'content-type':'application/json',...init.headers,authorization:'Bearer '+auth}});
- };
  const run=async(value:MediaSandboxRun):Promise<string>=>{
   checkQualification();if(busy||poisoned)fail('SANDBOX_UNAVAILABLE');
   const args=Array.isArray(value.args)?[...value.args]:[];
   if(!['ffmpeg','ffprobe'].includes(value.tool)||!Array.isArray(value.args)||args.length>256||args.some(a=>typeof a!=='string'||a.includes('\0')||a.length>8192)||args.reduce((n,a)=>n+a.length,0)>32768||!integer(value.inputFd,0,2**31-1)||!integer(value.timeoutMs,1,bounds.timeoutMs)||!integer(value.maxOutputBytes,1,bounds.maxOutputBytes)||!integer(value.maxStderrBytes,1,bounds.maxStderrBytes))fail('INPUT_INVALID');
   decoderArgs(value.tool,args);if(value.signal?.aborted)fail('ABORTED');busy=true;
   const deadline=AbortSignal.timeout(value.timeoutMs),signal=AbortSignal.any([deadline,...value.signal?[value.signal]:[]]);let intent:VercelMediaIntent|undefined,session:string|undefined,createAttempted=false,result='',failure:unknown;
+  let phase:FailurePhase='input',stage:FailurePoint['stage']='local',httpStatus:number|null=null,primary:FailurePoint|null=null,stopFailure:FailurePoint|null=null,cleanupFailure:FailurePoint|null=null,terminalStatus:'stopped'|'failed'|'aborted'|null=null,cleanupOutcome:VercelMediaFailureEvidence['cleanup']['outcome']='not-created',cachedToken='',cachedUntil=0;
+  const at=(next:FailurePhase)=>{phase=next;stage='local';httpStatus=null;};
+  const point=(error:unknown,s:AbortSignal=signal):FailurePoint=>Object.freeze({phase,stage,httpStatus,code:s.aborted?(value.signal?.aborted&&s===signal?'ABORTED':'TIMEOUT'):error instanceof MediaSandboxError&&failureCodes.includes(error.code)?error.code:'SANDBOX_UNAVAILABLE'});
+  const rejected=(code:MediaSandboxCode)=>new VercelMediaSandboxFailure(code,Object.freeze({primary,cleanup:Object.freeze({outcome:cleanupOutcome,stop:stopFailure,failure:cleanupFailure,terminalStatus})}));
+  const api=async(path:string,s:AbortSignal,init:RequestInit={},cleanupOnly=false)=>{
+   stage='token';httpStatus=null;s.throwIfAborted();
+   const auth=cleanupOnly&&cachedUntil>Date.now()?cachedToken:await withSignal(token(),s);
+   if(typeof auth!=='string'||auth.length<8||auth.length>4096||/[\r\n]/.test(auth))fail('SANDBOX_UNAVAILABLE');s.throwIfAborted();
+   if(!cleanupOnly){cachedToken=auth;cachedUntil=cleanupTokenExpiry(auth);}
+   const url=new URL('https://api.vercel.com'+path);url.searchParams.set('teamId',teamId);stage='request';
+   const response=await fetcher(url,{...init,redirect:'error',signal:s,headers:{'content-type':'application/json',...init.headers,authorization:'Bearer '+auth}});stage='response';httpStatus=response.status;return response;
+  };
   const event=(type:VercelMediaJournalEvent['type'],status?:string)=>withSignal(record(Object.freeze({type,intentId:intent!.id,name:intent!.name,...session?{sessionId:session}:{},...status?{status}:{}})),AbortSignal.timeout(3000));
   const authorized=()=>withSignal(authorize(intent!),signal);
   const ownedSession=(payload:Record<string,unknown>):string|undefined=>{
@@ -183,6 +205,7 @@ async function construct(options:VercelMediaSandboxOptions,fetcher:typeof fetch,
    return s.id;
   };
   const reconcile=async()=>{
+    at('reconcile');
    poisoned=true;try{await event('create-unknown');}catch{/* Failed journaling must not suppress a scoped cleanup lookup. */}
    try{const found=await json(await api('/v2/sandboxes/'+encodeURIComponent(intent!.name)+'?projectId='+encodeURIComponent(projectId)+'&resume=false',AbortSignal.timeout(5000)));session=ownedSession(found);}catch{/* Durable reserved intent remains for controller reconciliation. */}
   };
@@ -193,11 +216,12 @@ async function construct(options:VercelMediaSandboxOptions,fetcher:typeof fetch,
   try{
    const input=inputFile(value.inputFd,bounds.maxInputBytes,signal),inputSha256=hash(input),id=randomUUID();
    intent=Object.freeze({id,name:'coatria-media-'+id,teamId,projectId,region,image:VERCEL_MEDIA_IMAGE,closureSha256:binding.closureSha256,inputSha256,inputBytes:input.length,tool:value.tool,ttlMs:bounds.timeoutMs,vcpus:2,memoryMiB:4096});
-   await withSignal(reserve(intent),signal);await authorized();signal.throwIfAborted();checkQualification();
+   at('reserve');await withSignal(reserve(intent),signal);at('authorize');await authorized();signal.throwIfAborted();checkQualification();
    const request={name:intent.name,projectId,image:VERCEL_MEDIA_IMAGE,resources:{vcpus:2},timeout:bounds.timeoutMs,persistent:false,networkPolicy:{mode:'deny-all'},ports:[],env:{},region,failoverRegions:[]};createAttempted=true;
    let created:Record<string,unknown>;
-   try{created=await json(await api('/v3/sandboxes',signal,{method:'POST',body:JSON.stringify(request)}));}
-   catch{
+   try{at('create');created=await json(await api('/v3/sandboxes',signal,{method:'POST',body:JSON.stringify(request)}));}
+   catch(error){
+    primary=point(error);
     // Never repeat create. Even 404 after an uncertain create is not proof that
     // an asynchronous resource will not appear; retain the reservation.
     await reconcile();
@@ -205,9 +229,9 @@ async function construct(options:VercelMediaSandboxOptions,fetcher:typeof fetch,
    }
    // Only an ownership-proven handle may be stopped. Policy mismatch on our
    // own session still gets cleaned up; a foreign handle never gets mutated.
-   session=ownedSession(created);if(!session){await reconcile();fail('SANDBOX_UNAVAILABLE');}
+   at('create-identity');session=ownedSession(created);if(!session){primary=point(new MediaSandboxError('SANDBOX_UNAVAILABLE'));await reconcile();fail('SANDBOX_UNAVAILABLE');}
    await event('created');identity(created,intent.name);
-   signal.throwIfAborted();await authorized();checkQualification();
+   at('authorize');signal.throwIfAborted();await authorized();checkQualification();
    // Bind qualification to the full bundle, but transfer only this command's
    // executable plus shared dependencies. Never transfer the unused decoder.
    const otherTool=value.tool==='ffmpeg'?'bin/ffprobe':'bin/ffmpeg',selectedFiles=closure.files.filter(f=>f.path!==otherTool);
@@ -215,38 +239,42 @@ async function construct(options:VercelMediaSandboxOptions,fetcher:typeof fetch,
    const job={tool:value.tool,args,inputBytes:input.length,inputSha256,closure:invocationClosure,maxOutputBytes:value.maxOutputBytes,maxStderrBytes:value.maxStderrBytes,timeoutMs:Math.min(value.timeoutMs,bounds.timeoutMs)};
    const archive=tar([...selectedFiles.map(f=>({path:'coatria/runtime/'+f.path,content:f.content,mode:0o555})),{path:'coatria/launcher.cjs',content:Buffer.from(launcher),mode:0o444},{path:'coatria/job.json',content:Buffer.from(JSON.stringify(job)),mode:0o444},{path:'coatria/input.bin',content:input,mode:0o444}]);
    const compressed=gzipSync(archive,{level:1});if(archive.length>bounds.maxClosureBytes+bounds.maxInputBytes+256*1024||compressed.length>archive.length+65536)fail('INPUT_INVALID');signal.throwIfAborted();
-   await json(await api('/v2/sandboxes/sessions/'+session+'/fs/write',signal,{method:'POST',headers:{'content-type':'application/gzip','x-cwd':'/vercel'},body:compressed as unknown as BodyInit}));
-   await authorized();checkQualification();signal.throwIfAborted();
-   const command=await json(await api('/v2/sandboxes/sessions/'+session+'/cmd',signal,{method:'POST',body:JSON.stringify({command:'/usr/bin/env',args:['-i','PATH=/usr/local/bin:/usr/bin:/bin','node','/vercel/coatria/launcher.cjs'],cwd:'/vercel',env:{},sudo:false,timeout:Math.min(value.timeoutMs,bounds.timeoutMs)})}));
+   at('upload');await json(await api('/v2/sandboxes/sessions/'+session+'/fs/write',signal,{method:'POST',headers:{'content-type':'application/gzip','x-cwd':'/vercel'},body:compressed as unknown as BodyInit}));
+   at('authorize');await authorized();checkQualification();signal.throwIfAborted();
+   at('command');const command=await json(await api('/v2/sandboxes/sessions/'+session+'/cmd',signal,{method:'POST',body:JSON.stringify({command:'/usr/bin/env',args:['-i','PATH=/usr/local/bin:/usr/bin:/bin','node','/vercel/coatria/launcher.cjs'],cwd:'/vercel',env:{},sudo:false,timeout:Math.min(value.timeoutMs,bounds.timeoutMs)})}));
    if(!object(command.command)||!identifier(command.command.id)||command.command.sessionId!==session)fail('PROCESS_FAILED');const commandId=command.command.id;
-   const finished=await json(await api('/v2/sandboxes/sessions/'+session+'/cmd/'+commandId+'?wait=true',signal));
+   at('command-wait');const finished=await json(await api('/v2/sandboxes/sessions/'+session+'/cmd/'+commandId+'?wait=true',signal));
    if(!object(finished.command)||finished.command.id!==commandId||finished.command.sessionId!==session||finished.command.exitCode!==0)fail('PROCESS_FAILED');
-   const logResponse=await api('/v2/sandboxes/sessions/'+session+'/cmd/'+commandId+'/logs',signal);if(!logResponse.ok||!logResponse.headers.get('content-type')?.startsWith('application/x-ndjson'))fail('PROCESS_FAILED');
+   at('logs');const logResponse=await api('/v2/sandboxes/sessions/'+session+'/cmd/'+commandId+'/logs',signal);if(!logResponse.ok||!logResponse.headers.get('content-type')?.startsWith('application/x-ndjson'))fail('PROCESS_FAILED');
    const logs=(await bytes(logResponse,Math.ceil(value.maxOutputBytes*2)+65536)).toString('utf8');let envelope='';
    for(const line of logs.split('\n')){if(!line.trim())continue;let part:unknown;try{part=JSON.parse(line);}catch{fail('PROCESS_FAILED');}if(!object(part)||part.stream!=='stdout'||typeof part.data!=='string')fail('PROCESS_FAILED');envelope+=part.data;if(Buffer.byteLength(envelope)>Math.ceil(value.maxOutputBytes*4/3)+1024)fail('OUTPUT_LIMIT');}
-   let output:unknown;try{output=JSON.parse(envelope);}catch{fail('PROCESS_FAILED');}
+   at('output');let output:unknown;try{output=JSON.parse(envelope);}catch{fail('PROCESS_FAILED');}
    if(!object(output)||!keys(output,['version','inputBytes','inputSha256','stdout'])||output.version!==1||output.inputBytes!==input.length||output.inputSha256!==inputSha256||typeof output.stdout!=='string')fail('PROCESS_FAILED');
    const decoded=Buffer.from(output.stdout,'base64');if(decoded.length>value.maxOutputBytes)fail('OUTPUT_LIMIT');if(decoded.toString('base64')!==output.stdout)fail('PROCESS_FAILED');result=decoded.toString('utf8');
-   await authorized();checkQualification();signal.throwIfAborted();
-  }catch(e){failure=e;}
+   at('authorize');await authorized();checkQualification();signal.throwIfAborted();
+  }catch(e){failure=e;primary??=point(e);}
   finally{
    if(session&&intent){
     // Cleanup has its own deadline. Cancellation and authorization withdrawal
     // cannot suppress destruction of an already-created guest.
-    const cleanup=AbortSignal.timeout(15000);let cleanupJournalFailed=false;
+    const cleanup=AbortSignal.timeout(15000);let cleanupJournalFailed=false;cleanupOutcome='unknown';
     try{await event('cleanup-intent');}catch{cleanupJournalFailed=true;}
     try{
-     try{await json(await api('/v2/sandboxes/sessions/'+session+'/stop',cleanup,{method:'POST'}));}catch{/* One stop attempt; read status may prove it completed. */}
-     let stopped=false;while(!cleanup.aborted){const status=await json(await api('/v2/sandboxes/sessions/'+session,cleanup));if(!object(status.session)||status.session.id!==session)fail('CLEANUP_FAILED');if(terminal(status.session.status)){stopped=true;await event('terminal',String(status.session.status));break;}await delay(100,undefined,{signal:cleanup});}
+     // A blocked stop must leave time for a readback. No second mutation, and
+     // the total cleanup deadline remains 15s, independent of work cancellation.
+     const stopSignal=AbortSignal.any([cleanup,AbortSignal.timeout(5000)]);at('cleanup-stop');
+     try{await json(await api('/v2/sandboxes/sessions/'+session+'/stop',stopSignal,{method:'POST'},true));}catch(e){stopFailure=point(e,stopSignal);}
+     let stopped=false;while(!cleanup.aborted){at('cleanup-read');const status=await json(await api('/v2/sandboxes/sessions/'+session,cleanup,{},true));if(!object(status.session)||status.session.id!==session)fail('CLEANUP_FAILED');if(terminal(status.session.status)){stopped=true;terminalStatus=status.session.status as 'stopped'|'failed'|'aborted';await event('terminal',terminalStatus);break;}await delay(100,undefined,{signal:cleanup});}
      if(!stopped||cleanupJournalFailed)fail('CLEANUP_FAILED');
-    }catch{poisoned=true;failure=new MediaSandboxError('CLEANUP_FAILED');try{await event('cleanup-unknown');}catch{/* Existing durable intent retains its reservation. */}}
-   }else if(createAttempted){poisoned=true;failure=new MediaSandboxError('CLEANUP_FAILED');try{await event('cleanup-unknown');}catch{/* Reserved intent remains unresolved. */}}
-   busy=false;
+     cleanupOutcome='terminal';
+    }catch(e){cleanupFailure=point(e,cleanup);poisoned=true;failure=new MediaSandboxError('CLEANUP_FAILED');try{await event('cleanup-unknown');}catch{/* Existing durable intent retains its reservation. */}}
+   }else if(createAttempted){cleanupOutcome='unknown';poisoned=true;failure=new MediaSandboxError('CLEANUP_FAILED');try{await event('cleanup-unknown');}catch{/* Reserved intent remains unresolved. */}}
+   cachedToken='';cachedUntil=0;busy=false;
   }
-  if(value.signal?.aborted&&!(failure instanceof MediaSandboxError&&failure.code==='CLEANUP_FAILED'))fail('ABORTED');
-  if(deadline.aborted&&!(failure instanceof MediaSandboxError&&failure.code==='CLEANUP_FAILED'))fail('TIMEOUT');
-  if(failure)throw failure instanceof MediaSandboxError?failure:new MediaSandboxError('SANDBOX_UNAVAILABLE');
-  try{await authorized();checkQualification();signal.throwIfAborted();}catch{if(value.signal?.aborted)fail('ABORTED');if(deadline.aborted)fail('TIMEOUT');fail('SANDBOX_UNAVAILABLE');}return result;
+  if(value.signal?.aborted&&!(failure instanceof MediaSandboxError&&failure.code==='CLEANUP_FAILED'))throw rejected('ABORTED');
+  if(deadline.aborted&&!(failure instanceof MediaSandboxError&&failure.code==='CLEANUP_FAILED'))throw rejected('TIMEOUT');
+  if(failure)throw rejected(failure instanceof MediaSandboxError&&failureCodes.includes(failure.code)?failure.code:'SANDBOX_UNAVAILABLE');
+  try{at('final-authorize');await authorized();checkQualification();signal.throwIfAborted();}catch(e){primary=point(e);throw rejected(primary.code);}return result;
  };
  return Object.freeze({run,qualificationBinding:binding});
 }

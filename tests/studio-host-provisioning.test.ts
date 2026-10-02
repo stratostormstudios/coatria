@@ -41,8 +41,8 @@ test('managed CPU saga uses actual transactions and fake Runpod transport withou
   return{companyId,userId,session,member,installation:result.installation,planInput,plan,start,get};
  }
  function transportFixture(mode:'direct'|'broker'='direct'){
-  const calls:Array<{method:string;path:string}>=[],pods:any[]=[],requests:any[]=[];let loseCreate=false,emptyDiscovery=false,malformedDiscovery=false,price=.03,stopConfirmed=true,endpointEnabled=true,healthAllowed=true;
-  const transport:typeof fetch=async(url,init)=>{const u=new URL(String(url)),method=init?.method??'GET';assert.equal(init?.redirect,'error');assert(init?.signal);calls.push({method,path:u.pathname});if(u.origin==='https://api.runpod.ai'){assert.equal(u.pathname,'/v2/fixture-endpoint/health');assert.equal((init?.headers as any).Authorization,'Bearer '+(mode==='broker'?'fixture-lifecycle-secret':'fixture-restricted-inference-secret'));return Response.json(healthAllowed?{workers:{idle:0,ready:0}}:{error:'Unauthorized'},{status:healthAllowed?200:401});}assert.equal(u.origin,'https://api.runpod.io');assert.equal((init?.headers as any).Authorization,'Bearer fixture-lifecycle-secret');
+  const calls:Array<{method:string;path:string}>=[],pods:any[]=[],requests:any[]=[];let loseCreate=false,emptyDiscovery=false,malformedDiscovery=false,price=.03,stopConfirmed=true,endpointEnabled=true,healthAllowed=true;let workerHealth:unknown={idle:0,ready:0};
+  const transport:typeof fetch=async(url,init)=>{const u=new URL(String(url)),method=init?.method??'GET';assert.equal(init?.redirect,'error');assert(init?.signal);calls.push({method,path:u.pathname});if(u.origin==='https://api.runpod.ai'){assert.equal(u.pathname,'/v2/fixture-endpoint/health');assert.equal((init?.headers as any).Authorization,'Bearer '+(mode==='broker'?'fixture-lifecycle-secret':'fixture-restricted-inference-secret'));return Response.json(healthAllowed?{workers:workerHealth}:{error:'Unauthorized'},{status:healthAllowed?200:401});}assert.equal(u.origin,'https://api.runpod.io');assert.equal((init?.headers as any).Authorization,'Bearer fixture-lifecycle-secret');
    if(u.pathname==='/v2/serverless/fixture-endpoint')return Response.json({id:'fixture-endpoint',workers:{min:0,max:endpointEnabled?1:0}});
    if(u.pathname==='/v2/catalog/cpus/cpu3c'){assert.equal(u.search,'?include=AVAILABILITY&product=POD&vcpuCount=2');return Response.json({id:'cpu3c',ramGbPerVcpu:2,vcpu:{min:2,max:32},price:{securePerVcpu:price},availability:'HIGH',dataCenters:[{id:'US-NC-2',availability:'HIGH'}]});}
    if(u.pathname.startsWith('/v2/network-volumes/'))return Response.json({id:u.pathname.split('/').at(-1),dataCenter:'US-NC-2',size:10,type:'HIGH_PERFORMANCE'});
@@ -50,7 +50,7 @@ test('managed CPU saga uses actual transactions and fake Runpod transport withou
    if(u.pathname==='/v2/pods')return Response.json(malformedDiscovery?{pods:[]}:{pods:emptyDiscovery?[]:pods,pagination:{hasNextPage:false,nextCursor:null}});
    const pod=pods.find(p=>p.id===u.pathname.split('/')[3]);assert(pod,'Unexpected provider read');if(u.pathname.endsWith('/action')){assert.equal(method,'POST');assert.deepEqual(JSON.parse(String(init?.body)),{action:'stop'});if(stopConfirmed)pod.status='EXITED';return Response.json(pod);}return Response.json(pod);
   };
-  return{transport,calls,pods,requests,setEndpoint:(v:boolean)=>endpointEnabled=v,setHealth:(v:boolean)=>healthAllowed=v,setLoseCreate:(v:boolean)=>loseCreate=v,setEmpty:(v:boolean)=>emptyDiscovery=v,setMalformed:(v:boolean)=>malformedDiscovery=v,setPrice:(v:number)=>price=v,setStopConfirmed:(v:boolean)=>stopConfirmed=v,creates:()=>calls.filter(c=>c.method==='POST'&&c.path==='/v2/pods').length,stops:()=>calls.filter(c=>c.method==='POST'&&c.path.endsWith('/action')).length};
+  return{transport,calls,pods,requests,setEndpoint:(v:boolean)=>endpointEnabled=v,setHealth:(v:boolean)=>healthAllowed=v,setWorkers:(v:unknown)=>workerHealth=v,setLoseCreate:(v:boolean)=>loseCreate=v,setEmpty:(v:boolean)=>emptyDiscovery=v,setMalformed:(v:boolean)=>malformedDiscovery=v,setPrice:(v:number)=>price=v,setStopConfirmed:(v:boolean)=>stopConfirmed=v,creates:()=>calls.filter(c=>c.method==='POST'&&c.path==='/v2/pods').length,stops:()=>calls.filter(c=>c.method==='POST'&&c.path.endsWith('/action')).length};
  }
  const reconcile=(provisionId:string,provider:ReturnType<typeof transportFixture>)=>reconcileStudioHostProvision(provisionId,{fetch:provider.transport});
  async function selectRuntime(a:Awaited<ReturnType<typeof fixture>>,expectedRevision=0,expiresAt=new Date(Date.now()+3600000).toISOString()){
@@ -261,6 +261,14 @@ test('managed CPU saga uses actual transactions and fake Runpod transport withou
   });
   await t.test('a disabled inference endpoint or restricted-key health denial never starts CPU or enables GPU',async()=>{
    for(const disabled of [true,false]){const a=await fixture(),p=(await a.plan()).provision;await a.start(p);const provider=transportFixture();if(disabled)provider.setEndpoint(false);else provider.setHealth(false);await reconcile(p.id,provider);const current=await a.get(p.id);assert.equal(current.phase,'failed');assert.equal(current.errorCode,'CPU_INFERENCE_UNAVAILABLE');assert.equal(current.readiness.ready,false);assert.equal(provider.creates(),0);assert(provider.calls.every(c=>c.method==='GET'));}
+  });
+  await t.test('health counters do not create a false hot-model gate for cached or minimum running workers',async()=>{
+   for(const mode of ['direct','broker'] as const)for(const workers of [{idle:0,ready:0,running:1},{idle:0,ready:1,running:0},{idle:0,ready:0,running:0,initializing:1}]){
+    const a=await fixture(500000,mode==='broker'?brokerInference:undefined),p=(await a.plan()).provision;await a.start(p);const provider=transportFixture(mode);provider.setWorkers(workers);
+    await reconcile(p.id,provider);const current=await a.get(p.id);assert.equal(current.phase,'provisioning');assert.equal(provider.creates(),1);assert(current.submittedAt);assert.equal(provider.calls.filter(call=>call.path.endsWith('/health')).length,1);assert(provider.calls.every(call=>call.method==='GET'||call.path==='/v2/pods'));
+    await reconcile(p.id,provider);assert.equal(provider.creates(),1);assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE provision_id=$1',[p.id])).rows[0].count),1);
+   }
+   updatePreset();
   });
   await t.test('failed preflight cleanup revokes only its unused enrollment without any provider effect or refunded reservation',async()=>{
    const a=await fixture();await selectRuntime(a);const p=(await a.plan()).provision;await a.start(p);const provider=transportFixture();provider.setEndpoint(false);await reconcile(p.id,provider);
