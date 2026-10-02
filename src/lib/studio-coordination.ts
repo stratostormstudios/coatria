@@ -290,6 +290,14 @@ export async function assertStudioReferencePreparationTool(client:PoolClient,age
 // Ordinary specialists also archive outputs and still need destination storage
 // browsing. The separate coordinator-generation child only proposes generation.
 const generationDispatchToolNames:readonly string[]=Object.freeze([...coordinatorGenerationToolNames,'storage_get','storage_files_list','higgsfield_archives_list','higgsfield_archive_get','higgsfield_archive_propose','studio_generated_artifact_register','tasks_submit']);
+/** Source-bound planning uses the exact project/task request, not unrelated
+ * commons chatter. This is context selection only; ordinary authority checks
+ * still run. A prompt, role name or tool catalog cannot create this receipt. */
+export async function studioPlanningDispatchRunScope(client:PoolClient,companyId:string,runId:string){
+ return (await client.query(`SELECT d.project_id,d.work_item_id,w.task_id FROM studio_dispatches d
+  JOIN studio_work_items w ON w.company_id=d.company_id AND w.project_id=d.project_id AND w.id=d.work_item_id
+  WHERE d.company_id=$1 AND d.run_id=$2 AND w.execution='agent' AND w.stage IN ('estimate','breakdown')`,[companyId,runId])).rows[0] as Row|undefined;
+}
 /** Model presentation for an existing assigned task, never an authority grant.
  * Exact server-created dispatch provenance, not prompt text or character role,
  * distinguishes these finite tasks from ordinary company/coordinator missions.

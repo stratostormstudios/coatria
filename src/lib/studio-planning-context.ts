@@ -25,7 +25,7 @@ export function studioPlanningContext(detail:StudioReadableProjectDetail,work:St
  });
  return {
   version:1 as const,
-  scope:{deliverableCount:detail.shots.length,counts,previews,previewsTruncated:detail.shots.length>previews.length,details:'Project specification and brief remain authoritative; page studio_get work for remaining deliverables.'},
+  scope:{deliverableCount:detail.shots.length,counts,previews,previewsTruncated:detail.shots.length>previews.length,details:'Preserve the brief/spec; page studio_get for remaining work.'},
   workflow:{scope:'current_project_work',selectedWorkIsCurrent:detail.workItems.some(item=>item.id===work.id),stages:stages.slice(0,stageLimit).map(stage=>{
    const items=detail.workItems.filter(item=>item.stage===stage);
    const dependencies=[...new Set(items.flatMap(item=>item.dependencies.map(id=>byId.get(id)?.stage).filter((value):value is string=>Boolean(value))))].sort();
@@ -36,10 +36,10 @@ export function studioPlanningContext(detail:StudioReadableProjectDetail,work:St
   businessGates:{brief:detail.project.gates.brief?.decision??'not_recorded',estimate:detail.project.gates.estimate?.decision??'not_recorded',production:detail.project.gates.production?.decision??'not_recorded',clientAcceptance:detail.project.gates.client_acceptance?.decision??'not_recorded',aiPolicy:detail.project.aiPolicy,
    productionRequires:['approved brief','approved scope and estimate','resolved AI-use policy'],generationRequiresAiPolicy:'allowed'},
   generation:{approvalsIncluded:false,deliverableCountIsNotGenerationAllowance:true,automaticRetriesAuthorized:false,
-   rule:'Preserve explicit brief limits. Do not add a retry allowance or infer approved spend. Each provider request, including a retry, needs its own current exact administrator credit approval; an uncertain request must not be automatically resubmitted.'},
+   rule:'Brief limits apply; each generation/retry needs exact current credit approval. Never retry uncertain effects.'},
   review:{assignedQcHumanId:qc?.humanId??null,assignment:!qc?.humanId?'unassigned':conflicts.length?'potential_sponsor_conflict':'independence_unverified',conflictingSponsorRoleKeys:conflicts,independenceVerified:false,
-   rule:'A role assignment does not establish independent review. Verify the exact submission or media reviewer against its producer, sponsors and registrar. A separate authorized machine planning review does not approve media, business gates or client acceptance.'},
-  submissionChecklist:['Confirmed deliverables and technical scope; assumptions and missing inputs separately.','Every planning, production, review and delivery stage with its dependency and approval handoffs.','Known generation limits without invented retries, prices or approvals.','Reviewer independence and unresolved assignments stated honestly.'],
+   rule:'Verify reviewer independence from producer, sponsors and registrar. Machine planning review is not media, business or client approval.'},
+  submissionChecklist:['Scope, assumptions and missing inputs.','All dependency and approval handoffs.','Known generation limits; no invented retries/prices/approvals.','Unverified reviewer eligibility.'],
   grantsAuthority:false,
  };
 }

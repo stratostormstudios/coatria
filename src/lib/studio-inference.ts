@@ -7,7 +7,7 @@ import {authorizeRunTool,authorizeStoredAgentRun,type AgentRunIdentity} from './
 import {installedRuntimeContext} from './plugin-marketplace';
 import {AGENT_TOOLS} from './agent-tools';
 import {generatedFollowupRunContext,generatedFollowupToolNames} from './studio-generated-followups';
-import {coordinatorGenerationRunScope,coordinatorGenerationToolNames,studioDispatchInferenceToolNames} from './studio-coordination';
+import {coordinatorGenerationRunScope,coordinatorGenerationToolNames,studioDispatchInferenceToolNames,studioPlanningDispatchRunScope} from './studio-coordination';
 import {body,fail,hashToken,id,json,rateLimit,ApiError} from './security';
 import {stableRequestId} from '../../public/downloads/agent-worker.mjs';
 import {bridgePolicy,characterInstructions,normalize,usageTokens,modelContextResult,modelRequestContext,modelToolSchema} from '../../public/downloads/provider-adapter.mjs';
@@ -51,9 +51,9 @@ async function binding(client:PoolClient,identity:AgentRunIdentity,installation:
 }
 async function authority(client:PoolClient,identity:AgentRunIdentity,runId:string,proof:string,stored=false){await control(client,identity.company_id);const access=stored?await authorizeStoredAgentRun(client,identity,runId,proof):await authorizeRunTool(client,identity,runId,proof),installation=await installedRuntimeContext(client,identity.company_id,identity.id);if(!installation)fail(403,'An installed managed runtime is required.','INFERENCE_HOST_UNAVAILABLE');return{...access,installation,host:await binding(client,identity,installation)};}
 export async function buildStudioInferenceRequest(client:PoolClient,access:Row){
- const run=access.run,generatedFollowup=await generatedFollowupRunContext(client,run.company_id,run.id);
- if(!generatedFollowup)await client.query('SELECT id FROM conversations WHERE company_id=$1 AND id=$2 FOR SHARE',[run.company_id,run.conversation_id]);
- const messages=generatedFollowup||run.purpose==='connection_test'?[]:(await client.query(`SELECT m.id,m.body,m.parent_id AS "parentId",m.sequence::text AS sequence,m.deleted_at AS "deletedAt",m.actor_kind AS "actorKind",COALESCE(m.user_id,m.agent_id) AS "actorId",COALESCE(u.name,a.name,'Former teammate') AS "authorName" FROM messages m LEFT JOIN users u ON u.id=m.user_id LEFT JOIN agents a ON a.company_id=m.company_id AND a.id=m.agent_id WHERE m.company_id=$1 AND m.conversation_id=$2 AND (($3::uuid IS NULL AND m.parent_id IS NULL) OR m.id=$3 OR m.parent_id=$3) ORDER BY (m.id=$3) DESC NULLS LAST,m.sequence DESC LIMIT 30`,[run.company_id,run.conversation_id,run.parent_id])).rows.sort((a,b)=>BigInt(a.sequence)<BigInt(b.sequence)?-1:1);
+ const run=access.run,generatedFollowup=await generatedFollowupRunContext(client,run.company_id,run.id),planningDispatch=generatedFollowup?undefined:await studioPlanningDispatchRunScope(client,run.company_id,run.id);
+ if(!generatedFollowup&&!planningDispatch)await client.query('SELECT id FROM conversations WHERE company_id=$1 AND id=$2 FOR SHARE',[run.company_id,run.conversation_id]);
+ const messages=generatedFollowup||planningDispatch||run.purpose==='connection_test'?[]:(await client.query(`SELECT m.id,m.body,m.parent_id AS "parentId",m.sequence::text AS sequence,m.deleted_at AS "deletedAt",m.actor_kind AS "actorKind",COALESCE(m.user_id,m.agent_id) AS "actorId",COALESCE(u.name,a.name,'Former teammate') AS "authorName" FROM messages m LEFT JOIN users u ON u.id=m.user_id LEFT JOIN agents a ON a.company_id=m.company_id AND a.id=m.agent_id WHERE m.company_id=$1 AND m.conversation_id=$2 AND (($3::uuid IS NULL AND m.parent_id IS NULL) OR m.id=$3 OR m.parent_id=$3) ORDER BY (m.id=$3) DESC NULLS LAST,m.sequence DESC LIMIT 30`,[run.company_id,run.conversation_id,run.parent_id])).rows.sort((a,b)=>BigInt(a.sequence)<BigInt(b.sequence)?-1:1);
  // These classifications come from immutable server-created dispatch records,
  // never the prompt. Existing route predicates still enforce exact arguments.
  // Frozen workers accept this subset of their ordinary validated tool catalog.
