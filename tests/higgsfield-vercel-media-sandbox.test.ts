@@ -7,7 +7,7 @@ import {tmpdir} from 'node:os';
 import {gunzipSync} from 'node:zlib';
 import {
  VERCEL_MEDIA_IMAGE,VERCEL_MEDIA_CHECKS,parseVercelMediaQualification,
- createVercelMediaSandboxCandidate,isQualifiedVercelMediaSandbox,
+ createVercelMediaSandboxCandidate,isQualifiedVercelMediaSandbox,VercelMediaSandboxFailure,
  type VercelMediaSandboxOptions,
 } from '../src/lib/higgsfield-vercel-media-sandbox';
 import {MediaSandboxError} from '../src/lib/higgsfield-media-sandbox';
@@ -90,13 +90,13 @@ test('URL locators, bearer material and unexpected decoder switches never enter 
 });
 
 type Call={path:string;method:string;body:any;headers:Headers;signal:AbortSignal|null|undefined};
-function provider({mutateCreate,mutateFinished,createLost=false,byNameMissing=false,recoverOwned=false,cleanupWrongSession=false,terminalAfter=1,stdout='synthetic decoder output',logOverride,onCommand,onTerminal}:{mutateCreate?:(value:any)=>void;mutateFinished?:(value:any)=>void;createLost?:boolean;byNameMissing?:boolean;recoverOwned?:boolean;cleanupWrongSession?:boolean;terminalAfter?:number;stdout?:string;logOverride?:()=>Response;onCommand?:()=>void;onTerminal?:()=>void}={}){
+function provider({mutateCreate,mutateFinished,createLost=false,byNameMissing=false,recoverOwned=false,cleanupWrongSession=false,terminalAfter=1,stdout='synthetic decoder output',logOverride,onCommand,onTerminal,expectedToken='synthetic-secret-provider-token'}:{mutateCreate?:(value:any)=>void;mutateFinished?:(value:any)=>void;createLost?:boolean;byNameMissing?:boolean;recoverOwned?:boolean;cleanupWrongSession?:boolean;terminalAfter?:number;stdout?:string;logOverride?:()=>Response;onCommand?:()=>void;onTerminal?:()=>void;expectedToken?:string}={}){
  const calls:Call[]=[],uploads=new Map<string,Buffer>();let created:any,ownedCreated:any,job:any;
  let statusReads=0;
  const response=(body:unknown)=>Response.json(body);
  const transport:typeof fetch=async(resource,init={})=>{
   const url=new URL(String(resource)),path=url.pathname,method=init.method??'GET',headers=new Headers(init.headers);
-  assert.equal(url.origin,'https://api.vercel.com');assert.equal(url.searchParams.get('teamId'),'team_synthetic');assert.equal(init.redirect,'error');assert.equal(headers.get('authorization'),'Bearer synthetic-secret-provider-token');
+  assert.equal(url.origin,'https://api.vercel.com');assert.equal(url.searchParams.get('teamId'),'team_synthetic');assert.equal(init.redirect,'error');assert.equal(headers.get('authorization'),'Bearer '+expectedToken);
   const body=typeof init.body==='string'?JSON.parse(init.body):init.body;calls.push({path,method,body,headers,signal:init.signal});
   if(path==='/v3/sandboxes'&&method==='POST'){
    created={sandbox:{name:body.name,currentSessionId:'sbx_synthetic',persistent:false,image:VERCEL_MEDIA_IMAGE,region:'iad1',timeout:1000,vcpus:2,memory:4096,failoverRegions:[],networkPolicy:{mode:'deny-all'}},session:{id:'sbx_synthetic',status:'running',vcpus:2,memory:4096,region:'iad1',timeout:1000,networkPolicy:{mode:'deny-all'},startedAt:Date.now()},routes:[]};ownedCreated=structuredClone(created);mutateCreate?.(created);
@@ -231,6 +231,52 @@ test('oversized provider output and unexpected stderr are bounded failures that 
   const fake=provider({logOverride}),sandbox=await createVercelMediaSandboxCandidate(options,{fetch:fake.transport});await assert.rejects(sandbox.run(input),fixedError);assert.ok(events.some(event=>event.type==='terminal'));
  });
 });
+
+const datedToken=(seconds:number)=>['eyJhbGciOiJub25lIn0',Buffer.from(JSON.stringify({exp:Math.floor(Date.now()/1000)+seconds})).toString('base64url'),'synthetic-signature'].join('.');
+function evidence(error:unknown){assert.ok(error instanceof VercelMediaSandboxFailure);fixedError(error);assert.doesNotMatch(JSON.stringify(error),/synthetic-secret|private\.invalid|Bearer|eyJ/);assert.ok(Object.isFrozen(error.evidence));assert.ok(Object.isFrozen(error.evidence.cleanup));return error;}
+
+test('original failure and separate stop/read failures survive cleanup uncertainty without reflecting provider bodies',async()=>fixture(async({options,input,events})=>{
+ const fake=provider();let stops=0,reads=0;
+ const transport:typeof fetch=async(resource,init)=>{const path=new URL(String(resource)).pathname;
+  if(path.endsWith('/fs/write'))return Response.json({error:'synthetic-secret https://private.invalid'},{status:413});
+  if(path.endsWith('/stop')){stops++;return Response.json({error:'synthetic-secret'},{status:403});}
+  if(path==='/v2/sandboxes/sessions/sbx_synthetic'){reads++;return Response.json({error:'synthetic-secret'},{status:503});}
+  return fake.transport(resource,init);
+ };
+ const sandbox=await createVercelMediaSandboxCandidate(options,{fetch:transport});
+ await assert.rejects(sandbox.run(input),error=>{const e=evidence(error);assert.equal(e.code,'CLEANUP_FAILED');assert.deepEqual(e.evidence,{primary:{phase:'upload',stage:'response',httpStatus:413,code:'SANDBOX_UNAVAILABLE'},cleanup:{outcome:'unknown',stop:{phase:'cleanup-stop',stage:'response',httpStatus:403,code:'SANDBOX_UNAVAILABLE'},failure:{phase:'cleanup-read',stage:'response',httpStatus:503,code:'SANDBOX_UNAVAILABLE'},terminalStatus:null}});return true;});
+ await assert.rejects(sandbox.run(input),fixedError);assert.equal(stops,1);assert.equal(reads,1);assert.equal(fake.calls.filter(c=>c.path==='/v3/sandboxes').length,1);assert.ok(events.some(e=>e.type==='cleanup-unknown'));
+}));
+
+test('cleanup reuses only a still-dated token while ordinary work still acquires current credentials',async()=>{
+ for(const mode of ['current','expired','opaque'] as const)await fixture(async({options,input,events})=>{
+  const token=mode==='opaque'?'synthetic-secret-provider-token':datedToken(mode==='current'?120:-1),fake=provider({expectedToken:token});let acquisitions=0;
+  options.token=async()=>{if(++acquisitions===2)throw Error('synthetic-secret https://private.invalid acquisition failed');return token;};
+  const sandbox=await createVercelMediaSandboxCandidate(options,{fetch:fake.transport});
+  await assert.rejects(sandbox.run(input),error=>{const e=evidence(error);assert.deepEqual(e.evidence.primary,{phase:'upload',stage:'token',httpStatus:null,code:'SANDBOX_UNAVAILABLE'});assert.equal(e.evidence.cleanup.outcome,'terminal');assert.equal(e.evidence.cleanup.terminalStatus,'stopped');return true;});
+  assert.equal(acquisitions,mode==='current'?2:4);assert.equal(fake.uploads.size,0);assert.equal(fake.calls.filter(c=>c.path.endsWith('/stop')).length,1);assert.ok(events.some(e=>e.type==='terminal'));
+ });
+});
+
+test('a stalled single stop is bounded separately and exact readback still gets the remaining cleanup window',async()=>fixture(async({options,input})=>{
+ const token=datedToken(120),fake=provider({expectedToken:token});let acquisitions=0,stopCount=0,stopAborted=false;
+ options.token=async()=>{acquisitions++;return token;};
+ const transport:typeof fetch=async(resource,init)=>{const path=new URL(String(resource)).pathname;
+  if(path.endsWith('/fs/write'))return Response.json({error:'synthetic-secret'},{status:413});
+  if(path.endsWith('/stop')){stopCount++;assert.equal(init?.body,undefined);const signal=init?.signal;assert.ok(signal);return new Promise<Response>((_,reject)=>signal.addEventListener('abort',()=>{stopAborted=true;reject(signal.reason);},{once:true}));}
+  return fake.transport(resource,init);
+ };
+ const keepAlive=setInterval(()=>{},1000);try{
+  const sandbox=await createVercelMediaSandboxCandidate(options,{fetch:transport});
+  await assert.rejects(sandbox.run(input),error=>{const e=evidence(error);assert.equal(e.evidence.primary?.phase,'upload');assert.equal(e.evidence.primary?.httpStatus,413);assert.deepEqual(e.evidence.cleanup.stop,{phase:'cleanup-stop',stage:'request',httpStatus:null,code:'TIMEOUT'});assert.equal(e.evidence.cleanup.outcome,'terminal');assert.equal(e.evidence.cleanup.terminalStatus,'stopped');return true;});
+ }finally{clearInterval(keepAlive);}
+ assert.equal(stopCount,1);assert.equal(stopAborted,true);assert.equal(acquisitions,2);assert.equal(fake.calls.filter(c=>c.path==='/v2/sandboxes/sessions/sbx_synthetic').length,1);
+}));
+
+test('abort reason stays private while cancellation and terminal cleanup remain distinguishable',async()=>fixture(async({options,input})=>{
+ const abort=new AbortController(),fake=provider({onCommand:()=>abort.abort(Error('synthetic-secret https://private.invalid'))}),sandbox=await createVercelMediaSandboxCandidate(options,{fetch:fake.transport});
+ await assert.rejects(sandbox.run({...input,signal:abort.signal}),error=>{const e=evidence(error);assert.equal(e.code,'ABORTED');assert.equal(e.evidence.primary?.code,'ABORTED');assert.equal(e.evidence.cleanup.outcome,'terminal');return true;});
+}));
 
 test('the bounded grammar accepts current inspector probe, full-decode and frame-pass commands for every supported demuxer',async()=>{
  const videoCodecs='h264,hevc,av1,mpeg4,prores,libdav1d,libaom-av1',audioCodecs='aac,mp3,mp3float,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,pcm_f64le,pcm_u8';

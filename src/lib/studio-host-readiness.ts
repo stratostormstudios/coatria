@@ -6,11 +6,12 @@ import {parseStudioCpuPreset,sameRuntimeConfiguration,trustedServiceHash,type Pi
 import {studioCpuPreset} from './studio-host-provisioning';
 import {ApiError,fail,id} from './security';
 import {RUNPOD_CPU_CATALOG_PATH,runpodCpuCapacity} from './runpod-cpu-capacity';
+import {projectRunpodWorkerReadiness,type RunpodWorkerState,type RunpodWorkerCounts} from './runpod-worker-readiness';
 
 export const PROVIDER_READINESS_CODES=['ready','credential_missing','http_unauthorized','http_rate_limited','http_failed','redirect_rejected','timeout','network_error','response_too_large','invalid_json','invalid_response','endpoint_mismatch','worker_limit_invalid','endpoint_disabled','health_workers_invalid','cpu_sku_mismatch','cpu_capacity_unavailable','cpu_capacity_unconfirmed'] as const;
 type Code=typeof PROVIDER_READINESS_CODES[number];
 type FieldType='missing'|'null'|'array'|'object'|'number'|'string'|'boolean'|'undefined';
-export type StudioHostProviderCheck={stage:'lifecycle'|'health'|'cpu_capacity';ready:boolean;code:Code;httpStatus:number|null;regionReady?:boolean;endpointIdMatches?:boolean;endpointType?:'QUEUE'|'LOAD_BALANCER'|'other'|'missing';workersMax?:number|null;workersMaxType?:FieldType;workersMin?:number|null;workersMinType?:FieldType;workersType?:FieldType;workerCounts?:Record<string,number|null>};
+export type StudioHostProviderCheck={stage:'lifecycle'|'health'|'cpu_capacity';ready:boolean;code:Code;httpStatus:number|null;regionReady?:boolean;endpointIdMatches?:boolean;endpointType?:'QUEUE'|'LOAD_BALANCER'|'other'|'missing';workersMax?:number|null;workersMaxType?:FieldType;workersMin?:number|null;workersMinType?:FieldType;workersType?:FieldType;endpointReachable?:boolean;workerState?:RunpodWorkerState;workerCounts?:RunpodWorkerCounts;modelReadiness?:'unverified'};
 export type StudioHostProviderReadiness={provisionId:string;checkedAt:string;readOnly:true;authorizesStart:false;ready:boolean;providerReady:boolean;configuration:{state:'current'|'inactive'|'changed'|'unavailable'};checks:StudioHostProviderCheck[];cpuCapacity?:StudioHostProviderCheck};
 const MAX_RESPONSE=2*1024*1024,TIMEOUT_MS=10000,providerId=/^[A-Za-z0-9_-]{1,100}$/;
 const isObject=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
@@ -31,9 +32,11 @@ export function projectStudioProviderCheck(stage:StudioHostProviderCheck['stage'
   return {...base,ready,regionReady:ready,code:ready?'ready':capacity==='unavailable'?'cpu_capacity_unavailable':'cpu_capacity_unconfirmed'};
  }
  if(stage==='health'){
-  const workers=value.workers,result={...base,workersType:fieldType(workers)};
+  const workers=value.workers,result={...base,endpointReachable:true,workersType:fieldType(workers)};
   if(!isObject(workers))return {...result,code:'health_workers_invalid'};
-  return {...result,ready:true,code:'ready',workerCounts:Object.fromEntries(['idle','initializing','ready','running','throttled','unhealthy'].map(key=>[key,count(workers[key])]))};
+  // Health access remains distinct from model readiness: cached/scheduled workers
+  // can appear in these counters before a model is able to answer.
+  return {...result,...projectRunpodWorkerReadiness(workers),ready:true,code:'ready'};
  }
  const workers=isObject(value.workers)?value.workers:{},maximum=count(workers.max),minimum=count(workers.min),matches=value.id===scopeId;
  const endpointType=value.type===undefined?'missing':value.type==='QUEUE'||value.type==='LOAD_BALANCER'?value.type:'other';

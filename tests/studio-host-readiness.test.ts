@@ -18,7 +18,7 @@ test('independent fixed GETs check health even with max0; only safe numeric proj
  const result=await probeStudioHostProviders({endpointId,inference,company},settings,transport);
  assert.deepEqual(calls.map(c=>c.url),['https://api.runpod.io/v2/serverless/fixture-endpoint','https://api.runpod.ai/v2/fixture-endpoint/health','https://api.runpod.io/v2/catalog/cpus/cpu3c?include=AVAILABILITY&product=POD&vcpuCount=2']);
  for(const c of calls){assert.equal(c.init?.method,'GET');assert.equal(c.init?.redirect,'manual');assert.equal(c.init?.cache,'no-store');assert(c.init?.signal);assert.equal((c.init?.headers as any).Authorization,'Bearer '+settings.MANAGED_RUNPOD_API_KEY);assert.equal(c.init?.body,undefined);}
- assert.equal(result[0].code,'endpoint_disabled');assert.equal(result[0].workersMax,0);assert.equal(result[1].ready,true);assert.equal(result[1].workerCounts?.unhealthy,null);
+ assert.equal(result[0].code,'endpoint_disabled');assert.equal(result[0].workersMax,0);assert.equal(result[1].ready,true);assert.equal(result[1].modelReadiness,'unverified');assert.equal(result[1].endpointReachable,true);assert.equal(result[1].workerState,'unconfirmed');assert.equal(result[1].workerCounts?.unhealthy,null);
  const serialized=JSON.stringify(result);for(const forbidden of [settings.MANAGED_RUNPOD_API_KEY,'PRIVATE_REASON','https://private.invalid','requestUrls','SECRET'])assert(!serialized.includes(forbidden));
 });
 test('management denial does not hide health authorization and legacy uses only its exact separate key',async()=>{
@@ -36,6 +36,15 @@ test('provider shape errors distinguish mismatched endpoint, numeric type and ma
  const shape=projectStudioProviderCheck('lifecycle',endpointId,{id:endpointId,workers:{max:'1'}},200);assert.equal(shape.code,'worker_limit_invalid');assert.equal(shape.workersMaxType,'string');assert.equal(shape.workersMax,null);
  for(const workers of [null,[],0,'private'])assert.equal(projectStudioProviderCheck('health',endpointId,{workers},200).code,'health_workers_invalid');
  assert.equal(projectStudioProviderCheck('health',endpointId,{workers:{}},200).ready,true);
+});
+test('worker counts preserve provider observations without asserting a hot model',()=>{
+ const zero={idle:0,initializing:0,ready:0,running:0,throttled:0,unhealthy:0};
+ const cases:Array<[unknown,string]>=[[{...zero,ready:1},'reported'],[{...zero,idle:2},'reported'],[{...zero,initializing:1},'reported'],[{...zero,running:1},'reported'],[{...zero,throttled:1},'reported'],[{...zero,unhealthy:1},'reported'],[zero,'none_reported'],[{},'unconfirmed'],[{ready:null,idle:null},'unconfirmed']];
+ for(const bad of [-1,1.5,Number.MAX_SAFE_INTEGER+1,'1',[],{}])cases.push([{ready:1,idle:bad},'unconfirmed']);
+ for(const [workers,state] of cases){const result=projectStudioProviderCheck('health',endpointId,{workers,message:'PRIVATE'},200);assert.equal(result.endpointReachable,true);assert.equal(result.workerState,state);assert.equal(result.ready,true);assert.equal(result.code,'ready');assert.equal(result.modelReadiness,'unverified');assert.deepEqual(Object.keys(result.workerCounts!).sort(),['idle','initializing','ready','running','throttled','unhealthy']);assert.doesNotMatch(JSON.stringify(result),/PRIVATE/);}
+ const report=projectStudioProviderCheck('health',endpointId,{workers:{idle:2,ready:3,running:4,initializing:5,throttled:6,unhealthy:7,secret:'PRIVATE'}},200);assert.deepEqual(report.workerCounts,{idle:2,initializing:5,ready:3,running:4,throttled:6,unhealthy:7});
+ // A later read replaces the observation; none of them establishes model readiness.
+ const next=projectStudioProviderCheck('health',endpointId,{workers:zero},200);assert.equal(next.workerState,'none_reported');assert.equal(next.modelReadiness,'unverified');
 });
 test('CPU capacity projects only the exact approved region and fixed safe codes',()=>{
  const project=(value:unknown)=>projectStudioProviderCheck('cpu_capacity','US-NC-2',value,200);
@@ -62,7 +71,7 @@ test('readiness uses actual scoped stored provision and current admin authority 
  const preset={...rawPreset,company},configuration={...rawPreset,companies:[company]},configurationHash=trustedServiceHash(configuration),runtimeConfiguration={configurationId:configId,selectionRevision:1,configurationHash,expiresAt:deadline},plan={version:1,companyId,preset:{hash:trustedServiceHash(preset)},runtimeConfiguration},planHash=trustedServiceHash(plan);
  const member={companyId,userId,role:'owner',user:{id:userId,name:'Diagnostic owner',email:userId+'@example.invalid'}} as Membership;
  const invoke=(fetch:typeof globalThis.fetch)=>readStudioHostProviderReadiness(member,provisionId,{fetch,settings});
- let calls=0;const ok:typeof fetch=async url=>{calls++;return Response.json(String(url).includes('/catalog/')?cpu:String(url).includes('/serverless/')?{id:endpointId,workers:{min:0,max:1}}:{workers:{idle:0,ready:0}});};
+ let calls=0;const ok:typeof fetch=async url=>{calls++;return Response.json(String(url).includes('/catalog/')?cpu:String(url).includes('/serverless/')?{id:endpointId,workers:{min:0,max:1}}:{workers:{idle:1,ready:1}});};
  try{
   await query("INSERT INTO users(id,name,email,password_hash) VALUES($1,'Diagnostic owner',$2,'fixture')",[userId,userId+'@example.invalid']);await query("INSERT INTO companies(id,name,slug,template) VALUES($1,'Readiness fixture',$2,'blank')",[companyId,companyId]);await query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'owner')",[companyId,userId]);await query("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,clock_timestamp()+interval '1 hour')",[hashToken(session),userId]);
   await query("INSERT INTO company_runtime_configurations(id,company_id,kind,phase,preset,configuration_hash,worker_volume_id,expires_at,created_by) VALUES($1,$2,'managed_agent','service',$3,$4,'fixture-volume',$5,$6)",[configId,companyId,JSON.stringify(configuration),configurationHash,deadline,userId]);await query("INSERT INTO company_runtime_selections(company_id,kind,configuration_id,revision,state,selected_by) VALUES($1,'managed_agent',$2,1,'active',$3)",[companyId,configId,userId]);
@@ -73,6 +82,12 @@ test('readiness uses actual scoped stored provision and current admin authority 
   });
   await t.test('wrong company, tampered plan and non-admin membership dispatch no provider reads',async()=>{
    const start=calls;await assert.rejects(readStudioHostProviderReadiness({...member,companyId:randomUUID()},provisionId,{fetch:ok,settings}));await query("UPDATE memberships SET role='member' WHERE company_id=$1 AND user_id=$2",[companyId,userId]);await assert.rejects(invoke(ok),{status:403});await query("UPDATE memberships SET role='owner' WHERE company_id=$1 AND user_id=$2",[companyId,userId]);await query("UPDATE studio_host_provisions SET plan_hash=$2 WHERE id=$1",[provisionId,'c'.repeat(64)]);await assert.rejects(invoke(ok),{code:'CPU_READINESS_SCOPE_INVALID'});await query('UPDATE studio_host_provisions SET plan_hash=$2 WHERE id=$1',[provisionId,planHash]);assert.equal(calls,start);
+  });
+  await t.test('accessible health with zero workers remains explicit about unverified model readiness without writes',async()=>{
+   const snapshot=JSON.stringify((await query('SELECT * FROM studio_host_provisions WHERE id=$1',[provisionId])).rows),workers={idle:0,ready:0,initializing:0,running:0,throttled:0,unhealthy:0};
+   const result=await invoke(async(url,init)=>String(url).endsWith('/health')?Response.json({workers}):ok(url,init));
+   assert.equal(result.providerReady,true);assert.equal(result.checks[0].ready,true);assert.equal(result.checks[1].endpointReachable,true);assert.equal(result.checks[1].workerState,'none_reported');assert.equal(result.checks[1].modelReadiness,'unverified');assert.deepEqual(result.checks[1].workerCounts,workers);assert.equal(result.cpuCapacity?.ready,true);assert.equal(result.authorizesStart,false);
+   assert.equal(JSON.stringify((await query('SELECT * FROM studio_host_provisions WHERE id=$1',[provisionId])).rows),snapshot);assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE company_id=$1',[companyId])).rows[0].count),0);
   });
   await t.test('unavailable CPU capacity fails aggregate readiness while retaining the legacy two checks',async()=>{
    const result=await invoke(async(url,init)=>String(url).includes('/catalog/')?Response.json({id:'cpu3c',availability:'NONE'}):ok(url,init));
