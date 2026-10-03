@@ -5,6 +5,7 @@ import {transaction} from './db';
 import {authenticateAgent} from './integrations';
 import {authorizeRunTool,authorizeStoredAgentRun,type AgentRunIdentity} from './agent-runs';
 import {installedRuntimeContext} from './plugin-marketplace';
+import {inferMissionRunProfile} from './agent-missions';
 import {AGENT_TOOLS} from './agent-tools';
 import {generatedFollowupRunContext,generatedFollowupToolNames} from './studio-generated-followups';
 import {coordinatorGenerationRunScope,coordinatorGenerationToolNames,studioDispatchInferenceToolNames,studioPlanningDispatchRunScope} from './studio-coordination';
@@ -34,6 +35,9 @@ function bounded(v:unknown,max=1048576){const text=JSON.stringify(v);if(typeof t
 const parse=<T>(schema:z.ZodType<T>,input:unknown)=>{const p=schema.safeParse(input);if(!p.success)fail(400,'Use the exact bounded inference request fields.','VALIDATION_ERROR');return p.data;};
 async function control(client:PoolClient,companyId:string){await client.query('SELECT id FROM companies WHERE id=$1 FOR KEY SHARE',[companyId]);await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`studio-cpu-control:${companyId}`]);}
 export async function studioInferenceReserved(client:PoolClient,companyId:string){return Number((await client.query('SELECT COALESCE(sum(amount_microusd),0) AS amount FROM studio_inference_reservations WHERE company_id=$1',[companyId])).rows[0].amount);}
+// Version 1 covers the generated coordinator v6 workflow. This is model
+// presentation, not project authorization; never expand this version implicitly.
+const generatedCoordinatorV1ToolNames:readonly string[]=Object.freeze(['studio_get','studio_generated_revisions_get','studio_generated_revision_draft','studio_coordination_get','studio_review_policy_get','studio_review_dispatch','studio_work_dispatch','studio_generated_followups_get','studio_generated_followup_dispatch','tasks_claim','tasks_submit']);
 export function studioInferenceConfigured(){return typeof process.env.MANAGED_RUNPOD_API_KEY==='string'&&process.env.MANAGED_RUNPOD_API_KEY.length>=8;}
 function projection(row:Row,includeOutput=true):StudioInference{
  const v2=row.limits?.protocolVersion===2,completed=includeOutput&&row.status==='succeeded',feedback=completed&&row.model_calls.some((call:Row)=>call.disposition==='validation_error');
@@ -57,7 +61,12 @@ export async function buildStudioInferenceRequest(client:PoolClient,access:Row){
  // These classifications come from immutable server-created dispatch records,
  // never the prompt. Existing route predicates still enforce exact arguments.
  // Frozen workers accept this subset of their ordinary validated tool catalog.
- const scopedNames=generatedFollowup?generatedFollowupToolNames:await coordinatorGenerationRunScope(client,run.company_id,run.id)?coordinatorGenerationToolNames:await studioDispatchInferenceToolNames(client,run.company_id,run.id);
+ const specialistNames=generatedFollowup?generatedFollowupToolNames:await coordinatorGenerationRunScope(client,run.company_id,run.id)?coordinatorGenerationToolNames:await studioDispatchInferenceToolNames(client,run.company_id,run.id);
+ // A cycle's immutable server record selects this profile, never its objective
+ // or current mission configuration. Specialist continuations remain stricter.
+ const missionProfile=specialistNames===null?await inferMissionRunProfile(client,run):null;
+ if(missionProfile&&(missionProfile.kind!=='studio_generated_coordinator'||missionProfile.version!==1))fail(409,'The mission inference profile is unsupported.','MISSION_INFERENCE_PROFILE_INVALID');
+ const scopedNames=missionProfile?generatedCoordinatorV1ToolNames:specialistNames;
  const tools=Object.entries(AGENT_TOOLS).filter(([name,tool])=>(scopedNames===null||scopedNames.includes(name))&&[tool.capability,...tool.additionalCapabilities??[]].every(cap=>access.capabilities.includes(cap))).map(([name,tool])=>({type:'function',function:{name,description:tool.description,parameters:modelToolSchema(z.toJSONSchema(tool.schema,{io:'input',unrepresentable:'any'}))}}));
  return{model:access.installation.runtimeConfig.modelId,messages:[{role:'system',content:bridgePolicy+characterInstructions(access.installation)},{role:'user',content:bounded(modelRequestContext(run,{messages,...generatedFollowup?{generatedFollowup}:{}}),300000)}],...(tools.length?{tools}:{}),max_tokens:0,stream:false};
 }

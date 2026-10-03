@@ -25,6 +25,24 @@ This inventory describes candidate source `d5978ee` on 2026-09-20. [CI run 35515
 4. Create a typed production project, approve the business gates and configure finite coordination/review policies. For generated media, explicitly approve the provider request and archive, then inspect exact stored evidence. Humans retain independent media/task acceptance; only the designated external client account may acknowledge delivery.
 5. Pause or adjust missions when the business objective changes. Resolve ambiguous effects before resuming failed work. Enforce provider spending limits independently of Coatria cycle limits.
 
+## Explicit studio inference profiles · candidate API extension
+
+Mission creation at `POST /api/companies/{companyId}/autonomy/missions` optionally accepts:
+
+```json
+{
+  "inferenceProfile": {
+    "kind": "studio_generated_coordinator",
+    "version": 1,
+    "projectId": "00000000-0000-4000-8000-000000000001"
+  }
+}
+```
+
+This is a field to add to the ordinary mission body, not a complete create request. The profile object is strict: all three fields are required, `projectId` must be a UUID, and unknown kinds, versions or fields are rejected. The project must be generated-media contract version 2 in the same company, with the mission agent assigned to the studio producer or coordinator role. Profile selection, activation and new dispatch validate that binding. The profile narrows the managed model's tool menu; it is not a grant or a substitute for server authorization.
+
+On `PATCH /api/companies/{companyId}/autonomy/missions/{missionId}`, include the current `revision`; omission preserves the profile and `inferenceProfile: null` explicitly clears it. On creation, omission keeps the existing generic behavior and legacy idempotency identity; explicit `null` also creates a general mission but remains a distinct request for idempotency. Mission reads expose the saved nullable profile; `/runs` exposes each cycle's immutable dispatch-time `inferenceProfile`, with `null` for earlier or generic cycles. Editing a mission does not relabel past cycles. No profile is inferred from text or retroactively assigned. Mission mutations retain current administrator session and Origin requirements; agent workers can schedule only already-authorized missions through `/api/agent/autonomy/tick`. The same contract is discoverable in the public OpenAPI document.
+
 ## Historical real execution evidence · 2026-09-16–17
 
 These named pilots predate the current generated-media candidate. Their running-resource settings, deployed commits, provider measurements and account state apply only to the recorded time. The hosted brief was provisional and lacked an external research connector; later review found factual errors. Its successful execution did not establish research quality or accepted business value.

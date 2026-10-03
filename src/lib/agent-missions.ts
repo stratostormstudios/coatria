@@ -7,12 +7,45 @@ import {memberMutation,recordActivity} from './company';
 import {transaction} from './db';
 import {authenticateAgent} from './integrations';
 import {createAgentRunInTransaction,type AgentRunIdentity} from './agent-runs';
-import {body,fail,hashToken,id,json,rateLimit,uuid} from './security';
+import {ApiError,body,fail,hashToken,id,json,rateLimit,uuid} from './security';
+import {missionInferenceProfileSchema,type MissionInferenceProfile} from './mission-inference-profile';
 
-const createInput=z.object({clientId:uuid,agentId:uuid,name:z.string().trim().min(1).max(100),objective:z.string().trim().min(1).max(3000),intervalMinutes:z.number().int().min(15).max(1440).default(60),maxCycles:z.number().int().min(1).max(100).default(5),status:z.enum(['active','paused']).default('paused')}).strict();
-const patchInput=z.object({revision:z.number().int().min(1).max(2147483646),name:z.string().trim().min(1).max(100).optional(),objective:z.string().trim().min(1).max(3000).optional(),intervalMinutes:z.number().int().min(15).max(1440).optional(),maxCycles:z.number().int().min(1).max(100).optional(),status:z.enum(['active','paused']).optional()}).strict().refine(value=>Object.keys(value).length>1,'Provide a mission change.');
+const createInput=z.object({clientId:uuid,agentId:uuid,name:z.string().trim().min(1).max(100),objective:z.string().trim().min(1).max(3000),intervalMinutes:z.number().int().min(15).max(1440).default(60),maxCycles:z.number().int().min(1).max(100).default(5),status:z.enum(['active','paused']).default('paused'),inferenceProfile:missionInferenceProfileSchema.nullable().optional()}).strict();
+const patchInput=z.object({revision:z.number().int().min(1).max(2147483646),name:z.string().trim().min(1).max(100).optional(),objective:z.string().trim().min(1).max(3000).optional(),intervalMinutes:z.number().int().min(15).max(1440).optional(),maxCycles:z.number().int().min(1).max(100).optional(),status:z.enum(['active','paused']).optional(),inferenceProfile:missionInferenceProfileSchema.nullable().optional()}).strict().refine(value=>Object.keys(value).length>1,'Provide a mission change.');
 export {createInput as missionCreateInput,patchInput as missionPatchInput};
-const columns=`m.id,m.company_id AS "companyId",m.agent_id AS "agentId",a.name AS "agentName",m.created_by AS "createdBy",m.name,m.objective,m.interval_minutes AS "intervalMinutes",m.max_cycles AS "maxCycles",m.cycles_started AS "cyclesStarted",m.status,m.revision,m.next_run_at AS "nextRunAt",m.last_run_id AS "lastRunId",r.status AS "lastRunStatus",m.pause_reason AS "pauseReason",m.created_at AS "createdAt",m.updated_at AS "updatedAt"`;
+const columns=`m.id,m.company_id AS "companyId",m.agent_id AS "agentId",a.name AS "agentName",m.created_by AS "createdBy",m.name,m.objective,m.inference_profile AS "inferenceProfile",m.interval_minutes AS "intervalMinutes",m.max_cycles AS "maxCycles",m.cycles_started AS "cyclesStarted",m.status,m.revision,m.next_run_at AS "nextRunAt",m.last_run_id AS "lastRunId",r.status AS "lastRunStatus",m.pause_reason AS "pauseReason",m.created_at AS "createdAt",m.updated_at AS "updatedAt"`;
+const profileValidationCodes=new Set(['MISSION_INFERENCE_PROFILE_INVALID','MISSION_INFERENCE_PROJECT_REQUIRED','MISSION_INFERENCE_COORDINATOR_REQUIRED']);
+function storedProfile(value:unknown):MissionInferenceProfile|null{
+ if(value===null||value===undefined)return null;
+ const parsed=missionInferenceProfileSchema.safeParse(value);
+ if(!parsed.success)fail(409,'The saved mission inference profile is invalid.','MISSION_INFERENCE_PROFILE_INVALID');
+ return parsed.data;
+}
+async function validateMissionProfile(client:PoolClient,companyId:string,agentId:string,value:unknown){
+ const profile=storedProfile(value);if(!profile)return null;
+ const project=(await client.query('SELECT contract_version FROM studio_projects WHERE company_id=$1 AND id=$2 FOR SHARE',[companyId,profile.projectId])).rows[0];
+ if(project?.contract_version!==2)fail(409,'Select a generated-media project in this company.','MISSION_INFERENCE_PROJECT_REQUIRED');
+ const roles=(await client.query("SELECT agent_id,human_id FROM studio_role_bindings WHERE company_id=$1 AND role_key IN ('producer','coordinator') ORDER BY role_key FOR SHARE",[companyId])).rows;
+ if(!roles.some(row=>row.agent_id===agentId&&row.human_id===null))fail(409,'Assign this agent to the studio producer or coordinator role.','MISSION_INFERENCE_COORDINATOR_REQUIRED');
+ return profile;
+}
+/** Immutable cycle provenance selects a model catalogue; it grants no tools or project access. */
+export async function inferMissionRunProfile(client:PoolClient,run:Record<string,any>):Promise<MissionInferenceProfile|null>{
+ const row=(await client.query(`SELECT c.inference_profile,c.client_id AS cycle_client_id,
+  m.agent_id AS mission_agent_id,m.created_by AS mission_author_id,
+  r.agent_id AS run_agent_id,r.requested_by AS run_requester_id,r.client_id AS run_client_id,r.purpose
+  FROM agent_mission_cycles c
+  LEFT JOIN agent_missions m ON m.company_id=c.company_id AND m.id=c.mission_id
+  LEFT JOIN agent_runs r ON r.company_id=c.company_id AND r.id=c.run_id
+  WHERE c.company_id=$1 AND c.run_id=$2`,[run.company_id,run.id])).rows[0];
+ if(!row||row.inference_profile===null)return null;
+ const profile=storedProfile(row.inference_profile);
+ if(!profile||row.mission_agent_id!==run.agent_id||row.run_agent_id!==run.agent_id
+  ||row.mission_author_id!==run.requested_by||row.run_requester_id!==run.requested_by
+  ||row.cycle_client_id!==row.run_client_id||row.purpose!=='task')
+  fail(409,'The mission inference profile does not match this run.','MISSION_INFERENCE_PROFILE_INVALID');
+ return profile;
+}
 async function project(client:PoolClient,companyId:string,missionId:string){const row=(await client.query(`SELECT ${columns} FROM agent_missions m JOIN agents a ON a.company_id=m.company_id AND a.id=m.agent_id LEFT JOIN agent_runs r ON r.company_id=m.company_id AND r.id=m.last_run_id WHERE m.company_id=$1 AND m.id=$2`,[companyId,missionId])).rows[0];if(!row)fail(404,'Mission not found.');return row;}
 async function lockAgent(client:PoolClient,companyId:string,agentId:string,authorIds:string[]){
  const preview=(await client.query('SELECT created_by FROM agents WHERE company_id=$1 AND id=$2',[companyId,agentId])).rows[0];if(!preview)fail(404,'Agent not found.');
@@ -46,9 +79,17 @@ async function dispatch(client:PoolClient,companyId:string,mission:Record<string
  if(Number((await client.query("SELECT count(*) FROM agent_runs WHERE company_id=$1 AND agent_id=$2 AND status IN ('queued','running')",[companyId,agent.id])).rows[0].count)>=100)return{queued:false,reason:'The agent already has 100 pending requests.',code:'AGENT_QUEUE_FULL'};
  const user=(await client.query('SELECT id,name,email,role_title AS "roleTitle",avatar_color AS "avatarColor",avatar_id AS "avatarId",(email_verified_at IS NOT NULL) AS "emailVerified" FROM users WHERE id=$1',[mission.created_by])).rows[0];
  if(trigger==='scheduled'&&!mission.due)return{queued:false,reason:'The next cycle is not due yet.',code:'MISSION_NOT_DUE'};
+ let inferenceProfile:MissionInferenceProfile|null;
+ try{inferenceProfile=await validateMissionProfile(client,companyId,agent.id,mission.inference_profile);}
+ catch(error){
+  if(!(error instanceof ApiError)||error.status!==409||!error.code||!profileValidationCodes.has(error.code))throw error;
+  const reason=`Review this mission's inference profile. ${error.message}`;
+  await pause(client,companyId,mission.id,reason);
+  return{queued:false,reason,code:error.code};
+ }
  const role=members.find(member=>member.user_id===mission.created_by)!.role;
  const created=await createAgentRunInTransaction(client,{companyId,userId:mission.created_by,role,user},'commons',{clientId,agentId:agent.id,prompt:prompt(mission)});
- await client.query('INSERT INTO agent_mission_cycles(company_id,mission_id,ordinal,run_id,client_id,trigger) VALUES($1,$2,$3,$4,$5,$6)',[companyId,mission.id,mission.cycles_started+1,created.run.id,clientId,trigger]);
+ await client.query('INSERT INTO agent_mission_cycles(company_id,mission_id,ordinal,run_id,client_id,trigger,inference_profile) VALUES($1,$2,$3,$4,$5,$6,$7)',[companyId,mission.id,mission.cycles_started+1,created.run.id,clientId,trigger,inferenceProfile?JSON.stringify(inferenceProfile):null]);
  await client.query("UPDATE agent_missions SET cycles_started=cycles_started+1,last_run_id=$3,reviewed_run_id=NULL,next_run_at=clock_timestamp()+interval_minutes*interval '1 minute',pause_reason='',revision=revision+1,updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2",[companyId,mission.id,created.run.id]);
  return{runId:created.run.id,status:created.run.status,replayed:created.replayed,queued:true};
 }
@@ -67,7 +108,7 @@ export async function tickAgentMissions(identity:AgentRunIdentity,maxMissions=5)
    const mission=(await client.query("SELECT *,next_run_at<=clock_timestamp() AS due FROM agent_missions WHERE company_id=$1 AND agent_id=$2 AND id=$3 AND status='active' FOR UPDATE",[identity.company_id,identity.id,candidate.id])).rows[0];if(!mission)continue;
    const result=await dispatch(client,identity.company_id,mission,agent,members,'scheduled',scheduledId(mission.id,mission.cycles_started+1));
    if(result.queued)runs.push({missionId:mission.id,runId:result.runId,status:result.status});
-   else if(result.code==='MISSION_AUTHORITY_REQUIRED'||result.code==='MISSION_REVIEW_REQUIRED')pausedMissionIds.push(mission.id);
+   else if(result.code==='MISSION_AUTHORITY_REQUIRED'||result.code==='MISSION_REVIEW_REQUIRED'||profileValidationCodes.has(result.code??''))pausedMissionIds.push(mission.id);
    else deferred.push({missionId:mission.id,...result});
   }
   return{runs,pausedMissionIds,deferred};
@@ -89,10 +130,11 @@ export async function agentMissionRoute(request:Request,parts:string[],method:st
   const result=await memberMutation(member,true,async client=>{
    const{agent,members}=await lockAgent(client,companyId,data.agentId,[member.userId]);
    const prior=(await client.query('SELECT id,request_hash FROM agent_missions WHERE company_id=$1 AND created_by=$2 AND client_id=$3',[companyId,member.userId,data.clientId])).rows[0];if(prior){if(prior.request_hash!==hash)fail(409,'This mission key belongs to a different request.','IDEMPOTENCY_CONFLICT');return{mission:await project(client,companyId,prior.id),replayed:true};}
+   const inferenceProfile=await validateMissionProfile(client,companyId,agent.id,data.inferenceProfile);
    if(agent.status==='revoked')fail(409,'Choose an agent with a current credential.');
    const reason=authorityReason(agent,members,member.userId);if(data.status==='active'&&reason)fail(409,reason,'MISSION_AUTHORITY_REQUIRED');
    if(Number((await client.query("SELECT count(*) FROM agent_missions WHERE company_id=$1 AND agent_id=$2 AND status<>'completed'",[companyId,agent.id])).rows[0].count)>=20)fail(409,'This agent already has 20 unfinished missions.','MISSION_LIMIT_REACHED');
-   const created=(await client.query('INSERT INTO agent_missions(company_id,agent_id,created_by,client_id,request_hash,name,objective,interval_minutes,max_cycles,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id',[companyId,agent.id,member.userId,data.clientId,hash,data.name,data.objective,data.intervalMinutes,data.maxCycles,data.status])).rows[0];
+   const created=(await client.query('INSERT INTO agent_missions(company_id,agent_id,created_by,client_id,request_hash,name,objective,interval_minutes,max_cycles,status,inference_profile) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id',[companyId,agent.id,member.userId,data.clientId,hash,data.name,data.objective,data.intervalMinutes,data.maxCycles,data.status,inferenceProfile?JSON.stringify(inferenceProfile):null])).rows[0];
    await recordActivity(client,member,'mission.created',`${member.user.name} created ${data.name} with a ${data.maxCycles}-cycle limit.`);return{mission:await project(client,companyId,created.id),replayed:false};
   });return json(result,result.replayed?200:201);
  }
@@ -105,12 +147,14 @@ export async function agentMissionRoute(request:Request,parts:string[],method:st
    const mission=(await client.query('SELECT * FROM agent_missions WHERE company_id=$1 AND id=$2 FOR UPDATE',[companyId,missionId])).rows[0];if(mission.revision!==data.revision)fail(409,'This mission changed. Reload before editing.','MISSION_REVISION_CONFLICT');
    const maxCycles=data.maxCycles??mission.max_cycles;
    if(maxCycles<mission.cycles_started)fail(400,'The cycle limit cannot be lower than cycles already started.');
+   const inferenceProfile=data.inferenceProfile===undefined?mission.inference_profile:data.inferenceProfile;
+   if(data.inferenceProfile!==undefined||data.status==='active')await validateMissionProfile(client,companyId,agent.id,inferenceProfile);
    if(data.status==='active'){const reason=authorityReason(agent,members,mission.created_by);if(reason)fail(409,reason,'MISSION_AUTHORITY_REQUIRED');if(maxCycles<=mission.cycles_started)fail(409,'Increase the approved cycle limit before resuming.','MISSION_BUDGET_EXHAUSTED');}
    await cancelMissionRuns(client,companyId,missionId);
    // An explicit administrator resume acknowledges prior uncertain effects.
    // Ordinary configuration edits leave the mission paused for that review.
    const nextStatus=data.status==='active'?'active':data.status==='paused'?'paused':mission.status==='completed'?'completed':'paused',reason=nextStatus==='paused'?'Mission changed or paused by an administrator.':'';
-   await client.query('UPDATE agent_missions SET name=$3,objective=$4,interval_minutes=$5,max_cycles=$6,status=$7,pause_reason=$8,reviewed_run_id=$9,next_run_at=clock_timestamp()+$5::integer*interval \'1 minute\',revision=revision+1,updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2',[companyId,missionId,data.name??mission.name,data.objective??mission.objective,data.intervalMinutes??mission.interval_minutes,maxCycles,nextStatus,reason,data.status==='active'?mission.last_run_id:null]);
+   await client.query('UPDATE agent_missions SET name=$3,objective=$4,interval_minutes=$5,max_cycles=$6,status=$7,pause_reason=$8,reviewed_run_id=$9,inference_profile=$10,next_run_at=clock_timestamp()+$5::integer*interval \'1 minute\',revision=revision+1,updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2',[companyId,missionId,data.name??mission.name,data.objective??mission.objective,data.intervalMinutes??mission.interval_minutes,maxCycles,nextStatus,reason,data.status==='active'?mission.last_run_id:null,inferenceProfile?JSON.stringify(inferenceProfile):null]);
    await recordActivity(client,member,nextStatus==='active'?'mission.resumed':'mission.updated',`${member.user.name} ${nextStatus==='active'?'resumed':'updated'} ${data.name??mission.name}'s bounded company mission.`);return{mission:await project(client,companyId,missionId)};
   }));
  }
@@ -124,7 +168,7 @@ export async function agentMissionRoute(request:Request,parts:string[],method:st
  }
  if(parts.length===6&&parts[5]==='runs'&&method==='GET'){
   const missionId=id(parts[4]),search=new URL(request.url).searchParams,after=Number(search.get('after')||101),limit=Number(search.get('limit')||20);if(!Number.isInteger(after)||after<1||after>101||!Number.isInteger(limit)||limit<1||limit>100)fail(400,'Invalid mission cycle pagination.');
-  return json(await memberMutation(member,false,async client=>{await project(client,companyId,missionId);const rows=(await client.query(`SELECT c.ordinal,c.trigger,c.created_at AS "createdAt",json_build_object('id',r.id,'status',r.status,'agentName',a.name,'prompt',r.prompt,'result',r.result,'error',r.error,'createdAt',r.created_at,'finishedAt',r.finished_at,'resultMessageId',r.result_message_id) AS run FROM agent_mission_cycles c JOIN agent_runs r ON r.company_id=c.company_id AND r.id=c.run_id JOIN agents a ON a.company_id=r.company_id AND a.id=r.agent_id WHERE c.company_id=$1 AND c.mission_id=$2 AND c.ordinal<$3 ORDER BY c.ordinal DESC LIMIT $4`,[companyId,missionId,after,limit+1])).rows,cycles=rows.slice(0,limit);return{cycles,hasMore:rows.length>limit,nextAfter:rows.length>limit?cycles.at(-1)?.ordinal:null};}));
+  return json(await memberMutation(member,false,async client=>{await project(client,companyId,missionId);const rows=(await client.query(`SELECT c.ordinal,c.trigger,c.inference_profile AS "inferenceProfile",c.created_at AS "createdAt",json_build_object('id',r.id,'status',r.status,'agentName',a.name,'prompt',r.prompt,'result',r.result,'error',r.error,'createdAt',r.created_at,'finishedAt',r.finished_at,'resultMessageId',r.result_message_id) AS run FROM agent_mission_cycles c JOIN agent_runs r ON r.company_id=c.company_id AND r.id=c.run_id JOIN agents a ON a.company_id=r.company_id AND a.id=r.agent_id WHERE c.company_id=$1 AND c.mission_id=$2 AND c.ordinal<$3 ORDER BY c.ordinal DESC LIMIT $4`,[companyId,missionId,after,limit+1])).rows,cycles=rows.slice(0,limit);return{cycles,hasMore:rows.length>limit,nextAfter:rows.length>limit?cycles.at(-1)?.ordinal:null};}));
  }
  return null;
 }

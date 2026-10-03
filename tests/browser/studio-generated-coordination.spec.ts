@@ -39,6 +39,28 @@ async function openCoordination(page:Page,fixture:ReturnType<typeof coordination
  await expect(page.getByRole('heading',{name:'Project delegation policy',exact:true})).toBeVisible();
 }
 
+test('generated coordinator setup sends an explicit profile paused and retains its exact uncertain retry',async({page},testInfo)=>{
+ const fixture=coordinationFixture(),previous=fixture.state.handler,profile={kind:'studio_generated_coordinator',version:1,projectId:ids.project};let attempts=0;
+ fixture.state.handler=async(route,url)=>{if(url.pathname.endsWith('/autonomy/missions')&&route.request().method()==='POST'){attempts++;if(attempts===1)await route.fulfill({status:503,json:{error:'Synthetic lost acknowledgement. Retry this exact mission.'}});else await route.fulfill({status:201,json:{mission:{id:uuid(120),status:'paused',inferenceProfile:profile},replayed:true}});return true;}return await previous?.(route,url)||false;};
+ await openCoordination(page,fixture);await page.getByRole('button',{name:'Schedule coordinator',exact:true}).click();const dialog=page.getByRole('dialog'),preview=dialog.getByRole('region',{name:'Inference profile to save',exact:true});
+ await expect(preview).toContainText('Generated studio coordinator · v1');await expect(preview).toContainText(ids.project);await expect(preview).toContainText('Existing permissions, budgets and human approvals still apply');await expect(dialog.getByLabel('Coordinator objective')).toHaveValue(/^Generated coordinator v6\./);await preview.screenshot({path:testInfo.outputPath('coordinator-profile-preview.png')});
+ await dialog.getByRole('button',{name:'Create paused coordinator',exact:true}).click();await expect(dialog.getByRole('alert')).toContainText('Synthetic lost acknowledgement');await dialog.getByRole('button',{name:'Create paused coordinator',exact:true}).click();await expect(dialog.getByRole('region',{name:'Saved inference profile',exact:true})).toContainText(ids.project);await expect(dialog).toContainText('Coordinator mission saved as paused');
+ const writes=fixture.state.writes.filter(write=>write.path.endsWith('/autonomy/missions'));expect(writes).toHaveLength(2);expect(writes[1].body).toEqual(writes[0].body);expect(writes[0].body).toMatchObject({agentId:coordinator,status:'paused',inferenceProfile:profile});expect(writes[0].body.clientId).toMatch(/^[a-f0-9-]{36}$/);expect(fixture.state.unexpected).toEqual([]);
+});
+
+test('legacy studio coordinator setup and saved profile remain general',async({page})=>{
+ const fixture=coordinationFixture({legacy:true}),previous=fixture.state.handler;
+ fixture.state.handler=async(route,url)=>{if(url.pathname.endsWith('/autonomy/missions')&&route.request().method()==='POST'){await route.fulfill({status:201,json:{mission:{id:uuid(121),status:'paused',inferenceProfile:null}}});return true;}return await previous?.(route,url)||false;};
+ await openCoordination(page,fixture,true);await page.getByRole('button',{name:'Schedule coordinator',exact:true}).click();const dialog=page.getByRole('dialog');await expect(dialog.getByRole('region',{name:'Inference profile to save'})).toContainText('General mission · no specialized inference profile');await dialog.getByRole('button',{name:'Create paused coordinator',exact:true}).click();await expect(dialog.getByRole('region',{name:'Saved inference profile'})).toContainText('General mission · no specialized inference profile');
+ const writes=fixture.state.writes.filter(write=>write.path.endsWith('/autonomy/missions'));expect(writes).toHaveLength(1);expect(writes[0].body.status).toBe('paused');expect(writes[0].body).not.toHaveProperty('inferenceProfile');expect(fixture.state.unexpected).toEqual([]);
+});
+
+test('coordinator success displays the returned profile rather than its request preview',async({page})=>{
+ const fixture=coordinationFixture(),previous=fixture.state.handler;
+ fixture.state.handler=async(route,url)=>{if(url.pathname.endsWith('/autonomy/missions')&&route.request().method()==='POST'){await route.fulfill({status:201,json:{mission:{id:uuid(122),status:'paused',inferenceProfile:null}}});return true;}return await previous?.(route,url)||false;};
+ await openCoordination(page,fixture);await page.getByRole('button',{name:'Schedule coordinator',exact:true}).click();const dialog=page.getByRole('dialog');await expect(dialog.getByRole('region',{name:'Inference profile to save'})).toContainText('Generated studio coordinator · v1');await dialog.getByRole('button',{name:'Create paused coordinator',exact:true}).click();await expect(dialog.getByRole('region',{name:'Saved inference profile'})).toContainText('General mission · no specialized inference profile');await expect(dialog.getByText('Generated studio coordinator · v1',{exact:true})).toHaveCount(0);
+});
+
 function addMediaCorrection(fixture:ReturnType<typeof coordinationFixture>){
  fixture.state.artifact.reviewStatus='changes_requested';fixture.state.detail.artifacts=[fixture.state.artifact];
  fixture.state.detail.workItems[0].status='review';fixture.state.detail.workItems[0].revision=8;

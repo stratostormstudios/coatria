@@ -4,6 +4,7 @@ import {z} from 'zod';
 import {agentRuntimeOpenApi} from '../src/lib/agent-runtime-openapi';
 import {pluginInstallInput,pluginPatchInput,pluginCatalogResponse} from '../src/lib/plugin-marketplace';
 import {missionCreateInput,missionPatchInput} from '../src/lib/agent-missions';
+import {missionInferenceProfileSchema} from '../src/lib/mission-inference-profile';
 import {runInput,failInput,completeInput} from '../src/lib/agent-runs';
 
 const spec:any=agentRuntimeOpenApi;
@@ -49,6 +50,20 @@ test('human administration and agent scheduling use different documented authent
  for(const path of[installations,installations+'/{installationId}',missions,missions+'/{missionId}',missions+'/{missionId}/runs'])assert.deepEqual(spec.paths[path].get.security,[{sessionCookie:[]}]);
 });
 
+test('mission inference profiles are strict optional API inputs with explicit clearing and immutable cycle output',()=>{
+ const object=(value:unknown):Record<string,unknown>=>{assert(value&&typeof value==='object'&&!Array.isArray(value));return value as Record<string,unknown>;};
+ const profile={kind:'studio_generated_coordinator',version:1,projectId:'00000000-0000-4000-8000-000000000001'},create=request(missions,'post'),patch=request(missions+'/{missionId}','patch');
+ assert.deepEqual(spec.components.schemas.MissionInferenceProfile,input(missionInferenceProfileSchema));
+ const {$schema:_,...profileInput}=input(missionInferenceProfileSchema),createProfile=create.properties.inferenceProfile.anyOf.find((item:any)=>item.type==='object');assert.deepEqual(createProfile,profileInput);assert(create.properties.inferenceProfile.anyOf.some((item:any)=>item.type==='null'));assert(!create.required.includes('inferenceProfile'));assert.equal(create.properties.inferenceProfile.default,undefined);
+ assert.equal(createProfile.additionalProperties,false);assert.deepEqual(createProfile.required,['kind','version','projectId']);
+ const properties=object(createProfile.properties);assert.equal(object(properties.kind).const,profile.kind);assert.equal(object(properties.version).const,1);assert.equal(object(properties.projectId).format,'uuid');
+ assert(!patch.required.includes('inferenceProfile'));assert(patch.properties.inferenceProfile.anyOf.some((item:any)=>item.type==='null'));
+ assert.equal(missionCreateInput.parse({clientId:profile.projectId,agentId:profile.projectId,name:'General',objective:'Inspect current company work.',inferenceProfile:null}).inferenceProfile,null);assert.deepEqual(missionPatchInput.parse({revision:1,inferenceProfile:null}),{revision:1,inferenceProfile:null});assert.deepEqual(missionPatchInput.parse({revision:1,inferenceProfile:profile}).inferenceProfile,profile);
+ for(const invalid of[{...profile,version:2},{...profile,kind:'general'},{...profile,projectId:'wrong'},{...profile,capabilities:['studio.write']}])assert.equal(missionInferenceProfileSchema.safeParse(invalid).success,false);
+ for(const name of['AgentMission','AgentMissionCycle']){const schema=spec.components.schemas[name];assert(schema.required.includes('inferenceProfile'));assert.deepEqual(schema.properties.inferenceProfile.anyOf,[{$ref:'#/components/schemas/MissionInferenceProfile'},{type:'null'}]);}
+ assert.match(spec.paths[missions].post.description,/No profile is inferred from mission text/);assert.match(spec.paths[missions+'/{missionId}'].patch.description,/set null explicitly to clear/);assert.match(spec.components.schemas.AgentMissionCycle.properties.inferenceProfile.description,/dispatch-time snapshot/);
+});
+
 test('public catalog output matches the documented strict manifest projection',async()=>{
  const payload=await pluginCatalogResponse().json();const catalog=spec.components.schemas.PluginCatalog,manifest=spec.components.schemas.PluginManifest;
  assert.deepEqual(Object.keys(payload).sort(),[...catalog.required].sort());assert.equal(catalog.additionalProperties,false);assert(payload.plugins.length>0);
@@ -62,7 +77,7 @@ test('run context, one-time credentials and nested cycle projections describe nu
  assert.deepEqual(schemas.RuntimeInstallation.required.sort(),['id','pluginId','manifestVersion','runtimeConfig','character','revision'].sort());assert.equal(schemas.RuntimeInstallation.additionalProperties,false);
  const output=spec.paths[installations].post.responses['201'].content['application/json'].schema;assert(output.required.includes('token'));assert(output.properties.token.anyOf.some((schema:any)=>schema.type==='null'));
  assert(!('token'in schemas.PluginInstallation.properties));assert(!('token_hash'in schemas.PluginInstallation.properties));assert(!('leaseToken'in schemas.AgentRun.properties));
- const cycle=schemas.AgentMissionCycle;assert.equal(cycle.additionalProperties,false);assert.deepEqual(cycle.required,['ordinal','trigger','createdAt','run']);assert.deepEqual(cycle.properties.run.required.sort(),['id','status','agentName','prompt','result','error','createdAt','finishedAt','resultMessageId'].sort());assert.equal(cycle.properties.run.additionalProperties,false);
+ const cycle=schemas.AgentMissionCycle;assert.equal(cycle.additionalProperties,false);assert.deepEqual(cycle.required,['ordinal','trigger','createdAt','inferenceProfile','run']);assert.deepEqual(cycle.properties.run.required.sort(),['id','status','agentName','prompt','result','error','createdAt','finishedAt','resultMessageId'].sort());assert.equal(cycle.properties.run.additionalProperties,false);
  assert.deepEqual(schemas.PluginRuntimeConfig.required.sort(),['providerId','modelId','maxSteps','maxOutputTokens','maxTotalTokens','timeoutSeconds'].sort());assert.deepEqual(schemas.AgentCharacter.required.sort(),['roleTitle','persona','workStyle'].sort());
 });
 
