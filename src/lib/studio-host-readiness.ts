@@ -12,7 +12,7 @@ export const PROVIDER_READINESS_CODES=['ready','credential_missing','http_unauth
 type Code=typeof PROVIDER_READINESS_CODES[number];
 type FieldType='missing'|'null'|'array'|'object'|'number'|'string'|'boolean'|'undefined';
 export type StudioHostProviderCheck={stage:'lifecycle'|'health'|'cpu_capacity';ready:boolean;code:Code;httpStatus:number|null;regionReady?:boolean;endpointIdMatches?:boolean;endpointType?:'QUEUE'|'LOAD_BALANCER'|'other'|'missing';workersMax?:number|null;workersMaxType?:FieldType;workersMin?:number|null;workersMinType?:FieldType;workersType?:FieldType;endpointReachable?:boolean;workerState?:RunpodWorkerState;workerCounts?:RunpodWorkerCounts;modelReadiness?:'unverified'};
-export type StudioHostProviderReadiness={provisionId:string;checkedAt:string;readOnly:true;authorizesStart:false;ready:boolean;providerReady:boolean;configuration:{state:'current'|'inactive'|'changed'|'unavailable'};checks:StudioHostProviderCheck[];cpuCapacity?:StudioHostProviderCheck};
+export type StudioHostProviderReadiness={provisionId:string;planHash:string;revision:number;checkedAt:string;readOnly:true;authorizesStart:false;ready:boolean;providerReady:boolean;configuration:{state:'current'|'inactive'|'changed'|'unavailable'};checks:StudioHostProviderCheck[];cpuCapacity?:StudioHostProviderCheck};
 const MAX_RESPONSE=2*1024*1024,TIMEOUT_MS=10000,providerId=/^[A-Za-z0-9_-]{1,100}$/;
 const isObject=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const fieldType=(v:unknown):FieldType=>v===undefined?'missing':v===null?'null':Array.isArray(v)?'array':typeof v as FieldType;
@@ -68,13 +68,13 @@ export async function probeStudioHostProviders(preset:Pick<PinnedStudioCpuPreset
   }catch(error){return {...base,httpStatus:status,code:signal.aborted?'timeout':error instanceof ProbeError?error.code:'network_error'};}
  }));
 }
-type Target={preset:PinnedStudioCpuPreset;planHash:string;presetHash:string;configuration:StudioHostProviderReadiness['configuration']};
+type Target={preset:PinnedStudioCpuPreset;planHash:string;revision:number;presetHash:string;configuration:StudioHostProviderReadiness['configuration']};
 async function readTarget(client:PoolClient,member:Membership,provisionId:string,settings:NodeJS.ProcessEnv):Promise<Target>{
  // Older general membership helpers do not check this field; diagnostic access
  // must stop as soon as this company's membership is revoked.
  const access=(await client.query('SELECT role,access_revoked_at FROM memberships WHERE company_id=$1 AND user_id=$2 FOR SHARE',[member.companyId,member.userId])).rows[0];
  if(!access||!['owner','admin'].includes(access.role)||access.access_revoked_at!==null)fail(403,'Current company administrator access is required.','CPU_READINESS_ADMIN_REQUIRED');
- const row=(await client.query('SELECT plan,plan_hash,preset FROM studio_host_provisions WHERE company_id=$1 AND id=$2',[member.companyId,id(provisionId)])).rows[0];if(!row)fail(404,'Managed CPU request not found.');
+ const row=(await client.query('SELECT plan,plan_hash,preset,revision FROM studio_host_provisions WHERE company_id=$1 AND id=$2',[member.companyId,id(provisionId)])).rows[0];if(!row)fail(404,'Managed CPU request not found.');
  if(!isObject(row.preset)||!isObject(row.plan)||!isObject(row.plan.preset))fail(409,'The stored reviewed provision is invalid.','CPU_READINESS_SCOPE_INVALID');
  const {company,...raw}=row.preset;let preset:PinnedStudioCpuPreset;
  try{preset=parseStudioCpuPreset({...raw,companies:[company]},member.companyId);}catch{fail(409,'The stored reviewed provision is invalid.','CPU_READINESS_SCOPE_INVALID');}
@@ -85,19 +85,20 @@ async function readTarget(client:PoolClient,member:Membership,provisionId:string
   if(selected){state=!selected.enabled?'inactive':sameRuntimeConfiguration(row.plan.runtimeConfiguration as any,selected)&&trustedServiceHash(selected.preset)===presetHash?'current':'changed';}
   else{state=!row.plan.runtimeConfiguration&&trustedServiceHash(studioCpuPreset(member.companyId,settings))===presetHash?'current':'changed';}
  }catch(error){if(!(error instanceof ApiError))throw error;}
- return {preset,presetHash,planHash:row.plan_hash,configuration:{state}};
+ return {preset,presetHash,planHash:row.plan_hash,revision:row.revision,configuration:{state}};
 }
 export async function readStudioHostProviderReadiness(member:Membership,provisionId:string,options:{fetch?:typeof fetch;settings?:NodeJS.ProcessEnv}={}):Promise<StudioHostProviderReadiness>{
  id(provisionId);const settings=options.settings??process.env;
  const before=await memberMutation(member,true,client=>readTarget(client,member,provisionId,settings));
+ const checkedAt=new Date().toISOString();
  const observations=await probeStudioHostProviders(before.preset,settings,options.fetch??fetch);
  // Release DB locks for network I/O, then recheck current admin membership and
  // immutable provision identity. Never return observations after losing access.
  const after=await memberMutation(member,true,client=>readTarget(client,member,provisionId,settings));
- if(before.planHash!==after.planHash||before.presetHash!==after.presetHash)fail(409,'The reviewed provision changed while checking it.','CPU_READINESS_SCOPE_CHANGED');
+ if(before.planHash!==after.planHash||before.presetHash!==after.presetHash||before.revision!==after.revision)fail(409,'The reviewed provision changed while checking it.','CPU_READINESS_SCOPE_CHANGED');
  const providerReady=observations.every(check=>check.ready);
  // Keep the original two-stage checks array for already-open clients. Capacity
  // is additive, but still participates in the aggregate readiness result.
  const [lifecycle,health,cpuCapacity]=observations;
- return {provisionId,checkedAt:new Date().toISOString(),readOnly:true,authorizesStart:false,providerReady,ready:providerReady&&after.configuration.state==='current',configuration:after.configuration,checks:[lifecycle,health],cpuCapacity};
+ return {provisionId,planHash:after.planHash,revision:after.revision,checkedAt,readOnly:true,authorizesStart:false,providerReady,ready:providerReady&&after.configuration.state==='current',configuration:after.configuration,checks:[lifecycle,health],cpuCapacity};
 }

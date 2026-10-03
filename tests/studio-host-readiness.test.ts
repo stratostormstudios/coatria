@@ -57,7 +57,7 @@ test('CPU capacity projects only the exact approved region and fixed safe codes'
 });
 test('OpenAPI readiness is a bounded human-admin GET and cannot authorize a provider action',()=>{
  const spec:any=agentRuntimeOpenApi,path=spec.paths['/api/companies/{companyId}/studio/host-provisions/{provisionId}/readiness'];assert.deepEqual(Object.keys(path),['get']);assert.deepEqual(path.get.security,[{sessionCookie:[]}]);assert.deepEqual(path.get['x-coatria-roles'],['owner','admin']);assert.equal(path.get.requestBody,undefined);assert.match(path.get.description,/three independent GET/);assert.match(path.get.description,/after configuration revocation/);
- const schema=spec.components.schemas.StudioHostProviderReadiness;assert.equal(schema.properties.readOnly.const,true);assert.equal(schema.properties.authorizesStart.const,false);assert.equal(schema.properties.checks.maxItems,2);assert(schema.properties.cpuCapacity);assert(!schema.required.includes('cpuCapacity'));assert.equal(spec.info.version,'1.17.0');
+ const schema=spec.components.schemas.StudioHostProviderReadiness;assert.equal(schema.properties.readOnly.const,true);assert.equal(schema.properties.authorizesStart.const,false);assert.equal(schema.properties.checks.maxItems,2);assert(schema.properties.cpuCapacity);assert(!schema.required.includes('cpuCapacity'));assert(schema.required.includes('planHash'));assert(schema.required.includes('revision'));assert.equal(spec.info.version,'1.17.0');
 });
 
 const emulate=process.env.COATRIA_TEST_EMULATOR==='1',integrationUrl=process.env.COATRIA_INTEGRATION_DATABASE_URL;
@@ -92,6 +92,11 @@ test('readiness uses actual scoped stored provision and current admin authority 
   await t.test('unavailable CPU capacity fails aggregate readiness while retaining the legacy two checks',async()=>{
    const result=await invoke(async(url,init)=>String(url).includes('/catalog/')?Response.json({id:'cpu3c',availability:'NONE'}):ok(url,init));
    assert.equal(result.providerReady,false);assert.equal(result.ready,false);assert.deepEqual(result.checks.map(check=>check.stage),['lifecycle','health']);assert(result.checks.every(check=>check.ready));assert.equal(result.cpuCapacity?.code,'cpu_capacity_unavailable');assert.equal(result.cpuCapacity?.regionReady,false);assert.equal(result.authorizesStart,false);
+  });
+  await t.test('readiness binds the exact plan revision and rejects changes during provider I/O',async()=>{
+   const result=await invoke(ok);assert.equal(result.planHash,planHash);assert.equal(result.revision,1);assert(Number.isFinite(Date.parse(result.checkedAt)));let changed=false;
+   const revise:typeof fetch=async(url,init)=>{if(!changed){changed=true;await query('UPDATE studio_host_provisions SET revision=revision+1 WHERE id=$1',[provisionId]);}return ok(url,init);};
+   try{await assert.rejects(invoke(revise),{code:'CPU_READINESS_SCOPE_CHANGED'});}finally{await query('UPDATE studio_host_provisions SET revision=1 WHERE id=$1',[provisionId]);}
   });
   await t.test('membership access revoked during provider read suppresses the complete result',async()=>{
    let changed=false;const revoke:typeof fetch=async(url,init)=>{if(!changed){changed=true;await query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[companyId,userId]);}return ok(url,init);};

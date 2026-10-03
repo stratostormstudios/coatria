@@ -9,7 +9,7 @@ import {parseStudioCpuPreset,runtimeConfigurationPin,sameRuntimeConfiguration,ty
 export type {StudioCpuPreset} from './company-runtime-preset';
 import {transaction} from './db';
 import {lockMembership,type Membership} from './auth';
-import {fail,hashToken,id} from './security';
+import {ApiError,fail,hashToken,id} from './security';
 import {registerStudioHost,enrollStudioHost,hostingEncryptionConfigured,revokeUnsubmittedStudioHostProvisionCredentials} from './studio-hosting';
 import {studioInferenceReserved} from './studio-inference';
 import {studioHostProvisionPlanInput,studioHostProvisionStartInput,studioHostProvisionStopInput,type StudioHostProvision,type StudioHostProvisionPlan,type StudioHostProvisionReadiness} from './studio-host-provisioning-protocol';
@@ -77,13 +77,29 @@ export async function createStudioHostProvisionPlan(client:PoolClient,member:Mem
 }
 async function replay(client:PoolClient,member:Membership,clientId:string,requestHash:string){const old=(await client.query('SELECT * FROM studio_host_provision_requests WHERE company_id=$1 AND user_id=$2 AND client_id=$3',[member.companyId,member.userId,clientId])).rows[0];if(old&&old.request_hash!==requestHash)fail(409,'This request ID was already used.','IDEMPOTENCY_CONFLICT');return old;}
 async function receipt(client:PoolClient,member:Membership,row:Row,operation:string,clientId:string,requestHash:string){await client.query('INSERT INTO studio_host_provision_requests(company_id,user_id,client_id,provision_id,operation,request_hash,response) VALUES($1,$2,$3,$4,$5,$6,$7)',[member.companyId,member.userId,clientId,row.id,operation,requestHash,JSON.stringify({provisionId:row.id,hostId:row.host_id,acceptedRevision:row.revision})]);}
-/** Transaction only. After commit the route must invoke reconcile; cron resumes it. */
-export async function startStudioHostProvision(client:PoolClient,member:Membership,provisionId:string,input:unknown){
- const data=parse(studioHostProvisionStartInput,input),requestHash=digest({provisionId,...data});await lockCompany(client,member.companyId);await lockMembership(client,member,true);const old=await replay(client,member,data.clientId,requestHash);if(old)return{provision:await project(client,await rowFor(client,member.companyId,old.provision_id)),replayed:true};
+type StartInput=z.infer<typeof studioHostProvisionStartInput>;
+async function readStartState(client:PoolClient,member:Membership,provisionId:string,data:StartInput,requestHash:string){
+ await lockCompany(client,member.companyId);await lockMembership(client,member,true);const old=await replay(client,member,data.clientId,requestHash);if(old)return{result:{provision:await project(client,await rowFor(client,member.companyId,old.provision_id)),replayed:true}};
  const row=await rowFor(client,member.companyId,provisionId);if(row.phase!=='planned'||row.revision!==data.revision||row.plan_hash!==data.planHash||digest(row.plan)!==row.plan_hash)fail(409,'The exact reviewed plan is required.','CPU_PLAN_CONFLICT');
  if(+new Date(row.plan.reviewExpiresAt)<=Date.now())fail(409,'This review expired. Create a fresh plan.','CPU_PLAN_EXPIRED');
  const configuration=await loadStudioCpuPreset(client,member.companyId),current=configuration.preset;if(!sameRuntimeConfiguration(row.plan.runtimeConfiguration,configuration.runtimeConfiguration)||digest(current)!==row.plan.preset.hash||digest(row.preset)!==row.plan.preset.hash)fail(409,'The approved compute preset changed. Create a fresh plan.','CPU_PRESET_CHANGED');
  const ready=await companyStudioCpuReadiness(client,member.companyId);if(!ready.ready)fail(503,ready.reasons.join(' '),'CPU_CONFIGURATION_REQUIRED');
+ return {row,configuration};
+}
+/** Read capacity outside database locks, then repeat authority and exact-plan
+ * validation under locks before enrollment, credential changes or reservations.
+ * A completed idempotent request never depends on current provider availability. */
+export async function startStudioHostProvision(member:Membership,provisionId:string,input:unknown,options:{fetch?:typeof fetch;transaction?:typeof transaction}={}){
+ id(provisionId);const data=parse(studioHostProvisionStartInput,input),requestHash=digest({provisionId,...data});
+ const tx=options.transaction??transaction,before=await tx(client=>readStartState(client,member,provisionId,data,requestHash));if(before.result)return before.result;
+ let capacityError:ApiError|undefined;
+ const checkedAt=Date.now();
+ try{checkCpuCatalog(before.configuration.preset,await providerRequest(RUNPOD_CPU_CATALOG_PATH,'GET',undefined,options.fetch??fetch));}
+ catch(error){capacityError=error instanceof ApiError&&['CPU_CAPACITY_UNAVAILABLE','CPU_CAPACITY_UNCONFIRMED','CPU_CATALOG_CHANGED'].includes(error.code??'')?error:new ApiError(503,'Current CPU capacity in the approved region could not be verified.','CPU_CAPACITY_UNCONFIRMED');}
+ return tx(async client=>{
+ const state=await readStartState(client,member,provisionId,data,requestHash);if(state.result)return state.result;
+ if(capacityError)throw capacityError;
+ const {row,configuration}=state,current=configuration.preset;
  // Stabilize configuration in the same order used by host enrollment: host
  // control, sorted principals, sorted agents, then plugin configuration reads.
  await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`studio-host-control:${member.companyId}`]);
@@ -95,13 +111,19 @@ export async function startStudioHostProvision(client:PoolClient,member:Membersh
  if((await client.query("SELECT id FROM studio_host_provisions WHERE company_id=$1 AND phase IN ('approved','submitting','uncertain','provisioning','running','stopping','needs_attention')",[member.companyId])).rowCount)fail(409,'Reconcile or stop the previous CPU host before starting another.','CPU_ALREADY_PENDING');
  if(await reserved(client,member.companyId)+row.plan.reservation.cpuMicrousd>current.company.lifetimeAllowanceMicrousd)fail(409,'The company CPU allowance is fully reserved. An operator must review actual charges before raising it.','CPU_ALLOWANCE_EXHAUSTED');
  if(current.inference){const minimumReservation=Math.ceil(current.inference.maxHourlyMicrousd*(Math.min(current.timeoutSeconds,...selected.map((item:any)=>Number(item.runtimeConfig.timeoutSeconds)))+60)/3600);if(await studioInferenceReserved(client,member.companyId)+minimumReservation>current.inference.lifetimeAllowanceMicrousd)fail(409,'The company inference allowance cannot reserve even the first model step. An operator must review usage before raising it.','INFERENCE_ALLOWANCE_EXHAUSTED');}
+ // Registration uses this same lock. Acquire it before the final clock checks
+ // so waiting for another registration cannot age a valid observation into use.
+ await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`studio-host-register:${member.companyId}`]);
  const expiresAt=new Date(Date.now()+row.plan.durationMinutes*60000).toISOString();
  if(configuration.runtimeConfiguration&&Date.parse(expiresAt)>Date.parse(configuration.runtimeConfiguration.expiresAt))fail(409,'The host lifetime exceeds the reviewed company runtime deadline.','CPU_CONFIGURATION_EXPIRED');
+ if(+new Date(row.plan.reviewExpiresAt)<=Date.now())fail(409,'This review expired. Create a fresh plan.','CPU_PLAN_EXPIRED');
+ if(Date.now()-checkedAt>60000||Date.now()<checkedAt)fail(409,'The CPU capacity observation expired. Check availability and start again.','CPU_CAPACITY_STALE');
  const registered=await registerStudioHost(client,member,{clientId:randomUUID(),name:'Managed CPU '+row.id.slice(0,8),maxAgents:selected.length,providerIds:['runpod'],expiresAt});if(!registered.hostToken)throw Error('Fresh host enrollment required.');
  await enrollStudioHost(client,member,registered.host.id,{clientId:randomUUID(),revision:registered.host.revision,activateAgents:true,installations:selected.map((item:any)=>({installationId:item.installationId,revision:item.revision}))});
  row.host_id=registered.host.id;const sealed=sealToken(registered.hostToken,row);
  await client.query('INSERT INTO studio_host_compute_reservations(company_id,provision_id,amount_microusd,approved_by) VALUES($1,$2,$3,$4)',[member.companyId,row.id,row.plan.reservation.cpuMicrousd,member.userId]);
  const saved=(await client.query("UPDATE studio_host_provisions SET phase='approved',host_id=$3,sealed_host_token=$4,expires_at=$5,revision=revision+1,updated_at=clock_timestamp() WHERE company_id=$1 AND id=$2 RETURNING *",[member.companyId,row.id,row.host_id,JSON.stringify(sealed),expiresAt])).rows[0];await receipt(client,member,saved,'start',data.clientId,requestHash);return{provision:await project(client,saved),replayed:false};
+ });
 }
 /** Stops paid compute independently. A failed, never-submitted start also
  * revokes its unused enrollment during reconciliation. Volumes are retained. */
@@ -134,13 +156,16 @@ async function providerRequest(path:string,method:string,body:string|undefined,t
  return readProviderJson(response);
 }
 async function readProviderJson(response:Response){if(!response.ok)fail(503,'Runpod did not confirm the compute operation.','CPU_PROVIDER_UNCONFIRMED');const reader=response.body?.getReader();if(!reader)fail(503,'Runpod returned an empty result.','CPU_PROVIDER_UNCONFIRMED');const chunks:Uint8Array[]=[];let size=0;for(;;){const part=await reader.read();if(part.done)break;size+=part.value.length;if(size>2000000){void reader.cancel().catch(()=>{});fail(503,'Runpod returned an oversized result.','CPU_PROVIDER_UNCONFIRMED');}chunks.push(part.value);}try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{fail(503,'Runpod returned an invalid result.','CPU_PROVIDER_UNCONFIRMED');}}
-async function preflight(p:PinnedPreset,transport:typeof fetch){
- const cpu=await providerRequest(RUNPOD_CPU_CATALOG_PATH,'GET',undefined,transport),volume=await providerRequest('/network-volumes/'+p.company.volumeId,'GET',undefined,transport);
- if(cpu.id!=='cpu3c'||cpu.ramGbPerVcpu!==2||cpu.vcpu?.min>2||cpu.vcpu?.max<2||!Number.isFinite(cpu.price?.securePerVcpu)||cpu.price.securePerVcpu<=0||Math.ceil(cpu.price.securePerVcpu*2*1000000)>p.maxHourlyMicrousd)fail(409,'The fixed CPU SKU or current price does not match the reviewed ceiling.','CPU_CATALOG_CHANGED');
- if(volume.id!==p.company.volumeId||volume.dataCenter!==p.company.dataCenterId)fail(409,'The retained volume does not match this company and region.','CPU_VOLUME_CHANGED');
+function checkCpuCatalog(p:PinnedPreset,cpu:Row){
+ if(!cpu||cpu.id!=='cpu3c'||cpu.ramGbPerVcpu!==2||!Number.isInteger(cpu.vcpu?.min)||!Number.isInteger(cpu.vcpu?.max)||cpu.vcpu.min<1||cpu.vcpu.min>2||cpu.vcpu.max<2||!Number.isFinite(cpu.price?.securePerVcpu)||cpu.price.securePerVcpu<=0||Math.ceil(cpu.price.securePerVcpu*2*1000000)>p.maxHourlyMicrousd)fail(409,'The fixed CPU SKU or current price does not match the reviewed ceiling.','CPU_CATALOG_CHANGED');
  const capacity=runpodCpuCapacity(cpu,p.company.dataCenterId);
  if(capacity==='unavailable')fail(409,'The reviewed CPU size has no current capacity in the approved region.','CPU_CAPACITY_UNAVAILABLE');
  if(capacity!=='available')fail(503,'Current CPU capacity in the approved region could not be verified.','CPU_CAPACITY_UNCONFIRMED');
+}
+async function preflight(p:PinnedPreset,transport:typeof fetch){
+ const cpu=await providerRequest(RUNPOD_CPU_CATALOG_PATH,'GET',undefined,transport),volume=await providerRequest('/network-volumes/'+p.company.volumeId,'GET',undefined,transport);
+ checkCpuCatalog(p,cpu);
+ if(volume.id!==p.company.volumeId||volume.dataCenter!==p.company.dataCenterId)fail(409,'The retained volume does not match this company and region.','CPU_VOLUME_CHANGED');
  // Read-only readiness. A CPU approval never changes the separately managed
  // GPU endpoint's worker floor/ceiling, and health does not submit inference.
  // Health access and worker counts do not prove a hot model. In particular,

@@ -36,7 +36,7 @@ test('managed CPU saga uses actual transactions and fake Runpod transport withou
   const member={companyId,userId,role:'owner',user:{id:userId,name:'CPU operator',email:userId+'@example.invalid'}} as Membership;
   const planInput={clientId:randomUUID(),durationMinutes:20,installations:[{installationId:result.installation.id,revision:result.installation.revision}]};
   const plan=async(input=planInput)=>memberMutation(member,true,c=>createStudioHostProvisionPlan(c,member,input));
-  const start=async(provision:any,input={clientId:randomUUID(),revision:provision.revision,planHash:provision.planHash,acknowledgeCharges:true,activateAgents:true})=>memberMutation(member,true,c=>startStudioHostProvision(c,member,provision.id,input));
+  const start=async(provision:any,input={clientId:randomUUID(),revision:provision.revision,planHash:provision.planHash,acknowledgeCharges:true,activateAgents:true},transport=transportFixture().transport)=>startStudioHostProvision(member,provision.id,input,{fetch:transport});
   const get=(provisionId:string)=>transaction(c=>getStudioHostProvision(c,companyId,provisionId));
   return{companyId,userId,session,member,installation:result.installation,planInput,plan,start,get};
  }
@@ -59,7 +59,55 @@ test('managed CPU saga uses actual transactions and fake Runpod transport withou
   return transaction(db=>selectCompanyRuntimeConfiguration(db,a.member,'managed_agent',{clientId:randomUUID(),expectedRevision,phase:'service',expiresAt,preset,configurationHash:companyRuntimeHash(preset)}));
  }
  const revokeRuntime=(a:Awaited<ReturnType<typeof fixture>>,expectedRevision=1)=>transaction(db=>revokeCompanyRuntimeConfiguration(db,a.member,'managed_agent',{clientId:randomUUID(),expectedRevision}));
+ const startInput=(p:any)=>({clientId:randomUUID(),revision:p.revision,planHash:p.planHash,acknowledgeCharges:true,activateAgents:true});
+ async function effects(companyId:string){const snapshot:Record<string,unknown>={};for(const table of ['agents','plugin_installations','agent_runs','studio_managed_hosts','studio_host_credentials','studio_host_compute_reservations','studio_host_provision_requests','studio_host_provisions'])snapshot[table]=(await query(`SELECT row_to_json(t) AS value FROM ${table} t WHERE company_id=$1 ORDER BY row_to_json(t)::text`,[companyId])).rows;return snapshot;}
  try{
+  await t.test('initial capacity rejection preserves agents, tokens, pending runs, enrollments and reservations',async()=>{
+   for(const fault of ['unavailable','unconfirmed','network','wrong_sku','stale'] as const){
+    const a=await fixture(),conversationId=randomUUID();await query('INSERT INTO conversations(id,company_id) VALUES($1,$2)',[conversationId,a.companyId]);
+    await query("INSERT INTO agent_runs(company_id,agent_id,requested_by,conversation_id,client_id,payload_hash,prompt,status) VALUES($1,$2,$3,$4,$5,$6,'Keep this queued work','queued')",[a.companyId,a.installation.agentId,a.userId,conversationId,randomUUID(),'a'.repeat(64)]);
+    await query("UPDATE agents SET status='paused' WHERE company_id=$1",[a.companyId]);
+    const p=(await a.plan()).provision,input=startInput(p),before=await effects(a.companyId),cloud=transportFixture();let calls=0,offset=0;const now=Date.now(),clock=fault==='stale'?t.mock.method(Date,'now',()=>now+offset):null;
+    const transport:typeof fetch=async(url,init)=>{calls++;assert.equal(init?.method,'GET');assert.equal(new URL(String(url)).pathname,'/v2/catalog/cpus/cpu3c');
+     if(fault==='network')throw Error('PRIVATE_PROVIDER_FAILURE');const response=await cloud.transport(url,init),cpu=await response.json();
+     if(fault==='unavailable')cpu.availability='NONE';if(fault==='unconfirmed')delete cpu.availability;if(fault==='wrong_sku')cpu.id='cpu5c';if(fault==='stale')offset=60001;return Response.json(cpu);
+    };
+    const code=fault==='unavailable'?'CPU_CAPACITY_UNAVAILABLE':fault==='wrong_sku'?'CPU_CATALOG_CHANGED':fault==='stale'?'CPU_CAPACITY_STALE':'CPU_CAPACITY_UNCONFIRMED';
+    try{await assert.rejects(a.start(p,input,transport),{code});}finally{clock?.mock.restore();}
+    assert.equal(calls,1);assert.equal(cloud.creates(),0);assert.deepEqual(await effects(a.companyId),before);
+   }
+  });
+  await t.test('capacity I/O releases locks and then rechecks membership, configuration and agent revisions',async()=>{
+   for(const change of ['membership','configuration','installation'] as const){
+    const a=await fixture(),p=(await a.plan()).provision,cloud=transportFixture(),oldPreset=process.env.COATRIA_MANAGED_CPU_PRESET;
+    const transport:typeof fetch=async(url,init)=>{const response=await cloud.transport(url,init);
+     if(change==='membership')await query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[a.companyId,a.userId]);
+     if(change==='configuration')process.env.COATRIA_MANAGED_CPU_PRESET=JSON.stringify({...JSON.parse(oldPreset!),maxSteps:7});
+     if(change==='installation')await query('UPDATE plugin_installations SET revision=revision+1 WHERE company_id=$1',[a.companyId]);return response;
+    };
+    try{await assert.rejects(a.start(p,startInput(p),transport),change==='membership'?{status:403}:change==='configuration'?{code:'CPU_PRESET_CHANGED'}:{code:'CPU_INSTALLATION_CHANGED'});}finally{process.env.COATRIA_MANAGED_CPU_PRESET=oldPreset;}
+    assert.equal(cloud.creates(),0);assert.equal(Number((await query('SELECT count(*) FROM studio_managed_hosts WHERE company_id=$1',[a.companyId])).rows[0].count),0);assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE company_id=$1',[a.companyId])).rows[0].count),0);
+   }
+  });
+  await t.test('successful Start replays without provider access and rejects changed idempotent input',async()=>{
+   const a=await fixture(),p=(await a.plan()).provision,input=startInput(p),cloud=transportFixture(),first=await a.start(p,input,cloud.transport),before=await effects(a.companyId);let extraCalls=0;
+   const unavailable:typeof fetch=async()=>{extraCalls++;throw Error('must not check a replay');};
+   const replayed=await a.start(p,input,unavailable);assert.equal(replayed.replayed,true);assert.equal(replayed.provision.hostId,first.provision.hostId);assert.equal(extraCalls,0);assert.deepEqual(await effects(a.companyId),before);
+   await assert.rejects(a.start(p,{...input,revision:input.revision+1},unavailable),{code:'IDEMPOTENCY_CONFLICT'});assert.equal(extraCalls,0);
+   await memberMutation(a.member,true,db=>stopStudioHostProvision(db,a.member,p.id,{clientId:randomUUID(),revision:first.provision.revision}));await reconcile(p.id,cloud);
+  });
+  await t.test('same request committed during provider I/O still replays when the pending check fails',async()=>{
+   const a=await fixture(),p=(await a.plan()).provision,input=startInput(p);let accepted:any;
+   const transport:typeof fetch=async()=>{accepted=await a.start(p,input);throw Error('provider became unreachable');};
+   const result=await a.start(p,input,transport);assert.equal(result.replayed,true);assert.equal(result.provision.hostId,accepted.provision.hostId);assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE company_id=$1',[a.companyId])).rows[0].count),1);
+   await memberMutation(a.member,true,db=>stopStudioHostProvision(db,a.member,p.id,{clientId:randomUUID(),revision:result.provision.revision}));await reconcile(p.id,transportFixture());
+  });
+  await t.test('capacity freshness is checked after the final registration lock and before writes',async()=>{
+   const a=await fixture(),p=(await a.plan()).provision,before=await effects(a.companyId),cloud=transportFixture(),now=Date.now();let offset=0,reached=false;const clock=t.mock.method(Date,'now',()=>now+offset);
+   const guarded:typeof transaction=async fn=>transaction(client=>{const wrapped=Object.create(client);wrapped.query=async(text:string,values?:unknown[])=>{const result=await client.query(text,values);if(values?.[0]===`studio-host-register:${a.companyId}`){reached=true;offset=60001;}return result;};return fn(wrapped);});
+   try{await assert.rejects(startStudioHostProvision(a.member,p.id,startInput(p),{fetch:cloud.transport,transaction:guarded}),{code:'CPU_CAPACITY_STALE'});}finally{clock.mock.restore();}
+   assert(reached);assert.deepEqual(await effects(a.companyId),before);assert.equal(cloud.creates(),0);
+  });
   for(const point of ['before_reconcile','catalog','create','running_read'] as const)await t.test(`timestamp-only owner revocation at ${point} fences paid CPU lifecycle`,async()=>{
    const a=await fixture(),p=(await a.plan()).provision,cloud=transportFixture();await a.start(p);
    const revoke=()=>query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[a.companyId,a.userId]);
@@ -84,7 +132,7 @@ test('managed CPU saga uses actual transactions and fake Runpod transport withou
   for(const point of ['catalog','create'] as const)await t.test(`timestamp-only separate host administrator revocation at ${point} fences paid CPU lifecycle`,async()=>{
    const a=await fixture(),administrator=await fixture();await query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'admin')",[a.companyId,administrator.userId]);
    const member={...administrator.member,companyId:a.companyId,role:'admin'} as Membership,p=(await a.plan()).provision,cloud=transportFixture();
-   await memberMutation(member,true,client=>startStudioHostProvision(client,member,p.id,{clientId:randomUUID(),revision:p.revision,planHash:p.planHash,acknowledgeCharges:true,activateAgents:true}));let revoked=false;
+   await startStudioHostProvision(member,p.id,{clientId:randomUUID(),revision:p.revision,planHash:p.planHash,acknowledgeCharges:true,activateAgents:true},{fetch:transportFixture().transport});let revoked=false;
    const transport:typeof fetch=async(url,init)=>{const response=await cloud.transport(url,init),path=new URL(String(url)).pathname;
     if(!revoked&&(point==='catalog'&&path.includes('/catalog/')||point==='create'&&path==='/v2/pods'&&init?.method==='POST')){revoked=true;await query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[a.companyId,administrator.userId]);}return response;};
    await reconcileStudioHostProvision(p.id,{fetch:transport});assert.equal(cloud.creates(),point==='create'?1:0);assert.equal(cloud.stops(),point==='create'?1:0);
@@ -93,7 +141,7 @@ test('managed CPU saga uses actual transactions and fake Runpod transport withou
   await t.test('timestamp-only original requester revocation during preflight blocks CPU despite a separate live host administrator and agent sponsor',async()=>{
    const a=await fixture(),administrator=await fixture();await query("INSERT INTO memberships(company_id,user_id,role) VALUES($1,$2,'admin')",[a.companyId,administrator.userId]);await query('UPDATE agents SET created_by=$2 WHERE id=$1',[a.installation.agentId,administrator.userId]);
    const member={...administrator.member,companyId:a.companyId,role:'admin'} as Membership,p=(await a.plan()).provision,cloud=transportFixture();
-   await memberMutation(member,true,client=>startStudioHostProvision(client,member,p.id,{clientId:randomUUID(),revision:p.revision,planHash:p.planHash,acknowledgeCharges:true,activateAgents:true}));let revoked=false;
+   await startStudioHostProvision(member,p.id,{clientId:randomUUID(),revision:p.revision,planHash:p.planHash,acknowledgeCharges:true,activateAgents:true},{fetch:transportFixture().transport});let revoked=false;
    const transport:typeof fetch=async(url,init)=>{const response=await cloud.transport(url,init);if(!revoked&&String(url).includes('/catalog/')){revoked=true;await query('UPDATE memberships SET access_revoked_at=clock_timestamp() WHERE company_id=$1 AND user_id=$2',[a.companyId,a.userId]);}return response;};
    await reconcileStudioHostProvision(p.id,{fetch:transport});const current=await a.get(p.id);assert.equal(cloud.creates(),0);assert.equal(current.phase,'stopped');assert.equal(current.submittedAt,null);assert.equal(current.podId,null);
    assert.equal((await query('SELECT access_revoked_at FROM memberships WHERE company_id=$1 AND user_id=$2',[a.companyId,administrator.userId])).rows[0].access_revoked_at,null);assert.equal(Number((await query('SELECT count(*) FROM studio_host_compute_reservations WHERE provision_id=$1',[p.id])).rows[0].count),1);
