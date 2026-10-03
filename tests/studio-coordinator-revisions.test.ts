@@ -14,6 +14,7 @@ import {createProviderExecutor} from '../public/downloads/provider-adapter.mjs';
 import {dropFixtureDatabase} from './fixtures/postgres-teardown';
 
 test('stock coordinator objectives fit the real mission contract without raising its limit',()=>{
+ const generated=studioCoordinatorObjective({id:randomUUID(),contractVersion:2});assert.match(generated,/Only with mediaRework enabled/);assert.match(generated,/mediaReviewId=reviewId\/taskRevision/);assert.match(generated,/New human credit consent and independent QC required/);assert(!studioCoordinatorObjective({id:randomUUID(),contractVersion:1}).includes('mediaRework'));
  for(const contractVersion of [1,2] as const){const objective=studioCoordinatorObjective({id:randomUUID(),contractVersion});assert.match(objective,/Only with planningRework enabled/);assert.match(objective,/planningReviewId/);assert.match(objective,/new review required/);}
  for(const contractVersion of [1,2] as const){const id=randomUUID(),objective=studioCoordinatorObjective({id,contractVersion});assert(missionCreateInput.safeParse({clientId:randomUUID(),agentId:randomUUID(),name:'Studio coordinator',objective}).success);assert(objective.length<=3000);assert(objective.includes(id));if(contractVersion===2){assert.match(objective,new RegExp('Generated coordinator v'+STUDIO_GENERATED_COORDINATOR_OBJECTIVE_VERSION));assert(objective.indexOf('studio_generated_revision_draft')<objective.indexOf('no ready work'));}else{assert(!objective.includes('studio_generated_revision'));assert(!objective.includes('contractVersion:2'));}}
 });

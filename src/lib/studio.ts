@@ -284,7 +284,7 @@ async function updateProject(client:PoolClient,actor:StudioActor,projectId:strin
   await activity(client,actor,'studio.project_updated',invalidate?'The client brief or AI-use policy changed; business approvals require review again.':'The project delivery date was updated.');return {project:await bump(client,actor.companyId,projectId)};
  });
 }
-export async function dispatchWork(client:PoolClient,member:Membership,projectId:string,input:unknown,options:{deferPreparedMarker?:true}={}){
+export async function dispatchWork(client:PoolClient,member:Membership,projectId:string,input:unknown,options:{deferPreparedMarker?:true;mediaRework?:{reviewId:string;taskRevision:number}}={}){
  const data=parse(studioDispatchInput,input),actor={companyId:member.companyId,userId:member.userId};
  const prepared=data.preparationProfile==='prepared_image_v1';
  if(prepared&&!['owner','admin'].includes(member.role))fail(403,'A current human administrator must select prepared-image reference work.','STUDIO_REFERENCE_PREPARATION_ADMIN_REQUIRED');
@@ -300,7 +300,9 @@ export async function dispatchWork(client:PoolClient,member:Membership,projectId
   // Lock agent/run before project, matching the leased-tool lock order. Any
   // gate or competing-dispatch failure rolls back this ordinary run creation.
   const queued=await createAgentRunInTransaction(client,member,'commons',{clientId:data.clientId,agentId:preview.agent_id,prompt});
-  const p=await lockedProject(client,member.companyId,projectId,data.revision),work=(await workItems(client,member.companyId,p)).find(w=>w.id===data.workItemId)!;
+  const p=await lockedProject(client,member.companyId,projectId,data.revision);
+  if(options.mediaRework){const {resetMediaReworkTask}=await import('./studio-media-rework');await resetMediaReworkTask(client,member.companyId,projectId,data.workItemId,options.mediaRework.reviewId,options.mediaRework.taskRevision);}
+  const work=(await workItems(client,member.companyId,p)).find(w=>w.id===data.workItemId)!;
   if(p.contractVersion===2)await assertGeneratedWorkCurrent(client,member.companyId,projectId,data.workItemId);
   if(work.agentId!==preview.agent_id)fail(409,'The role assignment changed. Refresh before dispatch.');
   if(work.execution==='human')fail(409,'This step requires a human production or quality handoff.','STUDIO_EXTERNAL_EXECUTION_REQUIRED');

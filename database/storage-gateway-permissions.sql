@@ -11,6 +11,7 @@ GRANT SELECT ON schema_migrations,companies,memberships,agents,agent_runs,studio
 GRANT SELECT(company_id,agent_id,host_id,installation_id,token_hash,revoked_at,expires_at,host_epoch,installation_revision,enrolled_by) ON studio_host_credentials TO coatria_storage_gateway_v1;
 -- Classification only: generated continuations are never allowed file transfers.
 -- Do not grant source snapshots, artifact evidence or canonical step identifiers.
+-- Correction dispatch markers above also deny transfers without private ledger access.
 GRANT SELECT(company_id,child_run_id) ON studio_generated_followups TO coatria_storage_gateway_v1;
 -- External client capabilities are separate from membership and agent grants.
 -- Only exact approved file facts and mutable source availability are exposed.

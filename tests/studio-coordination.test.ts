@@ -13,6 +13,10 @@ test('coordination schemas expose explicit finite approvals, never privilege or 
  const input={clientId:randomUUID(),revision:0,coordinatorAgentId:randomUUID(),allowedRoleKeys:['producer'],status:'paused',maxRuns:2,maxConcurrentRuns:1,expiresAt:expires()};
  assert(studioCoordinationInput.safeParse(input).success);
  assert(!Object.hasOwn(studioCoordinationInput.parse(input),'coordinatorGeneration'),'Legacy inputs keep their exact hash fields and acquire no new opt-in');
+ assert(!Object.hasOwn(studioCoordinationInput.parse(input),'mediaRework'),'Legacy request hashes and default-off media correction authority are preserved');
+ const media={projectId:randomUUID(),workItemId:randomUUID(),policyRevision:1,projectRevision:1,mediaReviewId:randomUUID(),taskRevision:3};
+ assert(studioWorkDispatchInput.safeParse(media).success);
+ for(const patch of [{taskRevision:undefined},{mediaReviewId:undefined},{planningReviewId:randomUUID()},{executionJobId:randomUUID()},{taskRevision:0}])assert(!studioWorkDispatchInput.safeParse({...media,...patch}).success,'An internal media correction requires one unambiguous exact review/task selector');
  for(const patch of [{maxRuns:0},{maxRuns:101},{maxConcurrentRuns:4},{allowedRoleKeys:['producer','producer']},{allowedRoleKeys:['invented']},{status:'autonomous'},{grant:['*']},{runsStarted:0},{approvedBy:randomUUID()}])assert(!studioCoordinationInput.safeParse({...input,...patch}).success);
  assert(!studioWorkDispatchInput.safeParse({projectId:randomUUID(),workItemId:randomUUID(),policyRevision:1,projectRevision:1,agentId:randomUUID()}).success);
  assert.equal(AGENT_TOOLS.studio_work_dispatch.capability,'studio.write');assert.equal(AGENT_TOOLS.studio_coordination_get.capability,'studio.read');
