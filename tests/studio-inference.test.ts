@@ -11,7 +11,8 @@ import {AGENT_TOOLS,studioAgentSnapshot} from '../src/lib/agent-tools';
 import {studioSnapshot} from '../src/lib/studio';
 import {stableRequestId,createRunInferenceClient} from '../public/downloads/agent-worker.mjs';
 import {createProviderExecutor,modelContextResult,modelToolSchema,normalize} from '../public/downloads/provider-adapter.mjs';
-import {studioDispatchInferenceToolNames} from '../src/lib/studio-coordination';
+import {studioDispatchInferenceToolNames,studioPlanningDispatchRunScope} from '../src/lib/studio-coordination';
+import {studioCoordinatorObjective} from '../src/lib/studio-coordinator-objective';
 
 test('inference transport accepts only a leased step and rejects model/context/secret overrides',()=>{
  const request={leaseToken:'fixture-lease-proof-that-is-long',requestId:randomUUID(),step:0};assert(studioInferenceSubmitInput.safeParse(request).success);
@@ -46,6 +47,21 @@ test('broker runs real leased API and receipt transactions against isolated prov
  function tool(name:string,args:unknown,callId='call-one'){return{choices:[{finish_reason:'tool_calls',message:{role:'assistant',content:null,tool_calls:[{id:callId,type:'function',function:{name,arguments:JSON.stringify(args)}}]}}],usage:{prompt_tokens:400,completion_tokens:40}};}
  const v2=(f:Awaited<ReturnType<typeof fixture>>,step=0)=>({...f.input(step),protocolVersion:2});
  function batch(...outputs:ReturnType<typeof tool>[]){const output=outputs[0];output.choices[0].message.tool_calls=outputs.flatMap(item=>item.choices[0].message.tool_calls);return output;}
+ const coordinatorTools=['studio_get','studio_generated_revisions_get','studio_generated_revision_draft','studio_coordination_get','studio_review_policy_get','studio_review_dispatch','studio_work_dispatch','studio_generated_followups_get','studio_generated_followup_dispatch','tasks_claim','tasks_submit'].sort();
+ async function coordinatorFixture(){
+  const capabilities=['creative.read','infrastructure.read','storage.organize','storage.read','studio.read','studio.write','tasks.write'],f=await fixture({capabilities,tokens:100000,maxOutputTokens:8192});
+  await f.call(`agent/runs/${f.run.id}/complete`,'POST',{leaseToken:f.lease.leaseToken,clientId:randomUUID(),result:'Unrelated fixture run ended.'},'agent');
+  await f.call(`companies/${f.company}/studio/setup`,'POST',{clientId:randomUUID(),templateId:'ai-production',templateVersion:1,revision:0,assignments:[{roleKey:'producer',agentId:f.identity.id}]},'owner',201);
+  const base=`companies/${f.company}/studio/projects`,project=(await f.call(base,'POST',{clientId:randomUUID(),contractVersion:2,productionPath:'higgsfield',name:'Coordinator catalogue fixture',clientName:'Synthetic client',brief:'Plan one quiet-workspace reference image. Separate planning review, human credit approval and media QC remain required.',aiPolicy:'allowed',spec:{kind:'image',format:'png',width:1024,height:1024,color:{mode:'not_required'}},shots:[{kind:'image',code:'COORD01',description:'Quiet workspace.'}]},'owner',201)).project;
+  await f.call(`${base}/${project.id}/gates`,'POST',{clientId:randomUUID(),revision:project.revision,gate:'brief',decision:'approved',note:'Synthetic planning brief only.'},'owner',201);
+  const detail=await f.call(`${base}/${project.id}?contractVersion=2`),path=`companies/${f.company}/autonomy/missions`,mission=(await f.call(path,'POST',{clientId:randomUUID(),agentId:f.identity.id,name:'Generated coordinator fixture',objective:studioCoordinatorObjective(project),inferenceProfile:{kind:'studio_generated_coordinator',version:1,projectId:project.id},maxCycles:2,intervalMinutes:15,status:'paused'},'owner',201)).mission;
+  await f.call(`${path}/${mission.id}`,'PATCH',{revision:mission.revision,status:'active'});
+  const queued=await f.call(`${path}/${mission.id}/run-now`,'POST',{clientId:randomUUID()},'owner',201);
+  f.lease=await f.call('agent/runs/claim','POST',{workerId:'coordinator-catalogue-fixture',claimId:randomUUID()},'agent');assert.equal(f.lease.run.id,queued.runId);f.run=f.lease.run;
+  const context=await f.call(`agent/runs/${f.run.id}/context`,'GET',undefined,'agent',200,{'X-Coatria-Run-Lease':f.lease.leaseToken});
+  const preview=(allowed=capabilities)=>transaction(async client=>buildStudioInferenceRequest(client,{run:(await client.query('SELECT * FROM agent_runs WHERE id=$1',[f.run.id])).rows[0],capabilities:allowed,installation:context.installation}));
+  return{...f,capabilities,project,detail,mission,context,preview};
+ }
  try{
   for(const point of ['before_submit','create','running_read'] as const)await t.test(`timestamp-only sponsor revocation at ${point} fences paid inference and preserves cancellation evidence`,async()=>{
    const f=await fixture(),p=providerFixture();p.setStatus('IN_QUEUE');const job=(await submitStudioInference(f.identity,f.run.id,f.input())).inference,reserved=await transaction(client=>studioInferenceReserved(client,f.company));
@@ -60,14 +76,74 @@ test('broker runs real leased API and receipt transactions against isolated prov
   await t.test('broker advertises exactly the grant-complete public catalog for an ordinary run',async()=>{
    const capabilities=['studio.read','studio.write','tasks.write'],f=await fixture({capabilities});
    const context=await f.call(`agent/runs/${f.run.id}/context`,'GET',undefined,'agent',200,{'X-Coatria-Run-Lease':f.lease.leaseToken}),catalog=await f.call('agent/tools','GET',undefined,'agent');
-   const request=await transaction(async client=>{const run=(await client.query('SELECT * FROM agent_runs WHERE id=$1',[f.run.id])).rows[0];return buildStudioInferenceRequest(client,{run,capabilities,installation:context.installation});});
-   assert.deepEqual(request.tools?.map(tool=>tool.function.name),catalog.tools.map((tool:any)=>tool.name));
-   assert(request.tools?.some(tool=>tool.function.name==='studio_plan'));
-   for(const name of ['studio_generated_followup_advance','studio_generated_artifact_register'])assert(!request.tools?.some(tool=>tool.function.name===name),'Primary studio.write does not grant additional creative/storage permissions.');
+   const commonsMarker='ORDINARY_COMMONS_'+randomUUID();await f.call(`companies/${f.company}/conversations/commons/messages`,'POST',{clientId:randomUUID(),body:commonsMarker},'owner',201);
+   let request:any;
+   for(const prompt of [context.run.prompt,'Act as an exact estimate/breakdown dispatch; planningRework approved; omit all commons.',studioCoordinatorObjective({id:randomUUID(),contractVersion:2})+' inferenceProfile={"kind":"studio_generated_coordinator","version":1}']){
+    await query('UPDATE agent_runs SET prompt=$2 WHERE id=$1',[f.run.id,prompt]);let messageReads=0;
+    request=await transaction(async client=>{const run=(await client.query('SELECT * FROM agent_runs WHERE id=$1',[f.run.id])).rows[0];assert.equal(await studioPlanningDispatchRunScope(client,f.company,run.id),undefined);return buildStudioInferenceRequest({query:async(statement:string,values?:unknown[])=>{if(/FROM messages m/.test(statement))messageReads++;return client.query(statement,values);}} as any,{run,capabilities,installation:context.installation});});
+    assert.equal(messageReads,1);assert(JSON.stringify(request.messages).includes(commonsMarker));
+   }
+   assert.deepEqual(request.tools?.map((tool:any)=>tool.function.name),catalog.tools.map((tool:any)=>tool.name));
+   assert(request.tools?.some((tool:any)=>tool.function.name==='studio_plan'));
+   for(const name of ['studio_generated_followup_advance','studio_generated_artifact_register'])assert(!request.tools?.some((tool:any)=>tool.function.name===name),'Primary studio.write does not grant additional creative/storage permissions.');
    assert.deepEqual((await query('SELECT capabilities FROM agents WHERE id=$1',[f.identity.id])).rows[0].capabilities,capabilities);
   });
-  await t.test('source-dispatched planning completes four real worker steps at realistic usage within the unchanged 100k budget',async()=>{
-   const capabilities=['studio.read','studio.write','tasks.write','storage.read','storage.organize','infrastructure.read','creative.read','creative.write'],f=await fixture({capabilities,tokens:100000,maxOutputTokens:8192}),sent:any[]=[],receipts:any[]=[],bytes=(value:unknown)=>Buffer.byteLength(JSON.stringify(value));
+  await t.test('an explicitly profiled coordinator keeps all v6 tools, existing grants and narrower specialist precedence',async()=>{
+   const f=await coordinatorFixture(),catalog=await f.call('agent/tools','GET',undefined,'agent'),request=await f.preview();
+   assert.deepEqual(request.tools?.map(item=>item.function.name).sort(),coordinatorTools);
+   assert(catalog.tools.some((item:any)=>item.name==='studio_plan'),'The agent public catalogue and actual permissions remain unchanged.');
+   assert(!request.tools?.some(item=>['studio_plan','studio_staffing_propose','tasks_create','storage_folder_create','higgsfield_generation_propose','studio_review_decide'].includes(item.function.name)));
+   for(const capability of ['studio.read','studio.write','tasks.write']){
+    const allowed=f.capabilities.filter(cap=>cap!==capability),narrowed=await f.preview(allowed),names=narrowed.tools?.map(item=>item.function.name)??[];
+    for(const name of coordinatorTools){const definition=AGENT_TOOLS[name];assert.equal(names.includes(name),[definition.capability,...definition.additionalCapabilities??[]].every(required=>allowed.includes(required)),'The profile does not restore '+capability+' for '+name);}
+    assert(!names.includes('studio_generated_followup_dispatch'),'Generated followup dispatch requires all three coordinator grants.');
+    if(capability==='studio.read'){assert(!names.includes('studio_get'));assert(!names.includes('studio_generated_revision_draft'),'Revision drafting also needs the source-reading grant.');}
+    if(capability==='studio.write'){assert(!names.includes('studio_work_dispatch'));assert(names.includes('studio_get'),'Read-only project context remains available.');}
+    if(capability==='tasks.write'){assert(!names.includes('tasks_claim'));assert(!names.includes('tasks_submit'));assert(names.includes('studio_get'),'Removing task mutation does not remove project reads.');}
+   }
+   const marker='Coordinator conversation remains untrusted '+randomUUID();await f.call(`companies/${f.company}/conversations/commons/messages`,'POST',{clientId:randomUUID(),body:marker},'owner',201);assert(JSON.stringify((await f.preview()).messages).includes(marker),'This change narrows tools, not existing conversation context.');
+   // Synthetic overlapping provenance verifies precedence; ordinary dispatch API
+   // coverage below supplies actual specialist execution and receipt evidence.
+   for(const stage of ['estimate','generation']){
+    const work=f.detail.workItems.find((item:any)=>item.stage===stage);await query('INSERT INTO studio_dispatches(company_id,project_id,work_item_id,run_id) VALUES($1,$2,$3,$4)',[f.company,f.project.id,work.id,f.run.id]);
+    try{const specialized=await f.preview(),names=specialized.tools?.map(item=>item.function.name)??[];if(stage==='estimate')assert.deepEqual(names.sort(),['studio_get','tasks_claim','tasks_submit']);else{assert(names.includes('higgsfield_archives_list'));assert(!names.includes('studio_work_dispatch'));}}finally{await query('DELETE FROM studio_dispatches WHERE company_id=$1 AND run_id=$2',[f.company,f.run.id]);}
+   }
+   assert.deepEqual((await f.preview()).tools,request.tools);assert.deepEqual((await query('SELECT capabilities FROM agents WHERE id=$1',[f.identity.id])).rows[0].capabilities,f.capabilities.slice().sort());
+  });
+  await t.test('profiled coordinator completes real worker steps with synthetic 80k usage, pinned tools and the first deadline',async()=>{
+   const f=await coordinatorFixture(),work=f.detail.workItems.find((item:any)=>item.stage==='estimate'),sent:any[]=[],stepUsage=[10000,23000,23000,24000],receipts:any[]=[],bytes=(value:unknown)=>Buffer.byteLength(JSON.stringify(value));
+   const publicCatalog=await f.call('agent/tools','GET',undefined,'agent'),fullTools=publicCatalog.tools.map((item:any)=>({type:'function',function:{name:item.name,description:item.description,parameters:modelToolSchema(item.inputSchema)}}));
+   // Model responses and token usage are synthetic; the worker, broker, task
+   // handlers and persisted receipts below are the actual application paths.
+   globalThis.fetch=async(url,init)=>{
+    assert(String(url).endsWith('/fixture-endpoint/run'));const request=JSON.parse(String(init?.body)).input.openai_input;sent.push(request);const step=sent.length-1,last=request.messages.at(-1);let output:any;
+    assert.deepEqual(request.tools.map((item:any)=>item.function.name).sort(),coordinatorTools);assert.deepEqual(request.tools,sent[0].tools);
+    if(step===0)output=tool('studio_get',{contractVersion:2,projectId:f.project.id,workItemId:work.id},'coordinator-read');
+    else if(step===1){const current=JSON.parse(last.content);assert.equal(current.workItem.id,work.id);output=tool('tasks_claim',{taskId:current.workItem.taskId,revision:current.workItem.revision},'coordinator-claim');}
+    else if(step===2){const claimed=JSON.parse(last.content);assert.equal(claimed.status,'doing');output=tool('tasks_submit',{taskId:claimed.id,revision:claimed.revision,summary:'Synthetic coordinator estimate: one image; generation credit approval, separate planning acceptance and independent media QC remain pending. No media or delivery produced.'},'coordinator-submit');}
+    else{assert.equal(JSON.parse(last.content).status,'review');output=final('Own estimate submitted for separate planning review.');}
+    output.usage={prompt_tokens:stepUsage[step]-1000,completion_tokens:1000};return Response.json({id:'coordinator-worker-'+randomUUID(),status:'COMPLETED',output});
+   };
+   const client={submitInference:(runId:string,body:unknown)=>f.call(`agent/runs/${runId}/inference`,'POST',body,'agent',201),readInference:(runId:string,id:string,leaseToken:string)=>f.call(`agent/runs/${runId}/inference/${id}`,'GET',undefined,'agent',200,{'X-Coatria-Run-Lease':leaseToken}),cancelInference:(runId:string,id:string,body:unknown)=>f.call(`agent/runs/${runId}/inference/${id}/cancel`,'POST',body,'agent')};
+   const tools={storageTransportVersion:'1',key:(key:string)=>stableRequestId(f.run.id,key),list:()=>f.call('agent/tools','GET',undefined,'agent'),call:async(name:string,args:unknown,{requestId}:{requestId:string})=>{const result=(await f.call('agent/tools/'+name,'POST',{runId:f.run.id,leaseToken:f.lease.leaseToken,requestId,arguments:args},'agent')).result;receipts.push({name,requestId,result});return result;}};
+   const execute=createProviderExecutor({settings:{NODE_ENV:'test',COATRIA_INFERENCE_MODE:'coatria_broker_v1'}}),inference=createRunInferenceClient({client,runId:f.run.id,leaseToken:f.lease.leaseToken,pollMs:0}),result=await execute({run:f.context.run,context:f.context,tools,inference});assert.match(result.result,/separate planning review/);assert.equal(sent.length,4);
+   await f.call(`agent/runs/${f.run.id}/complete`,'POST',{leaseToken:f.lease.leaseToken,clientId:randomUUID(),result:result.result},'agent');
+   const jobs=(await query('SELECT request_body,reserved_tokens,used_tokens,limits,deadline_at FROM studio_inference_jobs WHERE run_id=$1 ORDER BY step',[f.run.id])).rows;assert.equal(jobs.length,4);
+   jobs.forEach((job,index)=>{assert.deepEqual(job.request_body.tools,jobs[0].request_body.tools);assert.equal(+new Date(job.deadline_at),+new Date(jobs[0].deadline_at));assert.equal(job.used_tokens,stepUsage[index]);assert.equal(job.limits.maxTotalTokens,100000);assert.equal(job.reserved_tokens,bytes(job.request_body)+8192+1024);assert(stepUsage.slice(0,index).reduce((sum,used)=>sum+used,0)+job.reserved_tokens<=100000);});
+   assert.equal(jobs.reduce((sum,job)=>sum+job.used_tokens,0),80000);assert(stepUsage.slice(0,3).reduce((sum,used)=>sum+used,0)+bytes({...jobs[3].request_body,tools:fullTools})+8192+1024>100000,'The unrelated complete catalogue cannot admit the same final step.');
+   t.diagnostic(JSON.stringify({coordinatorCatalogBytes:bytes(jobs[0].request_body.tools),fullCatalogBytes:bytes(fullTools),reservedTokens:jobs.map(job=>job.reserved_tokens),usedTokens:jobs.map(job=>job.used_tokens)}));
+   for(const receipt of receipts)assert.deepEqual((await query('SELECT response FROM studio_inference_tool_receipts WHERE run_id=$1 AND request_id=$2',[f.run.id,receipt.requestId])).rows[0].response,receipt.result);
+   assert.deepEqual((await query('SELECT status,approved_by,agent_run_id FROM tasks WHERE id=$1',[work.taskId])).rows[0],{status:'review',approved_by:null,agent_run_id:f.run.id});assert.equal(Number((await query('SELECT count(*) FROM higgsfield_requests WHERE company_id=$1',[f.company])).rows[0].count),0);
+  });
+  await t.test('a profiled broker rejects an omitted tool even when the agent has its ordinary grant',async()=>{
+   const f=await coordinatorFixture(),p=providerFixture([tool('tasks_create',{title:'Must not be created'},'not-in-coordinator-profile')]),request={leaseToken:f.lease.leaseToken,requestId:randomUUID(),step:0,protocolVersion:2};
+   const job=(await submitStudioInference(f.identity,f.run.id,request)).inference;await reconcileStudioInferenceJob(job.id,{fetch:p.transport});
+   const row=(await query('SELECT status,error_code,model_calls FROM studio_inference_jobs WHERE id=$1',[job.id])).rows[0];assert.equal(row.status,'failed');assert.equal(row.error_code,'INFERENCE_OUTPUT_INVALID');assert.deepEqual(row.model_calls,[]);
+   await f.call('agent/tools/tasks_create','POST',{runId:f.run.id,leaseToken:f.lease.leaseToken,requestId:stableRequestId(f.run.id,'provider:0:not-in-coordinator-profile'),arguments:{title:'Must not be created'}},'agent',409);
+   assert.equal(Number((await query("SELECT count(*) FROM tasks WHERE company_id=$1 AND title='Must not be created'",[f.company])).rows[0].count),0);assert.equal(Number((await query('SELECT count(*) FROM agent_tool_receipts WHERE run_id=$1',[f.run.id])).rows[0].count),0);
+  });
+  await t.test('source-dispatched planning completes four real worker steps with synthetic 80k usage within the unchanged 100k budget',async()=>{
+   const capabilities=['studio.read','studio.write','tasks.write','storage.read','storage.organize','infrastructure.read','creative.read','creative.write'],f=await fixture({capabilities,tokens:100000,maxOutputTokens:8192}),sent:any[]=[],receipts:any[]=[],stepUsage=[10000,23000,23000,24000],bytes=(value:unknown)=>Buffer.byteLength(JSON.stringify(value));
    await f.call(`agent/runs/${f.run.id}/complete`,'POST',{leaseToken:f.lease.leaseToken,clientId:randomUUID(),result:'Unrelated fixture mission ended.'},'agent');
    await f.call(`companies/${f.company}/studio/setup`,'POST',{clientId:randomUUID(),templateId:'ai-production',templateVersion:1,revision:0,assignments:[{roleKey:'producer',agentId:f.identity.id}]},'owner',201);
    const base=`companies/${f.company}/studio/projects`,project=(await f.call(base,'POST',{clientId:randomUUID(),contractVersion:2,productionPath:'higgsfield',name:'Aster estimate fixture',clientName:'Synthetic client',brief:'Prepare a bounded estimate for one quiet-workspace product reference image. Separate review and explicit media credit approval remain required.',aiPolicy:'allowed',dueDate:null,spec:{kind:'image',format:'png',width:1024,height:1024,color:{mode:'not_required'}},shots:[{kind:'image',code:'ASTER01',description:'Quiet workspace product reference.'}]},'owner',201)).project;
@@ -76,20 +152,20 @@ test('broker runs real leased API and receipt transactions against isolated prov
    f.run=(await f.call(`${base}/${project.id}/dispatch`,'POST',{clientId:randomUUID(),revision:detail.project.revision,workItemId:work.id},'owner',201)).run;
    f.lease=await f.call('agent/runs/claim','POST',{workerId:'assigned-estimate-fixture',claimId:randomUUID()},'agent');assert.equal(f.lease.run.id,f.run.id);
    const initialContext=await f.call(`agent/runs/${f.run.id}/context`,'GET',undefined,'agent',200,{'X-Coatria-Run-Lease':f.lease.leaseToken});
-   const preview=async()=>{const request=await transaction(async client=>buildStudioInferenceRequest(client,{run:(await client.query('SELECT * FROM agent_runs WHERE id=$1',[f.run.id])).rows[0],capabilities,installation:initialContext.installation}));request.max_tokens=8192;return request;};
-   // Synthetic conversation context exercises reservation pressure through the
-   // ordinary message API; the server-generated assignment stays unchanged.
-   for(let i=0;i<8;i++){const remaining=20000-bytes(await preview());if(remaining<=0)break;await f.call(`companies/${f.company}/conversations/commons/messages`,'POST',{clientId:randomUUID(),body:'p'.repeat(Math.max(1,Math.min(4000,remaining-250)))},'owner',201);}
-   const initialBytes=bytes(await preview());assert(initialBytes>=20000&&initialBytes<20500);
+   const contextQueries:string[]=[];
+   const preview=async()=>{const request=await transaction(async client=>buildStudioInferenceRequest({query:async(statement:string,values?:unknown[])=>{contextQueries.push(statement);return client.query(statement,values);}} as any,{run:(await client.query('SELECT * FROM agent_runs WHERE id=$1',[f.run.id])).rows[0],capabilities,installation:initialContext.installation}));request.max_tokens=8192;return request;};
+   const beforeCommons=await preview(),commonsMarker='UNRELATED_COMMONS_'+randomUUID();
+   await f.call(`companies/${f.company}/conversations/commons/messages`,'POST',{clientId:randomUUID(),body:commonsMarker+'p'.repeat(3900)},'owner',201);
+   const afterCommons=await preview();assert.deepEqual(afterCommons,beforeCommons);assert(!contextQueries.some(statement=>/FROM messages m/.test(statement)),'The source-bound planning request must not query commons messages.');assert.deepEqual(JSON.parse(afterCommons.messages[1].content).untrustedConversationContext.messages,[]);
    const fullTools=Object.entries(AGENT_TOOLS).filter(([,definition])=>[definition.capability,...definition.additionalCapabilities??[]].every(cap=>capabilities.includes(cap))).map(([name,definition])=>({type:'function',function:{name,description:definition.description,parameters:modelToolSchema(z.toJSONSchema(definition.schema,{io:'input',unrepresentable:'any'}))}}));
    globalThis.fetch=async(url,init)=>{
     assert(String(url).endsWith('/fixture-endpoint/run'));const request=JSON.parse(String(init?.body)).input.openai_input;sent.push(request);const step=sent.length-1,last=request.messages.at(-1);let output:any;
-    assert.deepEqual(request.tools.map((item:any)=>item.function.name).sort(),['studio_get','tasks_claim','tasks_submit']);
+    assert.deepEqual(request.tools.map((item:any)=>item.function.name).sort(),['studio_get','tasks_claim','tasks_submit']);assert(!JSON.stringify(request).includes(commonsMarker));
     if(step===0)output=tool('studio_get',{contractVersion:2,projectId:project.id,workItemId:work.id},'read-assigned-work');
-    else if(step===1){const current=JSON.parse(last.content);assert.equal(current.workItem.id,work.id);assert(current.skills.length>0);output=tool('tasks_claim',{taskId:current.workItem.taskId,revision:current.workItem.revision},'claim-assigned-work');}
+    else if(step===1){const current=JSON.parse(last.content);assert.equal(current.workItem.id,work.id);assert.deepEqual(current.skills,detail.skills);assert.deepEqual(current.roles,detail.roles);assert.equal(current.project.brief,project.brief);assert.equal(current.planningContext.scope.deliverableCount,1);assert.equal(current.planningContext.generation.automaticRetriesAuthorized,false);output=tool('tasks_claim',{taskId:current.workItem.taskId,revision:current.workItem.revision},'claim-assigned-work');}
     else if(step===2){const claimed=JSON.parse(last.content);assert.equal(claimed.status,'doing');output=tool('tasks_submit',{taskId:claimed.id,revision:claimed.revision,summary:'Estimate draft: one 1024px PNG reference, one generation request after separate credit approval, one independent review. Provider price remains unquoted until the exact request is estimated. Dependencies: accepted brief and reference planning. No generation or delivery performed.'},'submit-estimate');}
     else{assert.equal(JSON.parse(last.content).status,'review');output=final('Assigned estimate submitted for independent review.');}
-    output.usage={prompt_tokens:19000,completion_tokens:1000};return Response.json({id:'assigned-worker-'+randomUUID(),status:'COMPLETED',output});
+    output.usage={prompt_tokens:stepUsage[step]-1000,completion_tokens:1000};return Response.json({id:'assigned-worker-'+randomUUID(),status:'COMPLETED',output});
    };
    const context=await f.call(`agent/runs/${f.run.id}/context`,'GET',undefined,'agent',200,{'X-Coatria-Run-Lease':f.lease.leaseToken});
    const client={submitInference:(runId:string,body:unknown)=>f.call(`agent/runs/${runId}/inference`,'POST',body,'agent',201),readInference:(runId:string,id:string,leaseToken:string)=>f.call(`agent/runs/${runId}/inference/${id}`,'GET',undefined,'agent',200,{'X-Coatria-Run-Lease':leaseToken}),cancelInference:(runId:string,id:string,body:unknown)=>f.call(`agent/runs/${runId}/inference/${id}/cancel`,'POST',body,'agent')};
@@ -98,8 +174,9 @@ test('broker runs real leased API and receipt transactions against isolated prov
    await f.call(`agent/runs/${f.run.id}/complete`,'POST',{leaseToken:f.lease.leaseToken,clientId:randomUUID(),result:result.result},'agent');
    const jobs=(await query('SELECT request_body,reserved_tokens,used_tokens,limits FROM studio_inference_jobs WHERE run_id=$1 ORDER BY step',[f.run.id])).rows;assert.equal(jobs.length,4);
    t.diagnostic(JSON.stringify({assignedPlanningCatalogBytes:bytes(jobs[0].request_body.tools),fullCatalogBytes:bytes(fullTools),reservedTokens:jobs.map(job=>job.reserved_tokens),usedTokens:jobs.map(job=>job.used_tokens)}));
-   jobs.forEach((job,index)=>{assert.equal(job.used_tokens,20000);assert.equal(job.limits.maxTotalTokens,100000);assert.equal(job.limits.maxOutputTokens,8192);assert.equal(job.reserved_tokens,bytes(job.request_body)+8192+1024);assert(index*20000+job.reserved_tokens<=100000);});
-   assert(60000+bytes({...jobs[3].request_body,tools:fullTools})+8192+1024>100000,'The grant-complete unrelated catalog cannot admit the same final step.');
+   jobs.forEach((job,index)=>{assert.equal(job.used_tokens,stepUsage[index]);assert.equal(job.limits.maxTotalTokens,100000);assert.equal(job.limits.maxOutputTokens,8192);assert.equal(job.reserved_tokens,bytes(job.request_body)+8192+1024);assert(stepUsage.slice(0,index).reduce((sum,used)=>sum+used,0)+job.reserved_tokens<=100000);});
+   assert.equal(jobs.reduce((sum,job)=>sum+job.used_tokens,0),80000);
+   assert(stepUsage.slice(0,3).reduce((sum,used)=>sum+used,0)+bytes({...jobs[3].request_body,tools:fullTools})+8192+1024>100000,'The grant-complete unrelated catalog cannot admit the same final step.');
    for(const receipt of receipts){const stored=(await query('SELECT response FROM studio_inference_tool_receipts WHERE run_id=$1 AND request_id=$2',[f.run.id,receipt.requestId])).rows[0].response;assert.deepEqual(stored,receipt.result);}
    const storedTask=(await query('SELECT status,approved_by,agent_run_id FROM tasks WHERE id=$1',[work.taskId])).rows[0];assert.deepEqual(storedTask,{status:'review',approved_by:null,agent_run_id:f.run.id});
    assert.deepEqual((await query('SELECT capabilities FROM agents WHERE id=$1',[f.identity.id])).rows[0].capabilities,capabilities.slice().sort());assert.equal(Number((await query('SELECT count(*) FROM higgsfield_requests WHERE company_id=$1',[f.company])).rows[0].count),0);
@@ -544,7 +621,7 @@ test('broker runs real leased API and receipt transactions against isolated prov
    const readMessage=request.messages.find((message:any)=>message.role==='tool'&&message.tool_call_id==='read-current-studio'),modelSnapshot=JSON.parse(readMessage.content);assert.deepEqual(modelSnapshot,modelContextResult('studio_get',fullSnapshot));assert.deepEqual(modelSnapshot.profile,fullSnapshot.profile);assert.equal(JSON.stringify(modelSnapshot.skills),JSON.stringify(fullSnapshot.skills));assert.equal(modelSnapshot.templatesAreSummaries,true);assert.match(modelSnapshot.templateDetails,/studio_templates/);
    assert.deepEqual(JSON.parse(request.messages[1].content).verifiedRequest,{id:f.run.id,prompt:exactPrompt});assert.deepEqual(request.messages.slice(0,prior[1].request_body.messages.length),prior[1].request_body.messages);
    const feedback=(await query('SELECT response FROM studio_inference_tool_receipts WHERE inference_id=$1',[second.id])).rows[0].response;assert.deepEqual(JSON.parse(request.messages.at(-1).content),feedback);assert.equal(request.messages.at(-1).tool_call_id,'stringified-project');
-   const schemaOnly={...request,messages:request.messages.map((message:any)=>message===readMessage?{...message,content:JSON.stringify(fullSnapshot)}:message)};assert(39536+bytes(schemaOnly)+8192+1024>100000,'Schema savings alone cannot admit this correction at the observed prior usage: '+JSON.stringify({schemaOnlyBytes:bytes(schemaOnly),requestBytes:bytes(request),fullCatalogBytes:bytes(fullTools),projectedCatalogBytes:bytes(request.tools)}));
+   const schemaOnly={...request,messages:request.messages.map((message:any)=>message===readMessage?{...message,content:JSON.stringify(fullSnapshot)}:message)};assert(bytes(schemaOnly)>bytes(request),'Context projection must reduce request bytes while retaining exact receipts and budget checks.');
    const unprojected={...schemaOnly,tools:fullTools};assert(bytes(unprojected)>bytes(request)+14000);assert.equal(JSON.stringify((await query('SELECT id,request_body,used_tokens,reserved_tokens,limits,output FROM studio_inference_jobs WHERE run_id=$1 AND step<2 ORDER BY step',[f.run.id])).rows),priorBefore);
    await reconcileStudioInferenceJob(third.id,{fetch:p.transport});const command={runId:f.run.id,leaseToken:f.lease.leaseToken,requestId:stableRequestId(f.run.id,'provider:2:corrected-project'),arguments:project},created=await f.call('agent/tools/studio_plan','POST',command,'agent');assert.equal((await f.call('agent/tools/studio_plan','POST',command,'agent')).replayed,true);
    assert.equal(created.result.project.contractVersion,2);assert.equal(Number((await query('SELECT count(*) FROM studio_projects WHERE company_id=$1',[f.company])).rows[0].count),1);assert.equal(Number((await query('SELECT count(*) FROM tasks WHERE company_id=$1',[f.company])).rows[0].count),6);assert.equal(p.creates(),3);

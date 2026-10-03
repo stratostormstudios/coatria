@@ -175,10 +175,14 @@ export async function higgsfieldCredential(member:Membership){
 }
 export async function proposeHiggsfieldRequest(client:PoolClient,actor:StudioActor,input:unknown){
  const data=parse(higgsfieldProposalInput,input);
+ // A correction owns one semantic proposal. Harness transport request IDs may
+ // change, but cannot create a second paid-request candidate for this run.
+ if(actor.runId&&(await client.query('SELECT 1 FROM studio_dispatches WHERE company_id=$1 AND run_id=$2 AND media_rework_review_id IS NOT NULL',[actor.companyId,actor.runId])).rowCount)data.clientId=actor.runId;
  await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`higgsfield-request:${actor.companyId}:${actor.userId}:${data.clientId}`]);
  const old=(await client.query(`SELECT ${requestColumns},agent_id FROM higgsfield_requests WHERE company_id=$1 AND requested_by=$2 AND client_id=$3`,[actor.companyId,actor.userId,data.clientId])).rows[0];
  if(old){const expected=data.referenceIds?digest({proposal:data,references:old.referenceSnapshot,...old.modelSnapshot?{model:old.modelSnapshot}:{}}):digest(data);if(old.requestHash!==expected||old.agent_id!==(actor.agentId??null))fail(409,'This request ID was already used with different generation details.','IDEMPOTENCY_CONFLICT');delete old.agent_id;return {request:plain(old),replayed:true};}
  const project=(await client.query(`SELECT ${projectColumns} FROM studio_projects WHERE company_id=$1 AND id=$2 FOR UPDATE`,[actor.companyId,data.projectId])).rows[0];
+ if(actor.runId&&(await client.query('SELECT 1 FROM studio_dispatches WHERE company_id=$1 AND run_id=$2 AND media_rework_review_id IS NOT NULL',[actor.companyId,actor.runId])).rowCount&&(await client.query('SELECT 1 FROM higgsfield_requests WHERE company_id=$1 AND run_id=$2 LIMIT 1',[actor.companyId,actor.runId])).rowCount)fail(409,'This correction already proposed its one exact generation request. Reuse that receipt; do not retry with a new request ID.','MEDIA_REWORK_PROPOSAL_EXISTS');
  if(!project)fail(404,'Project not found.');if(project.revision!==data.projectRevision)fail(409,'Refresh the changed project before proposing a generation.');
  if(project.status==='delivered')fail(409,'Delivered projects are closed. Create follow-up work.','STUDIO_PROJECT_CLOSED');
  if(project.ai_policy!=='allowed')fail(409,'Confirm the project permits AI generation first.');

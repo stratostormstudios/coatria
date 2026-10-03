@@ -37,7 +37,7 @@ export async function studioHostProvisioningRoute(request:Request,parts:string[]
  }
  const data=await body(request,action==='start'?studioHostProvisionStartInput:studioHostProvisionStopInput);
  const result=action==='start'
-  ?await memberMutation(member,true,client=>startStudioHostProvision(client,member,provisionId,data))
+  ?await startStudioHostProvision(member,provisionId,data)
   :await memberMutation(member,true,client=>stopStudioHostProvision(client,member,provisionId,data));
  await reconcileStudioHostProvision(provisionId);
  return json({...result,provision:await memberMutation(member,true,client=>getStudioHostProvision(client,member.companyId,provisionId))});

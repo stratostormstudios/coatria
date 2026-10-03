@@ -373,6 +373,13 @@ test('studio production uses real company tasks, tenant authority, versioned evi
       if (emulate) dispatched = await call(path, 'POST', payload, 'owner', 201);
       assert(dispatched);
       assert.equal(dispatched.run.status, 'queued');
+      const queuedPrompt=(await query('SELECT prompt FROM agent_runs WHERE company_id=$1 AND id=$2',[company,dispatched.run.id])).rows[0].prompt;
+      assert.match(queuedPrompt,/Read the returned planningContext/);
+      assert.match(queuedPrompt,/never add a generation retry allowance/);
+      assert.match(queuedPrompt,/report potential sponsor conflicts/);
+      const planningRoles=(await detail(projectId)).roles;
+      assert.equal(planningRoles.find(role=>role.key==='producer')?.agentSponsorId,owner);
+      assert.equal(planningRoles.find(role=>role.key==='qc')?.agentSponsorId,null);
       const queued = (await detail(projectId)).workItems.find(item => item.id === estimate.id) as StudioWorkItem & { runId: string; runStatus: string };
       assert.equal(queued.runId, dispatched.run.id);
       assert.equal(queued.runStatus, 'queued');

@@ -159,6 +159,9 @@ test('studio agent APIs retain grant snapshots, requester authority, receipts an
     const denied=await tool('studio_get',{projectId},409);assert.equal(denied.code,'STUDIO_CONTRACT_UNSUPPORTED');
     const detail=(await tool('studio_get',{projectId,contractVersion:2})).result;assert.equal(detail.project.contractVersion,2);assert.equal(detail.shots[0].kind,kind);for(const key of ['frameStart','frameEnd','handles','disciplines'])assert.equal(key in detail.shots[0],false);
     const exact=(await tool('studio_get',{projectId,contractVersion:2,workItemId:detail.workItems[0].id})).result;assert.equal(exact.project.contractVersion,2);assert.equal(exact.projection.contentInspectedByThisResponse,false);
+    const estimate=detail.workItems.find((item:any)=>item.stage==='estimate');
+    const planning=(await tool('studio_get',{projectId,contractVersion:2,workItemId:estimate.id})).result;
+    assert.equal(planning.planningContext.scope.deliverableCount,1);assert.equal(planning.planningContext.scope.counts[kind],1);assert.deepEqual(planning.shots,[]);assert.equal(planning.planningContext.review.assignment,'unassigned');assert.equal(planning.planningContext.grantsAuthority,false);
     await tool('studio_plan',{...args,contractVersion:3},400);await tool('studio_plan',{...args,contractVersion:undefined},400);await tool('studio_plan',{...args,name:'Changed'},409,requestId);
     assert.equal((await query("SELECT count(*)::int AS count FROM agent_tool_receipts WHERE run_id=$1 AND request_id=$2 AND tool='studio_plan'",[runId,requestId])).rows[0].count,1);
    }

@@ -8,14 +8,17 @@ import {chromium} from '@playwright/test';
 const companyId='10000000-0000-4000-8000-000000000001',provisionId='20000000-0000-4000-8000-000000000002';
 const base=`/api/companies/${companyId}/studio/host-provisions`,path=`${base}/${provisionId}/readiness`;
 const provision=()=>({id:provisionId,revision:4,phase:'failed',plan:{installations:[{name:'Studio coordinator'}],durationMinutes:15,preset:{dataCenterId:'US-NC-2'}},submittedAt:null,podId:null,stopRequestedAt:null,expiresAt:null,providerStatus:null,errorCode:'CPU_INFERENCE_UNAVAILABLE',computeStopped:false,credentialsRevoked:false});
-const readiness=()=>({provisionId,checkedAt:new Date().toISOString(),readOnly:true,authorizesStart:false,ready:true,providerReady:true,configuration:{state:'current'},checks:[{stage:'lifecycle',ready:true,code:'ready',httpStatus:200},{stage:'health',ready:true,code:'ready',httpStatus:200,endpointReachable:true,workerState:'reported',modelReadiness:'unverified',workerCounts:{idle:1,ready:1,initializing:0,running:0,throttled:0,unhealthy:0}}],cpuCapacity:{stage:'cpu_capacity',ready:true,code:'ready',httpStatus:200,regionReady:true}});
+const planHash='a'.repeat(64),installationId='40000000-0000-4000-8000-000000000004';
+const installation=()=>({id:installationId,revision:7,name:'Studio coordinator',status:'paused',runtimeConfig:{providerId:'runpod',modelId:'Reviewed model',maxSteps:8,maxOutputTokens:4096,maxTotalTokens:12000,timeoutSeconds:600},capabilities:['studio.read']});
+const plannedProvision=()=>({...provision(),phase:'planned',planHash,errorCode:null,readiness:{ready:true,reasons:[]},plan:{durationMinutes:15,reviewExpiresAt:new Date(Date.now()+300_000).toISOString(),installations:[{...installation(),installationId,character:{}}],preset:{dataCenterId:'US-NC-2',volumeId:'pinned-workspace-volume',maxHourlyMicrousd:60_000,modelId:'Reviewed model'},reservation:{cpuMicrousd:15_000,companyLifetimeAllowanceMicrousd:100_000,previouslyReservedMicrousd:0}}});
+const readiness=()=>({provisionId,planHash,revision:4,checkedAt:new Date().toISOString(),readOnly:true,authorizesStart:false,ready:true,providerReady:true,configuration:{state:'current'},checks:[{stage:'lifecycle',ready:true,code:'ready',httpStatus:200},{stage:'health',ready:true,code:'ready',httpStatus:200,endpointReachable:true,workerState:'reported',modelReadiness:'unverified',workerCounts:{idle:1,ready:1,initializing:0,running:0,throttled:0,unhealthy:0}}],cpuCapacity:{stage:'cpu_capacity',ready:true,code:'ready',httpStatus:200,regionReady:true}});
 
 test('managed host diagnostics and failed-start closure use explicit, bounded UI actions',{timeout:90_000},async t=>{
  // Actual React component, browser fetch, and hooks; fake local HTTP server only.
  // The in-memory bundle is a test harness, not a Next application build.
  const bundle=await build({stdin:{contents:`import React,{useState} from 'react';import{createRoot}from'react-dom/client';import{StudioManagedCpu}from'./src/components/StudioManagedCpu';import{setClientIdentity}from'./src/lib/client';setClientIdentity('30000000-0000-4000-8000-000000000003');function Fixture(){const[shown,setShown]=useState(true);return <><button onClick={()=>setShown(!shown)}>Toggle host panel</button>{shown&&<StudioManagedCpu p={{company:{id:'${companyId}',role:'owner'},refresh:async()=>{},notify:()=>{}} as any} onBack={()=>{}}/>}</>;}createRoot(document.getElementById('root')!).render(<Fixture/>);`,loader:'tsx',resolveDir:process.cwd()},bundle:true,write:false,outdir:resolve('test-memory-output'),jsx:'automatic',platform:'browser',format:'esm',define:{'process.env.NODE_ENV':'"development"'}});
  const js=bundle.outputFiles.find(file=>file.path.endsWith('.js'))!.text,css=bundle.outputFiles.find(file=>file.path.endsWith('.css'))?.text??'';
- let host:Record<string,unknown>=provision(),reply:Record<string,any>=readiness(),status=200,wait:Promise<void>|null=null;
+ let host:Record<string,any>=provision(),reply:Record<string,any>=readiness(),status=200,wait:Promise<void>|null=null,installations:Record<string,unknown>[]=[],rejectStart=false;
  const requests:Array<{path:string;method:string;body:string;identity:string|undefined}>=[];
  const server=createServer(async(req,res)=>{
   if(req.url==='/ui.js'){res.setHeader('Content-Type','text/javascript');res.end(js);return;}
@@ -26,7 +29,8 @@ test('managed host diagnostics and failed-start closure use explicit, bounded UI
   if(req.url===path){const result=reply,code=status;if(wait)await wait;if(!res.destroyed){res.statusCode=code;res.end(JSON.stringify(code===200?{readiness:result}:result));}return;}
   if(req.url===base){res.end(JSON.stringify({provisions:[host],readiness:{ready:true,reasons:[]}}));return;}
   if(req.url===`${base}/${provisionId}/stop`&&req.method==='POST'){host={...host,phase:'stopped',computeStopped:true,credentialsRevoked:true,stopRequestedAt:new Date().toISOString(),revision:5};res.end(JSON.stringify({provision:host}));return;}
-  if(req.url.endsWith('/plugin-installations?limit=100')){res.end('{"installations":[]}');return;}
+  if(req.url===`${base}/${provisionId}/start`&&req.method==='POST'){if(rejectStart){res.statusCode=503;res.end('{"error":"Refresh before retrying this request."}');return;}host={...host,phase:'provisioning',revision:5,submittedAt:new Date().toISOString()};res.end(JSON.stringify({provision:host}));return;}
+  if(req.url.endsWith('/plugin-installations?limit=100')){res.end(JSON.stringify({installations}));return;}
   res.statusCode=404;res.end('{"error":"Unexpected test request"}');
  });
  await new Promise<void>(done=>server.listen(0,'127.0.0.1',done));
@@ -103,6 +107,43 @@ test('managed host diagnostics and failed-start closure use explicit, bounded UI
     host={...provision(),...override};const page=await open();
     try{assert.equal(await page.getByRole('button',{name:'Close failed start',exact:true}).count(),0);if(override.stopRequestedAt)assert(await page.getByRole('button',{name:'Closure requested',exact:true}).isDisabled());if(override.phase==='stopped')await page.getByText(/Credential revocation is a separate host action/).waitFor();assert(requests.every(item=>item.method==='GET'));}finally{await page.close();}
    }
+  });
+  await t.test('the plan checks CPU before paid inference and keeps Start blocked until both are available',async()=>{
+   host=plannedProvision();installations=[installation()];reply={...readiness(),checks:[{stage:'lifecycle',ready:false,code:'endpoint_disabled',httpStatus:200},readiness().checks[1]],cpuCapacity:{stage:'cpu_capacity',ready:false,code:'cpu_capacity_unavailable',httpStatus:200,regionReady:false}};const page=await open();
+   try{
+    await page.getByRole('button',{name:'Review this plan',exact:true}).click();const start=page.getByRole('button',{name:'Start reviewed CPU host',exact:true});await page.getByRole('checkbox',{name:/I reviewed this plan/}).check();assert(await start.isDisabled());
+    const review=page.getByRole('region',{name:'Capacity for this host plan'});await review.getByText('pinned-workspace-volume',{exact:true}).waitFor();assert.match(await review.innerText(),/pins the host to US-NC-2/);assert.match(await review.innerText(),/while inference is off/);assert.equal(await page.getByRole('button',{name:'Check provider connection',exact:true}).count(),1);assert.equal(requests.filter(item=>item.path===path).length,0);
+    await review.getByRole('button',{name:'Check provider connection',exact:true}).click();await review.getByText('CPU capacity in US-NC-2: Unavailable',{exact:true}).waitFor();assert(await start.isDisabled());
+    reply={...reply,cpuCapacity:readiness().cpuCapacity};await review.getByRole('button',{name:'Check provider connection',exact:true}).click();await review.getByText('CPU capacity is available. An operator must prepare the separate inference connection, then check again before starting.',{exact:true}).waitFor();assert(await start.isDisabled());assert(requests.every(item=>item.method==='GET'));
+    reply=readiness();await review.getByRole('button',{name:'Check provider connection',exact:true}).click();await review.getByText(/The server checks capacity again before activating agents/).waitFor();assert(!(await start.isDisabled()));await start.click();await page.getByText('provisioning',{exact:true}).waitFor();
+    const writes=requests.filter(item=>item.method!=='GET');assert.equal(writes.length,1);assert.equal(writes[0].path,`${base}/${provisionId}/start`);const body=JSON.parse(writes[0].body);assert.deepEqual({...body,clientId:'request-id'},{revision:4,planHash,acknowledgeCharges:true,activateAgents:true,clientId:'request-id'});assert.match(body.clientId,/^[a-f0-9-]{36}$/);
+   }finally{installations=[];await page.close();}
+  });
+  await t.test('missing, unconfirmed, stale, mismatched and inactive observations cannot unlock Start',async()=>{
+   const cases=[{cpuCapacity:undefined},{cpuCapacity:{stage:'cpu_capacity',ready:false,code:'cpu_capacity_unconfirmed',httpStatus:200}},{checkedAt:undefined},{checkedAt:'not-a-date'},{checkedAt:new Date(Date.now()-120_000).toISOString()},{checkedAt:'2999-01-01T00:00:00.000Z'},{planHash:undefined},{planHash:'b'.repeat(64)},{revision:3},{configuration:{state:'inactive'}}];
+   for(const patch of cases){host=plannedProvision();installations=[installation()];reply={...readiness(),...patch};const page=await open();
+    try{
+     await page.getByRole('button',{name:'Review this plan',exact:true}).click();await page.getByRole('checkbox',{name:/I reviewed this plan/}).check();await page.getByRole('button',{name:'Check provider connection',exact:true}).click();
+     if('planHash'in patch||'revision'in patch)await page.getByRole('alert').waitFor();else if('cpuCapacity'in patch)await page.getByText(`CPU capacity in US-NC-2: ${patch.cpuCapacity?'Unconfirmed':'Not checked'}`,{exact:true}).waitFor();else if('configuration'in patch)await page.getByText('The runtime configuration is no longer current. Prepare a new plan before starting.',{exact:true}).waitFor();else await page.getByText('This capacity observation is stale or its time could not be verified. Check this plan again before starting.',{exact:true}).waitFor();
+     assert(await page.getByRole('button',{name:'Start reviewed CPU host',exact:true}).isDisabled());assert.equal(requests.filter(item=>item.path===path).length,1);assert(requests.every(item=>item.method==='GET'));
+    }finally{installations=[];await page.close();}
+   }
+  });
+  await t.test('small clock skew permits a check, which expires locally without polling or surviving a changed plan',async()=>{
+   host=plannedProvision();installations=[installation()];reply={...readiness(),checkedAt:new Date(Date.now()+1_000).toISOString()};const page=await open();
+   try{
+    await page.clock.install({time:new Date()});await page.getByRole('button',{name:'Review this plan',exact:true}).click();await page.getByRole('checkbox',{name:/I reviewed this plan/}).check();await page.getByRole('button',{name:'Check provider connection',exact:true}).click();await page.getByText(/The server checks capacity again before activating agents/).waitFor();const start=page.getByRole('button',{name:'Start reviewed CPU host',exact:true});assert(!(await start.isDisabled()));
+    await page.clock.fastForward(61_000);await page.getByText('This capacity observation is stale or its time could not be verified. Check this plan again before starting.',{exact:true}).waitFor();assert(await start.isDisabled());assert.equal(requests.filter(item=>item.path===path).length,1);
+    host={...host,revision:5,planHash:'b'.repeat(64)};await page.getByRole('button',{name:'Refresh managed CPU hosts'}).click();await page.getByText('Check this exact plan before starting. The result is valid for 60 seconds.',{exact:true}).waitFor();assert(await start.isDisabled());assert(!(await page.getByRole('checkbox',{name:/I reviewed this plan/}).isChecked()));assert(requests.every(item=>item.method==='GET'));
+   }finally{installations=[];await page.close();}
+  });
+  await t.test('a recheck clears prior success and an uncertain start preserves the same explicit retry identity',async()=>{
+   host=plannedProvision();installations=[installation()];reply=readiness();const page=await open();
+   try{
+    await page.getByRole('button',{name:'Review this plan',exact:true}).click();await page.getByRole('checkbox',{name:/I reviewed this plan/}).check();await page.getByRole('button',{name:'Check provider connection',exact:true}).click();await page.getByText(/The server checks capacity again before activating agents/).waitFor();const start=page.getByRole('button',{name:'Start reviewed CPU host',exact:true});assert(!(await start.isDisabled()));
+    status=503;reply={error:'PRIVATE_PROVIDER_DETAIL'};await page.getByRole('button',{name:'Check provider connection',exact:true}).click();await page.getByRole('alert').waitFor();assert(await start.isDisabled());assert(!((await page.locator('body').innerText()).includes('PRIVATE_PROVIDER_DETAIL')));
+    status=200;reply=readiness();await page.getByRole('button',{name:'Check provider connection',exact:true}).click();await page.getByText(/The server checks capacity again before activating agents/).waitFor();rejectStart=true;await start.click();await page.getByRole('alert').waitFor();assert(!(await start.isDisabled()));rejectStart=false;await start.click();await page.getByText('provisioning',{exact:true}).waitFor();const writes=requests.filter(item=>item.method!=='GET');assert.equal(writes.length,2);assert.deepEqual(writes[1],writes[0]);
+   }finally{status=200;rejectStart=false;installations=[];await page.close();}
   });
   assert.deepEqual(errors,[]);
  }finally{await browser.close();server.closeAllConnections();await new Promise<void>((done,reject)=>server.close(error=>error?reject(error):done()));}

@@ -24,3 +24,11 @@ test('coordination request documentation preserves omitted legacy bodies and exp
  for(const coordinatorGeneration of [true,false])assert.deepEqual(studioCoordinationInput.parse({...body,coordinatorGeneration}),{...body,coordinatorGeneration});
  assert.equal(studioCoordinationInput.safeParse({...body,coordinatorGeneration:'true'}).success,false);
 });
+
+
+test('planning rework documents a strict optional input and current source-bound correction metadata',()=>{
+ const path=studioOperationsPaths['/api/companies/{companyId}/studio/projects/{projectId}/coordination'] as any,input=path.put.requestBody.content['application/json'].schema;
+ assert.equal(input.properties.planningRework.type,'boolean');assert(!input.required.includes('planningRework'));assert(!Object.hasOwn(input.properties.planningRework,'default'));
+ assert.match(path.put.description,/one fresh estimate\/breakdown correction/);assert.match(path.put.description,/same lifetime\/concurrency budget/);assert.match(path.put.description,/Feedback is untrusted/);
+ const snapshot=studioOperationsSchemas.StudioCoordinationSnapshot as any;assert.equal(snapshot.properties.planningReworks.items.properties.reviewId.format,'uuid');
+});

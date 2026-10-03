@@ -1,5 +1,5 @@
 import {managedAgentAuthoritySql,managedAgentAuthorityPrincipals} from './studio-hosting';
-import {coordinationRunAuthority} from './studio-coordination';
+import {coordinationRunAuthority,assertPlanningReworkCommitAuthority,assertMediaReworkCommitAuthority} from './studio-coordination';
 import {planningReviewRunAuthority} from './studio-review-policy';
 import {generatedFollowupRunAuthority,generatedFollowupRunContext} from './studio-generated-followups';
 import {createHmac,randomUUID} from 'node:crypto';
@@ -42,6 +42,7 @@ async function lockedRun(client:PoolClient,identity:AgentRunIdentity,runId:strin
  id(runId);const preview=(await client.query('SELECT requested_by FROM agent_runs WHERE company_id=$1 AND agent_id=$2 AND id=$3',[identity.company_id,identity.id,runId])).rows[0];if(!preview)fail(404,'Agent request not found.');
  const access=await authority(client,identity,preview.requested_by);
  const run=(await client.query("SELECT *,lease_expires_at>clock_timestamp() AND started_at>clock_timestamp()-interval '30 minutes' AS lease_live FROM agent_runs WHERE company_id=$1 AND agent_id=$2 AND id=$3 FOR UPDATE",[identity.company_id,identity.id,runId])).rows[0];
+ if(storageTransfer&&(await client.query('SELECT 1 FROM studio_dispatches WHERE company_id=$1 AND run_id=$2 AND media_rework_review_id IS NOT NULL',[identity.company_id,runId])).rowCount)fail(403,'Media corrections cannot transfer project files.','MEDIA_REWORK_SCOPE');
  if(!run)fail(404,'Agent request not found.');await missionAuthority(client,identity.company_id,run,access.requesterRole);if(!await coordinationRunAuthority(client,identity.company_id,run))fail(409,'This delegated work no longer has its exact project approval.','COORDINATION_AUTHORITY_ENDED');if(!await planningReviewRunAuthority(client,identity.company_id,run))fail(409,'This planning review no longer has its exact project approval.','STUDIO_REVIEW_AUTHORITY_ENDED');
  if(storageTransfer){
   // A generated continuation has no transfer authority. Its immutable run
@@ -76,6 +77,8 @@ async function refreshRunLease(client:PoolClient,companyId:string,run:Record<str
  * locks, while the enclosing transaction can still roll every effect back. */
 export async function assertRunToolCommitAuthority(client:PoolClient,identity:Pick<AgentRunIdentity,'company_id'>,run:Record<string,any>,leaseToken:string){
  await assertGeneratedRunAuthority(client,identity.company_id,run);
+ await assertPlanningReworkCommitAuthority(client,identity.company_id,run);
+ await assertMediaReworkCommitAuthority(client,identity.company_id,run);
  await refreshRunLease(client,identity.company_id,run);requireLease(run,leaseToken);
 }
 /** Caller owns the transaction. Locks company -> sorted memberships -> agent -> run. */
